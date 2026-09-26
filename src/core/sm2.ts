@@ -125,8 +125,11 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
   // ease 更新：brief 公式逐字转写 ease′ = clamp(ease + Δ(q), minEase, ∞)，
   // Δ = 0.1 − (5−q)(0.08 + (5−q)·0.02)。注意该写法下 q=3（good）的 Δ = −0.14，
   // 与 Wozniak 原始 SM-2 的符号约定相反（原始实现中 good 使 EF +0.1）。
-  // 本引擎严格照用 brief 公式；配套约定是间隔用「更新前」EF 计算（标准 SM-2），
-  // 于是默认参数下 good 链为 1→6→15，正合 brief 锚点。
+  // 本引擎严格照用 brief 公式；配套约定是间隔用「更新前」EF 计算（标准 SM-2）。
+  // 该约定的后果要按参数分开看：默认分钟级参数下 good 链为 0.1667→6→13，
+  // brief 的 "1→6→15" 只在 EF 恒定时成立（round(6×2.5)=15）——链式起步时
+  // Δ(good)=−0.14 使旧 EF 逐跳下降，第三跳实为 round(6×2.22)=13。
+  // 精确锚定与两种读法的说明见 tests/core/sm2.test.ts 的 briefNext 注释。
   const delta = 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02);
   const ease = Math.max(params.minEase, cur.ease + delta);
 
@@ -142,7 +145,8 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
     // interval 用「更新前」的 ease 计算（标准 SM-2：I(n) = I(n−1) · EF，EF 随后才更新）。
     // reps=2 档直接取 secondInterval（brief 原文 "interval 按 reps=1→secondInterval"，
     // Anki 式固定第二间隔）；reps≥3 用 round(interval × 旧EF)。
-    // 于是默认参数下 good 链 = 1→6→round(6×2.5)=15，精确命中 brief 锚点。
+    // 于是链式起步的 good 默认参数下为 0.1667→6→13（第三跳 = round(6×旧EF 2.22)）；
+    // 只有 EF 恒定时才是 brief 示例里的 round(6×2.5)=15。
     // 小于 1 天的分钟级不取整以保精度；修饰系数在取整前施加（brief 顺序）。
     const days = (v: number): number => (v >= 1 ? Math.round(v) : v);
     if (reps === 1) {
