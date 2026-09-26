@@ -2,8 +2,9 @@
  * SM-2 复习引擎（纯函数）—— Boss 触发与伤害倍率的科学核心。
  *
  * 约束：
- * - 零平台依赖：不调用 Date.now()，时间一律以毫秒时间戳入参；无 IO、无 DOM/Node API。
+ * - 零平台依赖：不读取当前时钟、不读宿主时区，时间一律以毫秒时间戳入参；无 IO、无 DOM/Node API。
  * - 不可变：review 返回新对象，绝不改动入参。
+ * - effectiveReviewDays 只透传不写入（R-T4-c）：Boss 计数口径的唯一写入者是 reviewLedger。
  * - 域外输入防御（Review Focus #4）：非法 grade / NaN / 负 ease 一律回落默认值，
  *   输出永不含 NaN，永不抛异常。
  */
@@ -86,11 +87,6 @@ function resolveGrade(grade: Grade): number {
   }
 }
 
-/** UTC 日期键（YYYY-MM-DD），Boss 计数口径：同日只计一次。 */
-function dayKey(nowMs: number): string {
-  return new Date(timeOr(nowMs, 0)).toISOString().slice(0, 10);
-}
-
 /** 新建卡的初始 SRS 状态。p 可省略（此时用兜底 initialEase）。 */
 export function createInitialSRS(nowMs: number, p?: Sm2Params): SRSState {
   const params = resolveParams(p);
@@ -164,11 +160,9 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
   const stability: Stability =
     q === GRADES.again ? 'learning' : promoteStability(interval, reps);
 
-  const key = dayKey(t);
-  const effectiveReviewDays = cur.effectiveReviewDays.includes(key)
-    ? cur.effectiveReviewDays
-    : [...cur.effectiveReviewDays, key];
-
+  // effectiveReviewDays 原样透传：日键一律由 reviewLedger.recordEffectiveReview 按调用方
+  // 传入的本地偏移产生（R-T4-c，单一写入者）。引擎若自行追加 UTC 日键，在 UTC+8 的
+  // 00:00–08:00 窗口会记成前一天，与账本同日双计、把 Boss 提前唤醒。
   return {
     ease,
     interval,
@@ -176,7 +170,7 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
     lapses,
     due: t + interval * DAY_MS,
     stability,
-    effectiveReviewDays,
+    effectiveReviewDays: cur.effectiveReviewDays,
   };
 }
 

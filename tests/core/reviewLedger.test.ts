@@ -287,34 +287,40 @@ describe('bossReady —— 阈值边界', () => {
   });
 });
 
-describe('与 sm2.review 的组合语义（跨模块日键边界）', () => {
-  it('本地午夜前 1 分钟 review + 午夜后 record：两个模块给出不同日历日', async () => {
-    const { review, createInitialSRS, GRADES } = await import('@core/sm2');
-    const p = { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 };
-    const beforeMidnight = atTZ(2025, 11, 1, 23, 59); // 2025-11-01T15:59Z
-    const afterMidnight = atTZ(2025, 11, 2, 0, 1); // 2025-11-01T16:01Z
-
-    const start = card('c1', []);
-    const srs = review(start.srs, GRADES.good, beforeMidnight, p);
-    expect(srs.effectiveReviewDays).toEqual(['2025-11-01']); // sm2 的 UTC 日键在此恰好一致
-
-    const recorded = recordEffectiveReview({ ...start, srs }, afterMidnight, TZ);
-    // 本模块按本地日判为次日，故追加；sm2 若在同一瞬间记录会给 '2025-11-01'。
-    expect(recorded.srs.effectiveReviewDays).toEqual(['2025-11-01', '2025-11-02']);
-  });
-
-  it('已知边界：sm2 用 UTC 日键，UTC+8 的 00:00–08:00 会记成前一天（统一口径待裁决）', async () => {
+describe('与 sm2.review 的组合语义（单一写入者不变量，R-T4-c）', () => {
+  it('review() 不再产生日键：账本内容原样透传', async () => {
     const { review, GRADES } = await import('@core/sm2');
     const p = { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 };
-    const earlyMorning = atTZ(2025, 11, 1, 3, 0); // 本地 03:00 = 2025-10-31T19:00Z
-    const srs = review(card('c1', []).srs, GRADES.good, earlyMorning, p);
-    expect(srs.effectiveReviewDays).toEqual(['2025-10-31']); // sm2 的 UTC 视角
-    expect(localDayString(earlyMorning, TZ)).toBe('2025-11-01'); // 本模块的本地视角
-    // 事实锁定（非期望不变量）：同一瞬间两个模块相差一天。
-    // 后果：上层若对一次复习既调 sm2.review 又调 recordEffectiveReview，
-    // 在本地 00:00–08:00 窗口内（占一天 33%）会把同一天计成两天，Boss 提前现身。
-    // 修法属跨任务决策——改 sm2.dayKey 会动已交付的 Task 3 行为与其测试锚点
-    // （sm2.test.ts 的 T0 恰为 UTC 午夜），故留给 controller 裁决，见 task-4-report.md。
+    const start = card('c1', []);
+    const srs = review(start.srs, GRADES.good, atTZ(2025, 11, 1, 3, 0), p);
+    expect(srs.effectiveReviewDays).toEqual([]); // 引擎不写账本
+  });
+
+  it('不变量：review + record 组合后 effectiveReviewDays 只含本地日历一键', async () => {
+    const { review, GRADES } = await import('@core/sm2');
+    const p = { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 };
+    // 取 UTC+8 下最容易出分歧的两个瞬间：凌晨 03:00（UTC 仍是前一天）与午夜前后一分钟
+    for (const moment of [atTZ(2025, 11, 1, 3, 0), atTZ(2025, 11, 1, 23, 59)]) {
+      const start = card('c1', []);
+      const reviewed: Card = { ...start, srs: review(start.srs, GRADES.good, moment, p) };
+      const combined = recordEffectiveReview(reviewed, moment, TZ);
+      expect(combined.srs.effectiveReviewDays).toEqual([localDayString(moment, TZ)]);
+      expect(domainReviewCount([combined])).toBe(1); // 一次复习恰好计一天
+    }
+  });
+
+  it('不变量：跨本地午夜的两次「review+record」各计一天', async () => {
+    const { review, GRADES } = await import('@core/sm2');
+    const p = { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 };
+    const beforeMidnight = atTZ(2025, 11, 1, 23, 59); // 2025-11-01T15:59Z
+    const afterMidnight = atTZ(2025, 11, 2, 0, 1); //   2025-11-01T16:01Z
+    let c = card('c1', []);
+    for (const moment of [beforeMidnight, afterMidnight]) {
+      c = { ...c, srs: review(c.srs, GRADES.good, moment, p) };
+      c = recordEffectiveReview(c, moment, TZ);
+    }
+    expect(c.srs.effectiveReviewDays).toEqual(['2025-11-01', '2025-11-02']);
+    expect(bossReady([c], 2 as 15)).toBe(true);
   });
 
   it('同一 tzOffset 下连续两次 record 恒幂等（账本自身不依赖 sm2）', () => {

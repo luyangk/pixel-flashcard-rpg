@@ -221,14 +221,19 @@ describe('不可变性', () => {
     expect(after.effectiveReviewDays).not.toBe(before.effectiveReviewDays);
   });
 
-  it('effectiveReviewDays 同日去重、跨日追加', () => {
+  it('effectiveReviewDays 由 reviewLedger 独占写入：review 只透传不追加（R-T4-c）', () => {
+    // 引擎不再产生日键：无论同日还是跨日反复 review，账本内容都保持入参原样。
+    // 若此处出现任何日期字符串，说明双写回来了——Boss 计数会被灌水。
     let s = createInitialSRS(T0, P);
-    s = review(s, GRADES.good, T0, P);
-    s = review(s, GRADES.good, T0 + 3_600_000, P); // 同一天（UTC）再来一次
-    const first = s.effectiveReviewDays.length;
-    s = review(s, GRADES.good, T0 + 2 * DAY, P);
-    expect(s.effectiveReviewDays).toHaveLength(first + 1);
-    expect(new Set(s.effectiveReviewDays).size).toBe(s.effectiveReviewDays.length);
+    for (const t of [T0, T0 + 3_600_000, T0 + 2 * DAY, T0 + 9 * DAY]) {
+      s = review(s, GRADES.good, t, P);
+      expect(s.effectiveReviewDays).toEqual([]);
+    }
+    // 已有账本原样带过（值相等、且是副本而非同一引用）
+    const seeded = state({ effectiveReviewDays: ['2025-10-30', '2025-11-01'] });
+    const out = review(seeded, GRADES.good, T0 + DAY, P);
+    expect(out.effectiveReviewDays).toEqual(['2025-10-30', '2025-11-01']);
+    expect(out.effectiveReviewDays).not.toBe(seeded.effectiveReviewDays);
   });
 });
 
