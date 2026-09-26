@@ -3,3 +3,10 @@ dist/
 *.local
 .DS_Store
 .superpowers/
+
+# 原生绑定重定向目录（见 task-1-report.md：/sdcard noexec，.node 需从可执行卷加载）
+.npm-local/
+node_modules_sdcard/
+
+# 本机 noexec 文件系统适配产物（见 scripts/link-native-bindings.mjs 与 task-1-report.md）
+scripts/.local/*
