@@ -145,7 +145,7 @@ export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; sett
 **Interfaces:**
 - Consumes: `Card`、`SRSState.effectiveReviewDays`（Task 2/3）
 - Produces:
-  - `export function localDayString(nowMs: number, tzOffsetMin: number): string` —— 由时间戳 + 分钟偏移得到 `YYYY-MM-DD`（core 不知时区，偏移由调用方传 `new Date().getTimezoneOffset()`）。
+  - `export function localDayString(nowMs: number, tzOffsetMin: number): string` —— 由时间戳 + 分钟偏移得到 `YYYY-MM-DD`（core 不知时区，偏移由调用方传 `-new Date().getTimezoneOffset()`（R-T4-a 更正：UTC+8 → +480，实现与测试均按此约定））。
   - `export function recordEffectiveReview(card: Card, nowMs: number, tzOffsetMin: number): Card` —— 若当日不在 `effectiveReviewDays` 则追加（保持升序、去重、上限滚动保留最近 400 条），返回新对象；同日重复调用结果不变。
   - `export function domainReviewCount(deckCards: Card[]): number` —— Σ 每张卡的 `effectiveReviewDays.length`。
   - `export function bossReady(deckCards: Card[], threshold: 15|30|50): boolean`。
