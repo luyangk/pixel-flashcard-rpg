@@ -155,6 +155,34 @@ describe('recordEffectiveReview —— 同日幂等（Review Focus #5）', () =>
     expect(recordEffectiveReview(clean, atTZ(2025, 11, 1, 23, 59), TZ)).toBe(clean);
   });
 
+  it('同日路径也写回消毒结果：脏账本不被灌水（I-1）', () => {
+    // 存档里混入三条非法条目 + 一条合法且正是今天。同日 record 命中「已记过」分支，
+    // 若该分支只比内容不查消毒痕迹，垃圾会被原样留在账本上、把 Boss 计数灌水。
+    const dirty = card('c1', ['garbage', '', 'junk', '2025-11-01']);
+    expect(domainReviewCount([dirty])).toBe(4); // 污染态：length 虚高为 4
+    const out = recordEffectiveReview(dirty, atTZ(2025, 11, 1, 9, 0), TZ);
+    expect(out.srs.effectiveReviewDays).toEqual(['2025-11-01']); // 垃圾被洗掉
+    expect(domainReviewCount([out])).toBe(1); // 计数回到正确值
+    expect(out).not.toBe(dirty); // 必须写回，不能因「内容等价」而早退
+  });
+
+  it('同日与换日两条路径对同一脏输入产生相同 domainReviewCount（I-1）', () => {
+    const junk = ['garbage', '', 'junk', '2025-11-01'];
+    const sameDay = recordEffectiveReview(card('a', [...junk]), atTZ(2025, 11, 1, 9, 0), TZ);
+    const nextDay = recordEffectiveReview(card('b', [...junk]), atTZ(2025, 11, 2, 9, 0), TZ);
+    // 同日：只剩消毒后的 1 条；换日：消毒后 1 条 + 新的一天 = 2 条
+    expect(domainReviewCount([sameDay])).toBe(1);
+    expect(nextDay.srs.effectiveReviewDays).toEqual(['2025-11-01', '2025-11-02']);
+    // 关键一致性：两路径产出的数组都不含任何垃圾条目，且都已升序去重
+    for (const c of [sameDay, nextDay]) {
+      expect(c.srs.effectiveReviewDays.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))).toBe(true);
+      expect(new Set(c.srs.effectiveReviewDays).size).toBe(c.srs.effectiveReviewDays.length);
+    }
+    // 干净账本走同日路径仍保持引用相等（不因 I-1 修复而抖动）
+    const clean = card('c', ['2025-11-01']);
+    expect(recordEffectiveReview(clean, atTZ(2025, 11, 1, 23, 59), TZ)).toBe(clean);
+  });
+
   it('不改入参：返回新对象与新数组', () => {
     const days = ['2025-10-30'];
     const input = card('c1', days);

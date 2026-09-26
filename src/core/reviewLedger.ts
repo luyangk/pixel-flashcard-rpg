@@ -66,15 +66,25 @@ function sanitizeDays(days: unknown): string[] {
  *
  * 同日重复调用结果不变（幂等，Review Focus #5）；入参与其 srs、days 数组均不被改动。
  * 除 days 之外的字段原样透传——本函数只管记账，不碰 SM-2 状态。
+ *
+ * 本字段唯一写入者（R-T4-c）：sm2.review 只透传不追加，日键一律由本函数按本地日历产生，
+ * 因此 Boss 计数在任意时区下都不会被同日双计。
+ * 消毒写回（I-1）：只要剔过非法条目就强制写回，即使归一化后内容与入参逐项相等——
+ * 对同一存档形态必须给出确定行为，不把清洗责任推给存档校验层。
  */
 export function recordEffectiveReview(card: Card, nowMs: number, tzOffsetMin: number): Card {
   if (card == null || typeof card !== 'object') return card;
   const key = localDayString(nowMs, tzOffsetMin);
-  const cur = sanitizeDays(card.srs?.effectiveReviewDays);
+  const raw = card.srs?.effectiveReviewDays;
+  const cur = sanitizeDays(raw);
+  // 原始数组里被消毒剔掉过条目 → 无论内容是否等价都必须写回，否则垃圾永久留在账本上、
+  // 持续给 Boss 计数灌水（I-1）。长度比对即可判定：sanitizeDays 只做过滤，不增不减合法项。
+  const sanitizedAway = Array.isArray(raw) && raw.length !== cur.length;
   if (cur.includes(key)) {
-    // 已记过：仍做一次归一化（修复存档里的乱序/重复/超长），但内容等价则复用新数组即可。
+    // 已记过：归一化以修复存档里的乱序/重复/超长；仅当「既没消毒掉东西、也没归一化改动」
+    // 时才复用入参引用（供上层脏检查短路）。
     const normalized = normalizeDays(cur);
-    if (sameSequence(normalized, cur)) return card;
+    if (!sanitizedAway && sameSequence(normalized, cur)) return card;
     return { ...card, srs: { ...(card.srs as SRSState), effectiveReviewDays: normalized } };
   }
   const srs: SRSState = {
