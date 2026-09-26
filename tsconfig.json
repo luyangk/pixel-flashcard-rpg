@@ -12,12 +12,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": {
       "@core/*": ["src/core/*"],
       "@platform/*": ["src/platform/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "tests", "vitest.config.ts"]
 }
