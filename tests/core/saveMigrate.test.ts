@@ -13,7 +13,8 @@ import type { GameStorage } from '@platform/storage';
 // 仅借用已测实现当 GameStorage 载体（断言对象是 importAndSave，非 memoryStore）；
 // core → platform 只 import type，运行时零依赖，core 纯净不破。
 import { createMemoryStorage } from '@platform/memoryStore';
-import { exportAsJson, importAndSave, serializeSave, validateSave } from '@core/saveMigrate';
+import { MAX_EFFECTIVE_DAYS } from '@core/reviewLedger';
+import { importAndSave, serializeSave, validateSave } from '@core/saveMigrate';
 
 const T0 = 1761955200000; // 2025-11-01T00:00Z 附近的中性时间戳，纯数据不作时钟
 
@@ -295,6 +296,107 @@ describe('validateSave —— deckId 引用闭合', () => {
   });
 });
 
+describe('validateSave —— id 唯一性（deck 与 card 同标准）', () => {
+  it('cards[1].id 与 cards[0] 重复 → 拒绝且 reason 含路径与重复值', () => {
+    const raw = sample();
+    const cards = raw.cards as Record<string, unknown>[];
+    cards[1].id = cards[0].id; // c1
+    const r = validateSave(raw);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('cards[1].id');
+      expect(r.reason).toContain('重复');
+      expect(r.reason).toContain('c1');
+    }
+  });
+});
+
+describe('validateSave —— 数值域防护（I-3：唯一整包拒绝点必须严格到域）', () => {
+  /** 改 cards[0].srs 的某字段。 */
+  function withSrs(field: string, value: unknown): unknown {
+    const raw = sample();
+    const cards = raw.cards as Record<string, unknown>[];
+    cards[0].srs = { ...(cards[0].srs as Record<string, unknown>), [field]: value };
+    return raw;
+  }
+
+  function rejectPath(raw: unknown, path: string): void {
+    const r = validateSave(raw);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain(path);
+  }
+
+  it('ease 必须有限正数：-8 / 0 / NaN 拒，路径 cards[0].srs.ease', () => {
+    for (const v of [-8, 0, Number.NaN]) rejectPath(withSrs('ease', v), 'cards[0].srs.ease');
+    expect(validateSave(withSrs('ease', 1.3) as never).ok).toBe(true);
+  });
+
+  it('interval：≥1 天必须整数（2.7 拒），亚日级小数合法（sm2 分钟级设计）', () => {
+    rejectPath(withSrs('interval', 2.7), 'cards[0].srs.interval');
+    rejectPath(withSrs('interval', -1), 'cards[0].srs.interval');
+    // sm2 明确「天级取整、分钟级保留小数」（firstInterval=10/60）——不得误杀亚日间隔
+    expect(validateSave(withSrs('interval', 10 / 60) as never).ok).toBe(true);
+    expect(validateSave(withSrs('interval', 0.4) as never).ok).toBe(true);
+    expect(validateSave(withSrs('interval', 3) as never).ok).toBe(true);
+    rejectPath(withSrs('reps', 1.5), 'cards[0].srs.reps');
+    rejectPath(withSrs('lapses', -3), 'cards[0].srs.lapses');
+    for (const f of ['interval', 'reps', 'lapses']) {
+      expect(validateSave(withSrs(f, 0) as never).ok).toBe(true);
+    }
+  });
+
+  it('meta.plays 必须非负整数：-1e9 / 0.4 拒', () => {
+    for (const v of [-1e9, 0.4]) {
+      const raw = sample();
+      (raw.meta as Record<string, unknown>).plays = v;
+      rejectPath(raw, 'meta.plays');
+    }
+  });
+
+  it('effectiveReviewDays 长度 ≤ MAX_EFFECTIVE_DAYS(400)：401 拒、400 过', () => {
+    const mk = (n: number) => Array.from({ length: n }, (_, i) => {
+      const d = new Date(Date.UTC(2020, 0, 1) + i * 86_400_000).toISOString().slice(0, 10);
+      return d;
+    });
+    rejectPath(withSrs('effectiveReviewDays', mk(MAX_EFFECTIVE_DAYS + 1)), 'cards[0].srs.effectiveReviewDays');
+    expect(validateSave(withSrs('effectiveReviewDays', mk(MAX_EFFECTIVE_DAYS)) as never).ok).toBe(true);
+  });
+
+  it('日键须是真实历法日期：形状外/月份越界/不存在的 2 月 30 日均拒', () => {
+    for (const bad of ['9999-99-99', '2025-02-30', '2025-13-01', '2024-02-30', '2025-1-1', '25-01-01', '2025-01-01x']) {
+      rejectPath(withSrs('effectiveReviewDays', [bad]), 'cards[0].srs.effectiveReviewDays[0]');
+    }
+    // 闰年 2024-02-29 合法
+    expect(validateSave(withSrs('effectiveReviewDays', ['2024-02-29']) as never).ok).toBe(true);
+  });
+
+  it('时间戳限 Date 可表示范围（±8.64e15）：due 超界拒且 JSON 往返同样拦下', () => {
+    rejectPath(withSrs('due', 1e18), 'cards[0].srs.due');
+    rejectPath(withSrs('due', -8.64e15 - 1), 'cards[0].srs.due');
+    // JSON 往返后 Infinity→null（类型检查）、超界大数原样保留（范围检查）——两路都要拒
+    const viaJson = validateSave(JSON.parse(JSON.stringify(withSrs('due', 1e18))));
+    expect(viaJson.ok).toBe(false);
+    if (!viaJson.ok) expect(viaJson.reason).toContain('cards[0].srs.due');
+    // 边界内合法
+    expect(validateSave(withSrs('due', 8.64e15) as never).ok).toBe(true);
+  });
+
+  it('source.createdAt / purifiedAt / meta.savedAt 同样受时间戳范围约束', () => {
+    const raw = sample();
+    const cards = raw.cards as Record<string, unknown>[];
+    cards[0].source = { type: 'manual', createdAt: 9e18 };
+    rejectPath(raw, 'cards[0].source.createdAt');
+
+    const raw2 = sample();
+    (raw2.decks as Record<string, unknown>[])[1].purifiedAt = Infinity;
+    rejectPath(raw2, 'decks[1].purifiedAt');
+
+    const raw3 = sample();
+    (raw3.meta as Record<string, unknown>).savedAt = -1e18;
+    rejectPath(raw3, 'meta.savedAt');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // serializeSave
 // ---------------------------------------------------------------------------
@@ -316,14 +418,6 @@ describe('serializeSave', () => {
     const store = createMemoryStorage();
     await importAndSave(serializeSave(f), store);
     expect(await store.load()).toEqual(f);
-  });
-});
-
-describe('exportAsJson', () => {
-  it('文件名带本地日键与 .json 后缀，内容可回灌校验通过', () => {
-    const { filename, text } = exportAsJson(validSave(), 1762008000000); // UTC+8 → 2025-11-02
-    expect(filename).toMatch(/^pixel-flashcard-save-\d{4}-\d{2}-\d{2}\.json$/);
-    expect(validateSave(JSON.parse(text)).ok).toBe(true);
   });
 });
 

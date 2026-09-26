@@ -16,8 +16,9 @@ import type { Card, SRSState } from './types';
 /** 账本滚动上限：保留最近 400 个日历日（约一年余），超出即丢弃最旧条目。 */
 export const MAX_EFFECTIVE_DAYS = 400;
 
-/** 合法日历日键的形状：YYYY-MM-DD，月/日零填充。用于甄别外部数据。 */
-const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** 合法日历日键的形状：YYYY-MM-DD，月/日零填充。用于甄别外部数据。
+ *  （Task 6 R-T6-c 起导出：saveMigrate 校验器复用同一口径，避免双份定义漂移。） */
+export const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** 任意数值的时间戳校验：非有限（NaN/±Infinity）或类型不符回落 0。 */
 function timeOr(value: unknown, fallback: number): number {

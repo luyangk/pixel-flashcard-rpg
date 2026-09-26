@@ -14,11 +14,14 @@
  * 保证失败路径下旧档完好。落盘快照深拷贝由 GameStorage 实现负责，调用方不再重复。
  *
  * 平台纯净：本文件不引用 DOM/Node API、不读时钟——serializeSave 的 exportedAt
- * 派生自 SaveFile.meta.savedAt；exportAsJson 的文件名日键由调用方传入时间戳。
+ * 派生自 SaveFile.meta.savedAt。导出文件名拼装属 UI 关注点，留给平台层（R-T6-b）。
  */
 
 import type { SaveFile } from './types';
 import type { GameStorage } from '@platform/storage';
+// 日键口径唯一权威在 reviewLedger（R-T6-c）：跨模块 import 复用而非复制——
+// 两者同属 core、无循环依赖，复制反会制造"两份定义各自漂移"的隐患。
+import { DAY_KEY_RE, MAX_EFFECTIVE_DAYS } from './reviewLedger';
 
 // ---------------------------------------------------------------------------
 // validateSave
@@ -99,6 +102,62 @@ function requireStringArray(v: unknown, path: string): string[] {
   return arr as string[];
 }
 
+/** 有限正数（ease 域）。 */
+function requirePositive(v: unknown, path: string): number {
+  assertShape(typeof v === 'number' && Number.isFinite(v) && v > 0, path,
+    () => `应为有限正数，实际为 ${describeValue(v)}`);
+  return v;
+}
+
+/** 非负有限整数（reps/lapses/plays 域）。 */
+function requireNonNegInt(v: unknown, path: string): number {
+  assertShape(Number.isInteger(v) && (v as number) >= 0, path,
+    () => `应为非负整数，实际为 ${describeValue(v)}`);
+  return v as number;
+}
+
+/**
+ * interval 域：非负有限；≥1 天必须整数（对齐 sm2「天级取整」），
+ * <1 天允许小数（sm2 分钟级设计内，firstInterval=10/60 即此形态）。
+ */
+function requireInterval(v: unknown, path: string): number {
+  assertShape(
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 && (v < 1 || Number.isInteger(v)),
+    path,
+    () => `应为非负有限数字且满 1 天时取整，实际为 ${describeValue(v)}`,
+  );
+  return v as number;
+}
+
+/** Date 可表示时间戳范围（±8.64e15ms ≈ 前后各 271820 年）；超界令 new Date() 变 Invalid Date。 */
+const MAX_TIME_MS = 8.64e15;
+
+/** 时间戳域：|v| ≤ 8.64e15——顺带封死 dueQueue 对 NaN/Invalid 排序失序的入口（m-5）。 */
+function requireTimestamp(v: unknown, path: string): number {
+  assertShape(typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_TIME_MS, path,
+    () => `应为 Date 可表示范围内的有限时间戳（|v| ≤ ${MAX_TIME_MS}），实际为 ${describeValue(v)}`);
+  return v as number;
+}
+
+/** 真实历法日键：形状过 DAY_KEY_RE 且回读 UTC 分量一致（拒 9999-99-99、2025-02-30、闰年外 02-29）。 */
+function isRealDayKey(s: string): boolean {
+  if (!DAY_KEY_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/** 有效复习日账本：元素逐个真实日键 + 长度 ≤ MAX_EFFECTIVE_DAYS（与 ledger 滚动上限同域）。 */
+function requireDayLedger(v: unknown, path: string): void {
+  const arr = requireStringArray(v, path);
+  for (let i = 0; i < arr.length; i++) {
+    assertShape(isRealDayKey(arr[i]), `${path}[${i}]`,
+      () => `应为真实存在的日历日键 YYYY-MM-DD，实际为 "${arr[i]}"`);
+  }
+  assertShape(arr.length <= MAX_EFFECTIVE_DAYS, path,
+    () => `条目数不得超过账本滚动上限 ${MAX_EFFECTIVE_DAYS}，实际为 ${arr.length}`);
+}
+
 function validateDeck(raw: unknown, i: number): void {
   const p = `decks[${i}]`;
   const o = requireObject(raw, p);
@@ -106,25 +165,25 @@ function validateDeck(raw: unknown, i: number): void {
   requireString(o.name, `${p}.name`);
   assertShape(isBoolean(o.isPreset), `${p}.isPreset`, () => `应为布尔值，实际为 ${describeValue(o.isPreset)}`);
   if ('bossName' in o && o.bossName !== undefined) requireString(o.bossName, `${p}.bossName`);
-  if ('purifiedAt' in o && o.purifiedAt !== undefined) requireFiniteNumber(o.purifiedAt, `${p}.purifiedAt`);
+  if ('purifiedAt' in o && o.purifiedAt !== undefined) requireTimestamp(o.purifiedAt, `${p}.purifiedAt`);
 }
 
 function validateSrs(raw: unknown, path: string): void {
   const o = requireObject(raw, path);
-  requireFiniteNumber(o.ease, `${path}.ease`);
-  requireFiniteNumber(o.interval, `${path}.interval`);
-  requireFiniteNumber(o.reps, `${path}.reps`);
-  requireFiniteNumber(o.lapses, `${path}.lapses`);
-  requireFiniteNumber(o.due, `${path}.due`);
+  requirePositive(o.ease, `${path}.ease`);
+  requireInterval(o.interval, `${path}.interval`);
+  requireNonNegInt(o.reps, `${path}.reps`);
+  requireNonNegInt(o.lapses, `${path}.lapses`);
+  requireTimestamp(o.due, `${path}.due`);
   requireEnum(o.stability, `${path}.stability`, STABILITIES);
-  requireStringArray(o.effectiveReviewDays, `${path}.effectiveReviewDays`);
+  requireDayLedger(o.effectiveReviewDays, `${path}.effectiveReviewDays`);
 }
 
 function validateSource(raw: unknown, path: string): void {
   const o = requireObject(raw, path);
   requireEnum(o.type, `${path}.type`, SOURCE_TYPES);
   if ('url' in o && o.url !== undefined) requireString(o.url, `${path}.url`);
-  requireFiniteNumber(o.createdAt, `${path}.createdAt`);
+  requireTimestamp(o.createdAt, `${path}.createdAt`);
 }
 
 function validateCard(raw: unknown, i: number): void {
@@ -153,8 +212,8 @@ function validateSettings(raw: unknown): void {
 
 function validateMeta(raw: unknown): void {
   const o = requireObject(raw, 'meta');
-  requireFiniteNumber(o.savedAt, 'meta.savedAt');
-  requireFiniteNumber(o.plays, 'meta.plays');
+  requireTimestamp(o.savedAt, 'meta.savedAt');
+  requireNonNegInt(o.plays, 'meta.plays');
 }
 
 /**
@@ -181,6 +240,13 @@ export function validateSave(raw: unknown): ValidateResult {
     }
     const cards = requireArray(root.cards, 'cards');
     cards.forEach(validateCard);
+    // 卡片 id 唯一性与 deck 同标准（R-T6-a）：Task 4 已把"牌组唯一性由校验层保证"移交本层。
+    const seenCardIds = new Set<string>();
+    for (let i = 0; i < cards.length; i++) {
+      const id = (cards[i] as { id: string }).id;
+      if (seenCardIds.has(id)) fail(`cards[${i}].id`, `卡片 id 重复 "${id}"`);
+      seenCardIds.add(id);
+    }
     for (let i = 0; i < cards.length; i++) {
       const deckId = (cards[i] as { deckId: string }).deckId;
       if (!seenDeckIds.has(deckId)) {
@@ -197,32 +263,17 @@ export function validateSave(raw: unknown): ValidateResult {
 }
 
 // ---------------------------------------------------------------------------
-// serializeSave / exportAsJson
+// serializeSave
 // ---------------------------------------------------------------------------
 
 /**
  * 序列化为可分享的 JSON 文本：2 空格缩进，附 `exportedAt`。
  * exportedAt 派生自 meta.savedAt——core 层不读时钟（全局约束），
  * "这份存档何时被保存"与"何时被导出"在纯本地单写者场景下同源。
+ * 文件名拼装属 UI 关注点，由平台层负责（R-T6-b）。
  */
 export function serializeSave(f: SaveFile): string {
   return JSON.stringify({ ...f, exportedAt: f.meta.savedAt }, null, 2);
-}
-
-/** 文件名日键用的毫秒 → `YYYY-MM-DD`（UTC，仅为文件名稳定可排序，非业务日历口径）。 */
-function utcDayKey(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
-/** 生成下载用文件名 + 内容。nowMs 由调用方传入（core 禁 Date.now()）。 */
-export function exportAsJson(
-  f: SaveFile,
-  nowMs: number,
-): { filename: string; text: string } {
-  return {
-    filename: `pixel-flashcard-save-${utcDayKey(nowMs)}.json`,
-    text: serializeSave(f),
-  };
 }
 
 // ---------------------------------------------------------------------------
