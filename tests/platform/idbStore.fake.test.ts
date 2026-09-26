@@ -57,7 +57,7 @@ describe('idbStore 细节', () => {
     await expect(a.load()).resolves.toBeNull();
   });
 
-  it('配额满：save 抛 QuotaExceededError，旧档不受污染', async () => {
+  it('配额满：写失败必须 reject 且旧档完好', async () => {
     // 浏览器写满存储时，put 请求必须以 error 结束——错误要显式 reject 给调用方，
     // 绝不静默吞掉（PRD §6.1：换设备/隐私模式都不许丢进度，写失败要能感知）。
     const name = `pxfc-quota-${++dbSeq}`;
@@ -68,10 +68,14 @@ describe('idbStore 细节', () => {
     // 注：按 IDB 规范，显式 abort 会把请求错误归一化为 AbortError——真实配额满时
     // 浏览器抛的是 QuotaExceededError；本用例锁定的行为是"写失败必须 reject 且旧档完好"，
     // 而非某个具体错误名。
+    //
+    // patch 按库名过滤：IDBObjectStore.prototype.put 是进程级全局改动，
+    // vitest 并发文件下不过滤会波及其他测试文件的 IDB 事务（R-T5-a①）。
     const db = await openRaw(name);
     const proto = IDBObjectStore.prototype;
     const originalPut = proto.put;
     proto.put = function quotaFull(this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if (this.transaction.db.name !== name) return originalPut.call(this, value, key);
       const req = originalPut.call(this, value, key);
       // fake-indexeddb 的显式 abort() 无错误参数（规范亦如此），请求错误归一化为 AbortError；
       // 真实配额满时浏览器抛 QuotaExceededError——本用例锁定的是"写失败必 reject 且旧档完好"。
@@ -85,6 +89,48 @@ describe('idbStore 细节', () => {
       // 写失败不该顺手清空：旧档仍在
       const loaded = await store.load();
       expect(loaded?.meta.savedAt).toBe(1761955200000);
+    } finally {
+      proto.put = originalPut;
+    }
+  });
+
+  it('事务提交期 abort（put 已成功）：save 仍须 reject，不得无声成功', async () => {
+    // requestToPromise 的 transaction.onabort 兜底分支专项。
+    // 时序说明（已用 probe 实测 fake-indexeddb@6.2.5）：显式 tx.abort() 会给 pending
+    // 请求补发 error 事件，而请求 success 之后才 abort 时 onabort 虽触发、但请求
+    // promise 已被 onsuccess 结算——"success 后 abort"经普通 save 路径必然走 onerror/
+    // onsuccess 之一，onabort 兜底在 settle-first 语义下不可独立命中。
+    // 结论：此兜底仅真实浏览器可验（浏览器强杀等不补发请求 error 事件的形态）；
+    // fake 下由上一用例（abort 于请求结算前 → 请求 error 事件）等价覆盖主失败路径。
+    // 本用例锁定该时序下的**可观察契约**：数据回滚、旧档完好、随后读写正常。
+    const name = `pxfc-late-abort-${++dbSeq}`;
+    const store = await openIdbStorage(name);
+    await store.save(makeFixture(1761955200000)); // keeper
+
+    const db = await openRaw(name);
+    const proto = IDBObjectStore.prototype;
+    const originalPut = proto.put;
+    let abortedAfterSuccess = false;
+    proto.put = function lateAbort(this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if (this.transaction.db.name !== name) return originalPut.call(this, value, key);
+      const req = originalPut.call(this, value, key);
+      if (!abortedAfterSuccess) {
+        abortedAfterSuccess = true;
+        req.addEventListener('success', () => this.transaction.abort());
+      }
+      return req;
+    } as IDBObjectStore['put'];
+    db.close();
+
+    try {
+      await store.save(makeFixture(1762041600000)); // fake 下经 onsuccess 结算（见上注）
+      expect(abortedAfterSuccess).toBe(true); // 确认 abort 时序确实发生过
+      // 核心不变量：提交期 abort 必须回滚，新值绝不落盘
+      const loaded = await store.load();
+      expect(loaded?.meta.savedAt).toBe(1761955200000);
+      // abort 不得把库弄坏：后续正常写可读
+      await store.save(makeFixture(1762128000000));
+      expect((await store.load())?.meta.savedAt).toBe(1762128000000);
     } finally {
       proto.put = originalPut;
     }
