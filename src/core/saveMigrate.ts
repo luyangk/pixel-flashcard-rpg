@@ -15,6 +15,9 @@
  *
  * 平台纯净：本文件不引用 DOM/Node API、不读时钟——serializeSave 的 exportedAt
  * 派生自 SaveFile.meta.savedAt。导出文件名拼装属 UI 关注点，留给平台层（R-T6-b）。
+ *
+ * Task 8 扩展：Settings 新增 battle.defaultPoolSize（默认 15、域 10–25 整数），
+ * migrateSave 为 v2.1 前旧档（无 battle）补默认——DoD5「导入旧进度能正常开局」地基。
  */
 
 import type { SaveFile } from './types';
@@ -51,6 +54,11 @@ function assertShape(pred: boolean, path: string, detail: () => string): asserts
 const STABILITIES = ['new', 'learning', 'review', 'mastered'] as const;
 const SOURCE_TYPES = ['preset', 'hotspot', 'domain', 'manual', 'llm'] as const;
 const TIERS = [15, 30, 50] as const;
+
+/** settings.battle.defaultPoolSize 合法域与默认值（Task 8，brief verbatim：默认 15、范围 10–25）。 */
+const POOL_SIZE_MIN = 10;
+const POOL_SIZE_MAX = 25;
+export const DEFAULT_POOL_SIZE = 15;
 
 /** 内部信号：校验失败的路径化原因。不外泄——validateSave 捕获后转成 reason。 */
 class ValidationSignal extends Error {}
@@ -208,6 +216,24 @@ function validateSettings(raw: unknown): void {
   for (const key of ['initialEase', 'minEase', 'firstInterval', 'secondInterval'] as const) {
     requireFiniteNumber(sm2[key], `settings.sm2Params.${key}`);
   }
+  // battle 域（Task 8）：在场严检——battle 一旦存在必须是对象且
+  // defaultPoolSize ∈ 10–25 整数；缺席与否的裁决在下方统一收尾。
+  if ('battle' in o && o.battle !== undefined) {
+    const battle = requireObject(o.battle, 'settings.battle');
+    assertShape(
+      Number.isInteger(battle.defaultPoolSize)
+        && (battle.defaultPoolSize as number) >= POOL_SIZE_MIN
+        && (battle.defaultPoolSize as number) <= POOL_SIZE_MAX,
+      'settings.battle.defaultPoolSize',
+      () => `应为 ${POOL_SIZE_MIN}–${POOL_SIZE_MAX} 的整数，实际为 ${describeValue(battle.defaultPoolSize)}`,
+    );
+  }
+  // v2.1 起 battle 必填（brief Step 1 两层分工：validate 拒缺 battle、migrateSave 补）。
+  // 缺席走 fail() 而非 requireObject(undefined)——后者报"应为对象，实际为 undefined"，
+  // 前者把迁移语义写进 reason，导入方一眼看懂该走 migrateSave。
+  if (!('battle' in o) || o.battle === undefined) {
+    fail('settings.battle', '缺失（v2.1 前旧档形状），请经 migrateSave 迁移后再导入');
+  }
 }
 
 function validateMeta(raw: unknown): void {
@@ -260,6 +286,46 @@ export function validateSave(raw: unknown): ValidateResult {
     if (e instanceof ValidationSignal) return { ok: false, reason: e.message };
     throw e; // 非校验信号（不应发生）原样上抛，不吞真 bug
   }
+}
+
+// ---------------------------------------------------------------------------
+// migrateSave
+// ---------------------------------------------------------------------------
+
+/**
+ * 旧档迁移（RF#4）：validate 通过后补齐默认字段，返回强类型 SaveFile。
+ *
+ * 两层分工（brief Step 1 既定语义）：**validateSave 拒缺 battle，migrateSave 补**——
+ * validateSettings 对 battle「在场严检 + 缺席整包拒」：存在则必须是对象且
+ * defaultPoolSize ∈ 10–25 整数（99/3.5/'x' 一律拒，reason 带路径）；缺失报
+ * `settings.battle: 缺失…请经 migrateSave 迁移`。域畸形始终归 validateSave，
+ * 本函数绝不做消毒改写。对已是新档的输入幂等：battle 在场时不触碰、原样透传
+ * （validateSave 同引用返回 + 现状核实其对未知多余键容忍，故无需拷贝重建）。
+ *
+ * 范围克制（R-T6-d 延伸）：本任务只做 settings.battle 缺省补值这一档迁移；
+ * "上次备份时刻信封"仍留平台层，schemaVersion 保持恰 1，不发明新顶层字段。
+ * 失败形态与校验器一致：抛 Error，message 即含 JSON 路径的可读 reason。
+ */
+export function migrateSave(raw: unknown): SaveFile {
+  // 旧形状档（无 battle）在 validateSettings 处即被拒，故先注入默认再整包校验：
+  // 这正是 brief Step 1 的「migrateSave 注入 {battle:{defaultPoolSize:15}} 后再 validate 过」。
+  const withBattle = injectBattleDefault(raw);
+  const validated = validateSave(withBattle);
+  if (!validated.ok) throw new Error(`存档不合法，无法迁移：${validated.reason}`);
+  return validated.save;
+}
+
+/**
+ * settings.battle 缺省时补 `{defaultPoolSize:15}`——仅当 settings 是对象且 battle
+ * 缺席才浅拷贝注入（其余形态原样返回，交给 validateSave 逐项拒绝并给路径）。
+ * 已含合法 battle 的新档走"原样返回"分支，保证 migrate(migrate(x)) deepEqual migrate(x)。
+ */
+function injectBattleDefault(raw: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  const settings = raw.settings;
+  if (!isPlainObject(settings)) return raw;
+  if ('battle' in settings && settings.battle !== undefined) return raw;
+  return { ...raw, settings: { ...settings, battle: { defaultPoolSize: DEFAULT_POOL_SIZE } } };
 }
 
 // ---------------------------------------------------------------------------

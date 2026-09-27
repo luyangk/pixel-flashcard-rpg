@@ -39,7 +39,11 @@ function makeSaveFile(): SaveFile {
     firstInterval: 1,
     secondInterval: 6,
   };
-  const settings: Settings = { bossThresholdTier: 30, sm2Params };
+  const settings: Settings = {
+    bossThresholdTier: 30,
+    sm2Params,
+    battle: { defaultPoolSize: 15 },
+  };
   return {
     schemaVersion: 1,
     decks: [deck],
@@ -78,6 +82,11 @@ describe('core types smoke', () => {
     expect(save.settings.bossThresholdTier).toBe(30);
     expect(save.settings.sm2Params.initialEase).toBe(2.5);
     expect(save.settings.sm2Params.minEase).toBe(1.3);
+  });
+
+  it('Settings 含 battle.defaultPoolSize（Task 8：默认 15，域 10–25）', () => {
+    expect(save.settings.battle.defaultPoolSize).toBe(15);
+    expectTypeOf<Settings['battle']['defaultPoolSize']>().toEqualTypeOf<number>();
   });
 
   it('类型层面：字段归属与联合取值符合 brief 签名', () => {

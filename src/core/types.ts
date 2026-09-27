@@ -55,10 +55,17 @@ export interface Deck {
   purifiedAt?: number; // 净化时间戳（undefined = 未净化）
 }
 
+/** 战斗相关设置（Plan 2 · Task 8 新增；v2.1 之前的旧档缺此字段，由 migrateSave 补默认）。 */
+export interface BattleSettings {
+  /** 备战卡池请求规模。合法域：10–25 的整数；默认 15。 */
+  defaultPoolSize: number;
+}
+
 /** 玩家设置。 */
 export interface Settings {
   bossThresholdTier: 15 | 30 | 50;
   sm2Params: Sm2Params;
+  battle: BattleSettings;
 }
 
 /** 本地存档容器（本计划新增；导入时须整体通过 validateSave）。 */

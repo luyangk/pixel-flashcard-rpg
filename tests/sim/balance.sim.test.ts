@@ -178,7 +178,7 @@ describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
 });
 
 describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬断言）', () => {
-  it('SIM#B miss∈{0.3,0.4} 最小失败率为回归基线（当前 60%）', () => {
+  it('SIM#B miss∈{0.3,0.4} 最小失败率为回归基线（当前 70%）', () => {
     const lossRates = [0.3, 0.4].map((mr) => {
       const wins = SEEDS.map((seed) => simulate(seed, mr, CORPUS)).filter((r) => r.won).length;
       return 1 - wins / SEEDS.length;

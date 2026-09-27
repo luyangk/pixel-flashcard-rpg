@@ -171,6 +171,7 @@ function makeFixture(savedAt = 1761955200000) {
     settings: {
       bossThresholdTier: 30 as const,
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 },
+      battle: { defaultPoolSize: 15 },
     },
     meta: { savedAt, plays: 0 },
   };

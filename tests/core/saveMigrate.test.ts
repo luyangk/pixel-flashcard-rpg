@@ -14,7 +14,7 @@ import type { GameStorage } from '@platform/storage';
 // core → platform 只 import type，运行时零依赖，core 纯净不破。
 import { createMemoryStorage } from '@platform/memoryStore';
 import { MAX_EFFECTIVE_DAYS } from '@core/reviewLedger';
-import { importAndSave, serializeSave, validateSave } from '@core/saveMigrate';
+import { importAndSave, migrateSave, serializeSave, validateSave } from '@core/saveMigrate';
 
 const T0 = 1761955200000; // 2025-11-01T00:00Z 附近的中性时间戳，纯数据不作时钟
 
@@ -55,6 +55,7 @@ function validSave(): SaveFile {
     settings: {
       bossThresholdTier: 30,
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 },
+      battle: { defaultPoolSize: 15 },
     },
     meta: { savedAt: T0, plays: 7 },
   };
@@ -63,6 +64,13 @@ function validSave(): SaveFile {
 /** 取合法样本的浅克隆，供逐字段 mutate 出畸形变体。 */
 function sample(): Record<string, unknown> {
   return JSON.parse(JSON.stringify(validSave()));
+}
+
+/** v2.1 之前的旧形状档：settings 无 battle（RF#4 迁移对象）。 */
+function legacySample(): Record<string, unknown> {
+  const raw = sample();
+  delete (raw.settings as Record<string, unknown>).battle;
+  return raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +276,36 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     if (!r.ok) expect(r.reason).toContain('settings.sm2Params.minEase');
   });
 
+  // ---- settings.battle 域（Task 8：v2.1 新增 defaultPoolSize，合法域 10–25 整数）----
+
+  it('battle.defaultPoolSize=99 / 3.5 / "x" → 拒绝且 reason 含路径 settings.battle.defaultPoolSize', () => {
+    for (const v of [99, 3.5, 'x']) {
+      const raw = sample();
+      (raw.settings as Record<string, Record<string, unknown>>).battle = { defaultPoolSize: v };
+      const r = validateSave(raw);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.battle.defaultPoolSize');
+    }
+  });
+
+  it('battle.defaultPoolSize 边界 10 / 25 合法；battle 整体非对象同样拒', () => {
+    for (const v of [10, 25]) {
+      const raw = sample();
+      (raw.settings as Record<string, Record<string, unknown>>).battle = { defaultPoolSize: v };
+      expect(validateSave(raw).ok).toBe(true);
+    }
+    const raw2 = sample();
+    (raw2.settings as Record<string, unknown>).battle = 'x';
+    const r2 = validateSave(raw2);
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toContain('settings.battle');
+  });
+
+  it('缺 settings.battle（v1 旧形状）→ validate 拒并给路径——补默认是 migrateSave 的职责', () => {
+    const r = validateSave(legacySample());
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('settings.battle');
+  });
   it('meta.savedAt 类型错 → 路径 meta.savedAt', () => {
     const raw = sample();
     (raw.meta as Record<string, unknown>).savedAt = 'yesterday';
@@ -394,6 +432,71 @@ describe('validateSave —— 数值域防护（I-3：唯一整包拒绝点必�
     const raw3 = sample();
     (raw3.meta as Record<string, unknown>).savedAt = -1e18;
     rejectPath(raw3, 'meta.savedAt');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// migrateSave —— 旧档补默认（RF#4：v2.1 之前的存档导入后能正常开局）
+// 两层分工（brief Step 1 既定语义，勿混）：validate 拒缺 battle；migrate 负责补。
+// ---------------------------------------------------------------------------
+
+describe('migrateSave', () => {
+  it('旧形状档（无 battle）→ validate 先拒 → migrate 注入 {battle:{defaultPoolSize:15}} 后再 validate 过', () => {
+    const raw = legacySample();
+    expect(validateSave(raw).ok).toBe(false);
+    const save = migrateSave(raw);
+    expect(save.settings.battle).toEqual({ defaultPoolSize: 15 });
+    expect(validateSave(save).ok).toBe(true);
+  });
+
+  it('迁移保留其余字段原值（plays/deckId 引用均不丢），schemaVersion 仍恰为 1', () => {
+    const raw = legacySample();
+    const save = migrateSave(raw);
+    expect(save.schemaVersion).toBe(1);
+    expect(save.meta.plays).toBe((raw.meta as { plays: number }).plays);
+    expect(save.cards.map((c) => c.deckId)).toEqual(['d1', 'd1', 'd2', 'd2']);
+    expect(save.settings.bossThresholdTier).toBe(30);
+    // 不发明新顶层字段：键集与规范 SaveFile 完全一致
+    expect(Object.keys(save).sort()).toEqual(['cards', 'decks', 'meta', 'schemaVersion', 'settings']);
+  });
+
+  it('新档幂等：migrate(migrate(x)) deepEqual migrate(x)；已是新档时同引用返回、零 mutate', () => {
+    const fresh = validSave();
+    const once = migrateSave(fresh);
+    expect(once).toBe(fresh); // 现状核实：validateSave 容忍未知多余键且同引用返回，故无需拷贝重建
+    expect(migrateSave(once)).toEqual(once);
+    expect(migrateSave(once)).toBe(once);
+    // 深比较版幂等（对 JSON 克隆同样成立）
+    const cloned = JSON.parse(JSON.stringify(fresh));
+    const m1 = migrateSave(cloned);
+    expect(migrateSave(m1)).toEqual(m1);
+  });
+
+  it('畸形档（非仅缺 battle）→ 抛可读错误，reason 含 JSON 路径', () => {
+    const raw = sample();
+    (raw.cards as Record<string, unknown>[])[3].deckId = 'ghost';
+    let msg = '';
+    try {
+      migrateSave(raw);
+      expect.unreachable('应抛出');
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e);
+    }
+    expect(msg).toContain('cards[3].deckId');
+    expect(msg).toContain('ghost');
+  });
+
+  it('battle.defaultPoolSize=99（域外）→ migrate 拒绝而非消毒改写——域检查归 validateSave', () => {
+    const raw = sample();
+    (raw.settings as Record<string, Record<string, unknown>>).battle = { defaultPoolSize: 99 };
+    expect(() => migrateSave(raw)).toThrow(/settings\.battle\.defaultPoolSize/);
+  });
+
+  it('JSON 文本往返（导入真实形态）：旧档 parse→migrate→validate 过', () => {
+    const text = JSON.stringify(legacySample());
+    const save = migrateSave(JSON.parse(text));
+    expect(validateSave(save).ok).toBe(true);
+    expect(save.settings.battle.defaultPoolSize).toBe(15);
   });
 });
 
