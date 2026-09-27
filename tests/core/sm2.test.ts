@@ -200,7 +200,7 @@ describe('review —— D27 ΔEF 门控（good 中性 / easy +0.1 / again·hard 
     expect(h.ease).toBeCloseTo(2.5 + HARD_DELTA, 10); // −0.32 → 2.18
     expect(h.ease).toBeLessThan(2.5);
     const a = review(state({ ease: 2.5, interval: 6, reps: 2 }), GRADES.again, T0, P);
-    expect(a.ease).toBeCloseTo(2.5 + delta(GRADES.again), 10); // −0.54 → 1.96
+    expect(a.ease).toBeCloseTo(2.5 + delta(GRADES.again), 10); // −0.80 → 1.70
     expect(a.ease).toBeLessThan(h.ease); // again 比 hard 更狠
   });
 

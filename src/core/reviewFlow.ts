@@ -13,6 +13,8 @@
  * - 零平台依赖：不调 Date.now()、不读宿主时区；nowMs 与 tzOffsetMin 一律由调用方传入
  *   （tzOffsetMin = -new Date().getTimezoneOffset()，UTC+8 为 +480）。
  * - 不可变：入参 card 及其 srs / effectiveReviewDays 数组绝不被改动。
+ * - graded 为入参原样透传；域外档位由 review 内部保守回落 again，二者可能不一致
+ *   （消费方勿以 graded 反推 SRS 行为）。
  */
 
 import type { Card, Sm2Params } from './types';
