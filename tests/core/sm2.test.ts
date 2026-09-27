@@ -12,15 +12,25 @@ const P: Sm2Params = {
 const T0 = 1_761_955_200_000; // 固定时间戳，core 不得依赖 Date.now()
 const DAY = 86_400_000;
 
-/** 逐字取自 brief 的 ease 公式（clamp 上界 ∞），供测试独立复算锚点。 */
-function sm2Ease(ease: number, q: number, minEase: number): number {
-  return Math.max(minEase, ease + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)));
+/**
+ * ΔEF 原式（clamp 上界 ∞）：delta(q) = 0.1 − (5−q)(0.08 + (5−q)·0.02)。
+ * D27 门控语义下该式只作用于 again/hard 两档；good 中性、easy 用独立常数 EASE_BONUS=+0.1。
+ */
+function delta(q: number): number {
+  return 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02);
 }
 
-/** good 档的 ease 增量：0.1 − (5−3)(0.08 + (5−3)·0.02) = −0.14。 */
+/** D27 门控后的 ease 更新：q≥easy → +0.1；q≤hard → delta(q)；good → 不变。再 clamp 下界。 */
+function sm2Ease(ease: number, q: number, minEase: number): number {
+  if (q >= GRADES.easy) return Math.max(minEase, ease + 0.1); // EASE_BONUS
+  if (q <= GRADES.hard) return Math.max(minEase, ease + delta(q));
+  return Math.max(minEase, ease); // good：严格不变
+}
+
+/** good 档的 ease 增量：D27 门控后为 0（中性）。 */
 const GOOD_DELTA = sm2Ease(0, GRADES.good, Number.NEGATIVE_INFINITY);
-/** hard 档增量 −0.28、easy 档 +0.14（同式）。 */
-const HARD_DELTA = sm2Ease(0, GRADES.hard, Number.NEGATIVE_INFINITY);
+/** hard 档增量 −0.28（原式）、easy 档 +0.1（EASE_BONUS，非原式的 +0.14）。 */
+const HARD_DELTA = delta(GRADES.hard);
 
 // —— brief 公式的「可解释转写」（与实现独立，测试即规格）——
 // again → reps=0、interval=firstInterval、lapses+1；
@@ -32,9 +42,9 @@ const HARD_DELTA = sm2Ease(0, GRADES.hard, Number.NEGATIVE_INFINITY);
 //  b) 天级取整、分钟级（<1d）保留小数——否则 10 分钟间隔会被 round 归零。
 // EF 语义可切换：'old' = 乘法用「更新前」EF（标准 SM-2 语义，实现采用此读法）；
 // 'new' = 字面读法（先更新 EF 再乘）。
-// 注意：brief 锚点 "1→6→15" 的第三跳只在 EF 恒定时成立（round(6×2.5)=15）；
-// 链式起步时 Δ(good)=−0.14 使旧 EF 逐跳下降，第三跳实为 round(6×2.22)=13。
-// 两种读法下 reps=2 档 interval 均与 EF 无关（固定取 secondInterval=6）。
+// D27 门控修正后 sm2Ease 为中性语义：good 使 EF 严格不变，链式起步时 EF 恒为 2.5，
+// brief 锚点 "1→6→15" 在 good-only 链上逐跳成立（round(6×2.5)=15），不再需要
+// "EF 恒定才成立"的附加说明。两种读法下 reps=2 档 interval 均与 EF 无关（固定取 secondInterval=6）。
 type EfSemantics = 'old' | 'new';
 function briefNext(
   s: SRSState,
@@ -99,21 +109,21 @@ describe('review —— again', () => {
     expect(after.due).toBeCloseTo(T0 + DAY + P.firstInterval * DAY, 3);
   });
 
-  it('ease 按公式逐次递增且不低于 minEase', () => {
+  it('ease 按门控语义逐次变化且不低于 minEase', () => {
     let s = state({ ease: 2.5, interval: 6, reps: 2, stability: 'review' });
     for (let i = 0; i < 10; i++) s = review(s, GRADES.good, T0 + (i + 1) * DAY, P);
-    expect(s.ease).toBe(P.minEase); // 该 Δ(good)=−0.14，连击后触底 clamp
+    expect(s.ease).toBe(2.5); // D27：Δ(good)=0，连击后严格不变
     let up = state({ ease: 2.5, interval: 6, reps: 2 });
     for (let i = 0; i < 5; i++) up = review(up, GRADES.easy, T0 + (i + 1) * DAY, P);
-    expect(up.ease).toBeCloseTo(2.5 + 5 * sm2Ease(0, GRADES.easy, Number.NEGATIVE_INFINITY), 10);
+    expect(up.ease).toBeCloseTo(2.5 + 5 * 0.1, 10); // EASE_BONUS=+0.1/次（非原式 +0.14）
     let floor = state({ ease: P.minEase, interval: 6, reps: 2 });
     for (let i = 0; i < 5; i++) floor = review(floor, GRADES.again, T0 + (i + 1) * DAY, P);
     expect(floor.ease).toBe(P.minEase); // clamp 下界生效
   });
 });
 
-describe('review —— good 链（brief 公式复算，EF 语义显式声明）', () => {
-  it('与 briefNext(old-EF) 逐步一致：链式起步 interval 走 1→6→13（ΔEF 下压）', () => {
+describe('review —— good 链（D27 中性语义：EF 恒定，锚点逐跳成立）', () => {
+  it('与 briefNext(old-EF) 逐步一致：链式起步 interval 走 1→6→15→38，ease 恒 2.5', () => {
     const dayParams: Sm2Params = { ...P, firstInterval: 1 };
     let s = createInitialSRS(T0, dayParams);
     for (let i = 0; i < 4; i++) {
@@ -124,22 +134,24 @@ describe('review —— good 链（brief 公式复算，EF 语义显式声明）
       expect(s.interval).toBe(want.interval);
     }
     // 具体锚点：reps=1→1d、reps=2→6d（secondInterval，与 EF 无关）。
-    // 第三跳用「更新前」EF：链式起步时 ease 已随 Δ(good)=−0.14 降至 2.22，
-    // 故 round(6×2.22)=13 而非 15。brief 的 "1→6→15" 是 EF 恒定时的参数化示例
-    // （原文注明 "ease 2.6 时允许 ±1 容差断言具体数"），精确锚定见下一用例。
+    // D27 后 Δ(good)=0，EF 恒为 initialEase=2.5，第三跳 round(6×2.5)=15、
+    // 第四跳 round(15×2.5)=38——brief 的 "1→6→15" 不再依赖参数化假设。
     const chain = createInitialSRS(T0, dayParams);
     const one = review(chain, GRADES.good, T0, dayParams);
     const two = review(one, GRADES.good, T0 + DAY, dayParams);
     const three = review(two, GRADES.good, T0 + 6 * DAY, dayParams);
+    const four = review(three, GRADES.good, T0 + 15 * DAY, dayParams);
     expect([one.interval, two.interval]).toEqual([1, 6]);
-    expect(three.interval).toBe(13); // round(6 × 旧EF 2.22)
+    expect(three.interval).toBe(15); // round(6 × 2.5)，EF 恒定
+    expect(four.interval).toBe(38); // round(15 × 2.5)
     expect(three.reps).toBe(3);
-    expect(three.stability).toBe('mastered'); // 13 ≥ 7d，晋升规则使然
+    expect(three.stability).toBe('mastered'); // 15 ≥ 7d，晋升规则使然
+    expect([one.ease, two.ease, three.ease, four.ease]).toEqual([2.5, 2.5, 2.5, 2.5]);
   });
 
-  it('固定 ease 场景精确命中 brief 锚点 15（15 是 EF=2.5 恒定时的解析值）', () => {
+  it('固定 ease 场景精确命中 brief 锚点 15（D27 后 good 链 EF 恒 2.5，解析值即实现值）', () => {
     // 从 reps=2、interval=6、ease=2.5 的中间态起步：乘法用「更新前」EF，
-    // interval = round(6 × 2.5) = 15，与链式起步的实际漂移无关。
+    // interval = round(6 × 2.5) = 15；good 中性语义下与链式起步结果一致。
     const s = review(state({ ease: 2.5, interval: 6, reps: 2, stability: 'review' }), GRADES.good, T0, P);
     expect(s.interval).toBe(15);
     expect(s.reps).toBe(3);
@@ -160,14 +172,70 @@ describe('review —— hard / easy 修饰', () => {
     const hard = review(base, GRADES.hard, T0 + DAY, P);
     expect(easy.interval).toBe(briefNext(base, GRADES.easy, P).interval); // round(10×2.5×1.3)=33
     expect(hard.interval).toBe(briefNext(base, GRADES.hard, P).interval); // round(10×2.5/1.2)=21
-    expect(easy.ease).toBeCloseTo(2.5 + sm2Ease(0, GRADES.easy, Number.NEGATIVE_INFINITY), 10);
+    expect(easy.ease).toBeCloseTo(2.5 + 0.1, 10); // EASE_BONUS（非原式 +0.14）
     expect(hard.ease).toBeCloseTo(2.5 + HARD_DELTA, 10);
+  });
+});
+
+describe('review —— D27 ΔEF 门控（good 中性 / easy +0.1 / again·hard 原式）', () => {
+  it('三连 good 后 ease 严格恒为 initialEase，档位间无浮点漂移', () => {
+    expect(GOOD_DELTA).toBe(0); // D27：good 档门控后增量为零（中性）
+    let s = state({ ease: 2.5, interval: 6, reps: 2, stability: 'review' });
+    for (let i = 0; i < 3; i++) s = review(s, GRADES.good, T0 + (i + 1) * DAY, P);
+    expect(s.ease).toBe(2.5); // 非 toBeCloseTo——门控是赋值分支，不是加 −0.14+…
+  });
+
+  it('good 不随自定义 initialEase 漂移；easy 恰为 initialEase+0.1', () => {
+    const qParams: Sm2Params = { ...P, initialEase: 2.6 };
+    let g = createInitialSRS(T0, qParams);
+    for (let i = 0; i < 8; i++) g = review(g, GRADES.good, T0 + (i + 1) * DAY, qParams);
+    expect(g.ease).toBe(2.6);
+    let e = createInitialSRS(T0, qParams);
+    e = review(e, GRADES.easy, T0 + DAY, qParams);
+    expect(e.ease).toBeCloseTo(2.7, 10); // 2.6 + EASE_BONUS(0.1)，非原式的 2.74
+  });
+
+  it('hard 后 ease 下降且严格低于 2.5；again 同式下压', () => {
+    const h = review(state({ ease: 2.5, interval: 6, reps: 2 }), GRADES.hard, T0, P);
+    expect(h.ease).toBeCloseTo(2.5 + HARD_DELTA, 10); // −0.28 → 2.22
+    expect(h.ease).toBeLessThan(2.5);
+    const a = review(state({ ease: 2.5, interval: 6, reps: 2 }), GRADES.again, T0, P);
+    expect(a.ease).toBeCloseTo(2.5 + delta(GRADES.again), 10); // −0.54 → 1.96
+    expect(a.ease).toBeLessThan(h.ease); // again 比 hard 更狠
+  });
+
+  it('easy 用独立常数 +0.1，不再是原式的 +0.14', () => {
+    const e = review(state({ ease: 2.5, interval: 6, reps: 2 }), GRADES.easy, T0, P);
+    expect(e.ease).toBeCloseTo(2.6, 10);
+    // 结构断言：门控分支下 easy 增量恰为 EASE_BONUS；旧实现（+0.14）在 2.36 起步时
+    // 会得 2.50≠2.46，此断言即可区分两种语义（D27 前该值即本用例的失败点）。
+    const mid = review(state({ ease: 2.36, interval: 6, reps: 2 }), GRADES.easy, T0, P);
+    expect(mid.ease).toBeCloseTo(2.46, 10);
+  });
+
+  it('clamp 下界仍作用于 again/hard：连续 hard 触底 minEase 不再下穿', () => {
+    let s = state({ ease: 1.4, interval: 6, reps: 2 });
+    for (let i = 0; i < 6; i++) s = review(s, GRADES.hard, T0 + (i + 1) * DAY, P);
+    expect(s.ease).toBe(P.minEase);
+  });
+
+  it('briefNext(D27 同构器) 与实现逐字段一致（mixed 链，含 clamp 段）', () => {
+    const dayParams: Sm2Params = { ...P, firstInterval: 1 };
+    let s = createInitialSRS(T0, dayParams);
+    const seq = [GRADES.good, GRADES.easy, GRADES.hard, GRADES.again, GRADES.hard, GRADES.hard, GRADES.good];
+    for (let i = 0; i < seq.length; i++) {
+      const want = briefNext(s, seq[i], dayParams, 'old');
+      s = review(s, seq[i], T0 + (i + 1) * DAY, dayParams);
+      expect(s.reps).toBe(want.reps);
+      expect(s.ease).toBeCloseTo(want.ease, 10);
+      expect(s.interval).toBe(want.interval);
+    }
   });
 });
 
 describe('stability 晋升', () => {
   it('interval≥7d → mastered', () => {
-    // 逐字 brief 公式下 Δ(good)=−0.14，单跳 6→round(6×2.5)=15 已 ≥7d：
+    // D27 中性语义下 Δ(good)=0，单跳 6→round(6×2.5)=15 已 ≥7d：
     const s = review(state({ ease: 2.5, interval: 6, reps: 3 }), GRADES.good, T0, P);
     expect(s.interval).toBe(15);
     expect(s.stability).toBe('mastered');

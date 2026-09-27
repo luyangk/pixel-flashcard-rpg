@@ -74,6 +74,9 @@ function resolveParams(p?: Sm2Params): Sm2Params {
   };
 }
 
+/** easy(5) 档的 ease 增量：Wozniak 原始语义中 q=5 的固定加值（D27，独立常数）。 */
+const EASE_BONUS = 0.1;
+
 /** q 必须落在 {0,2,3,5}，否则视为 again（最保守回落）。 */
 function resolveGrade(grade: Grade): number {
   switch (grade) {
@@ -110,7 +113,7 @@ function promoteStability(interval: number, reps: number): Stability {
 
 /**
  * SM-2 标准更新，返回新对象（不可变）。
- * ease′ = clamp(ease + (0.1 − (5−q)(0.08 + (5−q)·0.02)), minEase, ∞)
+ * ease′ = D27 门控：q≥easy → +0.1；q≤hard → clamp(ease + Δ(q), minEase, ∞)；good 不变。
  */
 export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params): SRSState {
   const params = resolveParams(p);
@@ -118,16 +121,19 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
   const t = timeOr(nowMs, cur.due);
   const q = resolveGrade(grade);
 
-  // ease 更新：brief 公式逐字转写 ease′ = clamp(ease + Δ(q), minEase, ∞)，
-  // Δ = 0.1 − (5−q)(0.08 + (5−q)·0.02)。注意该写法下 q=3（good）的 Δ = −0.14，
-  // 与 Wozniak 原始 SM-2 的符号约定相反（原始实现中 good 使 EF +0.1）。
-  // 本引擎严格照用 brief 公式；配套约定是间隔用「更新前」EF 计算（标准 SM-2）。
-  // 该约定的后果要按参数分开看：默认分钟级参数下 good 链为 0.1667→6→13，
-  // brief 的 "1→6→15" 只在 EF 恒定时成立（round(6×2.5)=15）——链式起步时
-  // Δ(good)=−0.14 使旧 EF 逐跳下降，第三跳实为 round(6×2.22)=13。
-  // 精确锚定与两种读法的说明见 tests/core/sm2.test.ts 的 briefNext 注释。
-  const delta = 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02);
-  const ease = Math.max(params.minEase, cur.ease + delta);
+  // ease 更新（D27 ΔEF 门控修正）：v1 逐字照抄的 Δ(q) = 0.1 − (5−q)(0.08 + (5−q)·0.02)
+  // 在 q=3（good）时得 −0.14，与 Wozniak 原始 SM-2 符号约定相反——原始语义中 good 是
+  // 「正确回忆」的中性档，EF 不变；只有 easy 加 EF、again/hard 减 EF。门控写法：
+  //   q ≥ easy → +EASE_BONUS（+0.1，即 q=5 代入原 delta 公式的档位值，独立常数）
+  //   q ≤ hard → delta(q)（again −0.54 / hard −0.28，原式下调）
+  //   good     → 严格不变
+  // 用显式数值比较而非符号假设（hard=2 < good=3 < easy=5 的档位序）。
+  // 该修正使 good-only 链 EF 恒为 initialEase，间隔锚点回到 brief 的 1→6→15（round(6×2.5)）。
+  const deltaOf = (qq: number): number => 0.1 - (5 - qq) * (0.08 + (5 - qq) * 0.02);
+  let easeDelta = 0;
+  if (q >= GRADES.easy) easeDelta = EASE_BONUS;
+  else if (q <= GRADES.hard) easeDelta = deltaOf(q);
+  const ease = Math.max(params.minEase, cur.ease + easeDelta);
 
   let interval: number;
   let reps: number;
@@ -141,8 +147,7 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
     // interval 用「更新前」的 ease 计算（标准 SM-2：I(n) = I(n−1) · EF，EF 随后才更新）。
     // reps=2 档直接取 secondInterval（brief 原文 "interval 按 reps=1→secondInterval"，
     // Anki 式固定第二间隔）；reps≥3 用 round(interval × 旧EF)。
-    // 于是链式起步的 good 默认参数下为 0.1667→6→13（第三跳 = round(6×旧EF 2.22)）；
-    // 只有 EF 恒定时才是 brief 示例里的 round(6×2.5)=15。
+    // D27 门控后 good-only 链 EF 恒为 initialEase，默认参数下锚点即 brief 的 1→6→15。
     // 小于 1 天的分钟级不取整以保精度；修饰系数在取整前施加（brief 顺序）。
     const days = (v: number): number => (v >= 1 ? Math.round(v) : v);
     if (reps === 1) {
