@@ -31,7 +31,10 @@ function pool(n: number): Card[] {
   return Array.from({ length: n }, (_, i) => makeCard(`c${i}`));
 }
 
-const STATS_10 = { atk: 10, maxHp: 100 };
+// T5 对齐：createBattle 入参现为完整 PlayerStats（stats.ts）。这些是测试夹具，
+// 刻意取 atk=10/7 而非 deriveStats(1,0,0) 的 12——战斗公式与属性推导解耦，
+// 手算锚点只钉 answer 路径。spi/vit 值仅为使 atk 与派生式自洽的占位。
+const STATS_10 = { level: 1, vit: 0, spi: 16, atk: 10, def: 7, maxHp: 100 };
 
 /**
  * brief Step 1 的 AN#1 锚点写「attack=10、倍率 review=1.0、rng≡0.5→浮动1.0、HP=池数×7」。
@@ -40,7 +43,7 @@ const STATS_10 = { atk: 10, maxHp: 100 };
  * 修测试锚点不动公式。此处保留「HP = 池数 × 单卡伤害」的字面结构，把 attack 取为 7
  * （controller 诊断同口径：「7 对应 atk7」）。全 good 必胜在 atk=10 下由 AN#1b 覆盖。
  */
-const STATS_7 = { atk: 7, maxHp: 100 };
+const STATS_7 = { level: 1, vit: 0, spi: 0, atk: 7, def: 7, maxHp: 100 };
 
 describe('createBattle —— RF#2 入参校验与初始态', () => {
   it('CB#1 重复 cardId → throw Error("duplicate-card")', () => {
@@ -123,7 +126,7 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     expect(s.enemyHp).toBe(4);
 
     // atk=4 → round(4×0.1×1.0)=round(0.4)=0：零伤害仍记 damage 事件（算命中）
-    const lowAtk = { atk: 4, maxHp: 100 };
+    const lowAtk = { level: 1, vit: 0, spi: 0, atk: 4, def: 7, maxHp: 100 };
     let s2 = createBattle([card], 5, lowAtk, HALF);
     s2 = answer(s2, card, GRADES.good, HALF);
     expect(s2.enemyHp).toBe(5);
@@ -212,7 +215,6 @@ describe('终局与幂等', () => {
   it('EV#1 log 追加序正确：终局 end 恒为最后一个事件', () => {
     const cards = pool(3);
     let s = createBattle(cards, 20, STATS_10, HALF);
-    const seq: readonly BattleEvent[] = [];
     s = answer(s, cards[0], GRADES.good, HALF); // dmg 10 → hp10
     s = answer(s, cards[1], GRADES.again, HALF); // miss
     s = answer(s, cards[2], GRADES.easy, HALF); // dmg 10 → hp0 且池尽 → won+end
@@ -223,7 +225,6 @@ describe('终局与幂等', () => {
       'end::',
     ]);
     expect(s.phase).toBe('won');
-    expect(seq).toHaveLength(0);
   });
 
   it('IM#1 不可变性：answer 返回新对象，旧 state 与 log 数组不被改动', () => {
@@ -243,7 +244,7 @@ describe('终局与幂等', () => {
 
   it('IDX#1 idx 恒 +1（含 miss 与零伤害 damage）直至池尽', () => {
     const cards = pool(3);
-    let s = createBattle(cards, 1000, { atk: 1, maxHp: 100 }, HALF);
+    let s = createBattle(cards, 1000, { level: 1, vit: 0, spi: 0, atk: 1, def: 7, maxHp: 100 }, HALF);
     for (let i = 0; i < cards.length; i++) {
       const g = i === 1 ? GRADES.again : GRADES.good;
       s = answer(s, cards[i], g, HALF);

@@ -19,6 +19,7 @@ import type { Card } from './types';
 import { GRADES, damageMultiplier, type Grade } from './sm2';
 import type { Rng } from './rng';
 import { uniform } from './rng';
+import type { PlayerStats } from './stats';
 
 export type BattlePhase = 'ready' | 'answering' | 'won' | 'lost';
 
@@ -41,15 +42,12 @@ export interface BattleEvent {
 }
 
 /**
- * 战斗所需的最小玩家属性形状（R-T4-p2-a）：PlayerStats 的权威定义在 T5 stats.ts
- * （字段 level/vit/spi/atk/def/maxHp），本任务只消费 atk 与 maxHp。结构上为
- * PlayerStats 的子集，T5 交付后若字段兼容可直接 import type 替换。
+ * 战斗所需的最小玩家属性形状（T5 对齐义务，已兑现）：权威定义在 stats.ts 的
+ * PlayerStats（level/vit/spi/atk/def/maxHp 全必填），本文件只消费 atk 与 maxHp。
+ * 别名保留 BattlePlayerStats 导出名以兼容既有引用面；createBattle 内 def 无消费点，
+ * 可选→必填零逻辑改动。
  */
-export interface BattlePlayerStats {
-  readonly atk: number;
-  readonly def?: number;
-  readonly maxHp: number;
-}
+export type BattlePlayerStats = PlayerStats;
 
 /**
  * 建战：校验池并落初始态。
