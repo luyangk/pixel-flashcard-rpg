@@ -192,12 +192,11 @@ describe('buildPool —— 不变量：输出无重复 cardId（衔接 createBat
     assertNoDuplicateIds(pool);
   });
 
-  it('BP#17b R-T6-c：候选含重复 id 时自选段 i-- 重试，输出仍满额不缩水', () => {
-    // 智能段吃满 4 张到期卡；剩余池 [f0, f0dup(同id脏副本), g1, g2]。rng≡HALF 使
-    // pickWeighted 落点恒在 index1 = f0dup → take 被拒。修复前该轮空转（len 停在 4）；
-    // 修复后 i-- 重试同一轮抽到 g1 → 满额 5。i=1 轮 remaining=[f0,f0dup,g1,g2]、
-    // roll=0.5×4=2 → 过 f0(1)、f0dup(1) 后于 g1 处转负，选中 f0dup 的镜像序由实现决定，
-    // 故用 HALF 直接钉死确定性结果而非手推分支。
+  it('BP#17b R-T6-c：候选含重复 id 时满额输出语义（不覆盖 i-- 行）', () => {
+    // 智能段吃满 4 张到期卡；剩余池 [f0, f0dup(同id脏副本), g1, g2]，自选段 selfWant=1。
+    // HALF 落点 index2=g1、seed7/12 落点 index0=f0——三个 rng 均选中"可收"对象，take 一次
+    // 成功。本例钉住含 dup 候选下的满额输出语义；i-- 分支结构性不可达（remaining 由
+    // seen-id filter 构造，dup 对象进不了候选，见 task-7-report 可达性分析），本例不覆盖该行。
     const due = dueRun('p', 4);
     const fresh = [
       makeCard('f0', { dueOffset: DAY }),
@@ -207,18 +206,19 @@ describe('buildPool —— 不变量：输出无重复 cardId（衔接 createBat
     ];
     for (const rng of [HALF, mulberry32(7), mulberry32(12)]) {
       const pool = buildPool([...due, ...fresh], { size: 5, rng, nowMs: NOW });
-      expect(pool).toHaveLength(5); // 修复前此断言红（输出 4 张）
+      expect(pool).toHaveLength(5);
       assertNoDuplicateIds(pool);
       expect(ids(pool).slice(0, 4)).toEqual(['p0', 'p1', 'p2', 'p3']);
     }
   });
 
-  it('BP#17c R-T6-c：dup 被智能段收编后自选段再遇 dup——i-- 重试不缩水', () => {
+  it('BP#17c R-T6-c：seen-id 守卫钉死——dup 第二份绝不入输出', () => {
     // 构造逐字推演（rng≡HALF）：dueQueue=[a1,a0] 吃智能段前 2；放宽段按 due 升序
-    // [f0(+1d), f0dup(+2d), g1(+3d)] 补足 smartWant=4 → f0 入 seen、f0dup 被 take 拒；
-    // 自选段 remaining=[g1]（两份 f0 均因同 id 被 filter 剔除），抽中 g1 但 take 必拒
-    // （id 已在 seen）→ 修复前该轮空转、输出停在 4；修复后 i-- 重试，remaining 已空、
-    // 循环 break——本构造钉"take 拒绝路径不产生重复 id、不死循环"。
+    // [f0(+1d), f0dup(+2d), g1(+3d)] 补足 smartWant=4 → f0 入 seen、f0dup 被 take 的
+    // seen 集合拒绝；自选段 remaining=[]（两份 f0 均因 id∈seen 被 filter 排除）→ break。
+    // 本例实际钉的是贯穿三段的 seen-id 守卫：若删去 take 的 seen.has(c.id) 检查，
+    // f0dup 会混入输出、assertNoDuplicateIds 立即红（评审变异实验已验证）。
+    // 与 i-- 无关——该分支在此结构下不可达。
     const cards = [
       makeCard('f0', { dueOffset: DAY }),
       makeCard('f0', { dueOffset: 2 * DAY }), // 同 id 脏副本

@@ -101,8 +101,9 @@ export function buildPool(cards: readonly Card[], opts: PoolOptions): Card[] {
       if (remaining.length === 0) break; // 降级第二跳：总可用 < size，按实际长度返回
       const picked = pickWeighted(rng, remaining, () => 1);
       if (picked == null) break; // 防御：weight≡1 且 remaining 非空时不会触发
-      // R-T6-c：take 被拒只发生在脏数据（同 id 重复对象）时——剔除该 id 后 i-- 重试同一轮，
-      // 兑现上方注释承诺"不缩水输出长度"；remaining 每轮严格收缩，循环仍单调终止。
+      // R-T6-c：兑现上方注释承诺的防御行。当前结构下 remaining 由 seen-id filter 构造，
+      // picked.id ∈ seen 恒假 → take 拒绝不可达（穷举实证见 task-7-report 可达性分析）；
+      // 本行为零变更，仅在语义上闭合注释与代码的落差。remaining 每轮严格收缩，循环仍单调终止。
       if (!take(picked)) i--;
       remaining = remaining.filter((c) => c.id !== picked.id);
     }

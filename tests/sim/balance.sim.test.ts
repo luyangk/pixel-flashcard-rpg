@@ -87,9 +87,11 @@ interface SimResult {
 }
 
 /**
- * 跑一局：seed 决定 rng 流（buildPool 自选段抽取 → 每回合 miss 判定 → answer 浮动）。
- * missRate 为每次作答独立掷 miss 的概率（grade 取 again 表达空转）。
- * card 一律从 pool[state.idx] 取——调用侧一致性契约（T4 deferred #2）。
+ * 跑一局：seed 决定 rng 流。消耗序 verbatim：buildPool 自选段每轮 pickWeighted 各掷一次
+ * → 战斗内每回合先掷一次 miss 判定（uniform(0,1)），命中再进 answer 掷浮动 uniform(0.9,1.1)
+ * ——即 miss 回合消耗 1 掷、命中回合消耗 2 掷。missRate 为每次作答独立掷 miss 的概率
+ * （grade 取 again 表达空转）。card 一律从 pool[state.idx] 取——调用侧一致性契约
+ * （T4 deferred #2）。
  */
 function simulate(seed: number, missRate: number, cards: Card[], size = POOL_SIZE): SimResult {
   const rng = mulberry32(seed);
@@ -198,6 +200,9 @@ describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬�
   });
 
   it('SIM#D 确定性：同 seed 复跑逐字段全等（曲线数字可信的前提）', () => {
+    // 限定语：本例证的是同进程内 rng 流的纯函数性（mulberry32 无外部状态、simulate 不读
+    // 时钟——nowMs 显式传入）。跨进程/跨版本的序列一致性由 mulberry32 的算法定义保证，
+    // 不在本测试面内验证。
     for (const seed of [1, 7, 42]) {
       for (const mr of [0, 0.4]) {
         expect(simulate(seed, mr, CORPUS)).toEqual(simulate(seed, mr, CORPUS));
