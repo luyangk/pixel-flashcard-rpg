@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { Card, SRSState, Stability } from '@core/types';
 import { GRADES } from '@core/sm2';
 import type { Rng } from '@core/rng';
-import { createBattle, answer, type BattleState } from '@core/battle';
+import { createBattle, answer, type BattlePhase, type BattleState } from '@core/battle';
 
 /** rng≡0.5 → uniform(0.9,1.1) 恰为 1.0，伤害无浮动，便于手算。 */
 const HALF: Rng = () => 0.5;
@@ -64,6 +64,87 @@ describe('createBattle —— RF#2 入参校验与初始态', () => {
     expect(s.playerHp).toBe(100);
     expect(s.maxPlayerHp).toBe(100);
     expect(s.log).toEqual([]);
+  });
+
+  it('CB#4 N-8：createBattle 行为不变——phase 直接落 answering，无 ready 中间态', () => {
+    // 'ready' 联合成员已删（N-8）：建战即出第一张题卡，不存在"待开始"相位。
+    // 类型层钉子见下方 @ts-expect-error：把 'ready' 赋给 BattlePhase 应编译报错。
+    const s = createBattle(pool(2), 14, STATS_10, HALF);
+    expect(s.phase).toBe('answering');
+    // 运行时穷举：合法相位只可能是三个成员之一。
+    const isLegalPhase = (p: BattlePhase): boolean =>
+      p === 'answering' || p === 'won' || p === 'lost';
+    expect(isLegalPhase(s.phase)).toBe(true);
+    // @ts-expect-error —— BattlePhase 联合已收窄，'ready' 不再是合法成员
+    const _dead: BattlePhase = 'ready';
+    void _dead;
+  });
+});
+
+describe('answer —— dev 断言（N-9：card 必须等于 pool[idx]）', () => {
+  /** 3 张 review 卡、enemyHp 足够大（不提前终局），便于观察 idx。 */
+  function mid(): BattleState {
+    return createBattle(pool(3), 999, STATS_10, HALF);
+  }
+
+  it('AN#5 正确卡 + asserts 回调 → 不产任何断言消息，正常推进', () => {
+    const msgs: string[] = [];
+    const s = mid();
+    // idx=0 ⇒ 当前卡为 c0：传对应 Card 对象即合法路径
+    const next = answer(s, makeCard('c0'), GRADES.good, HALF, (m) => msgs.push(m));
+    expect(msgs).toEqual([]);
+    expect(next.idx).toBe(1);
+    expect(next.log[0].kind).toBe('damage');
+  });
+
+  it('AN#6 card.id ≠ pool[idx] → asserts("answer-card-mismatch") 且拒绝推进（idx/log/enemyHp 原样）', () => {
+    const msgs: string[] = [];
+    const s = mid(); // idx=0 ⇒ 当前卡应为 c0
+    const wrong = makeCard('c2'); // 时序错乱：拿第 3 张去答第 1 张的题
+    const next = answer(s, wrong, GRADES.good, HALF, (m) => msgs.push(m));
+    expect(msgs).toEqual(['answer-card-mismatch']);
+    expect(next).toBe(s); // 同一引用返回：零状态变化
+    expect(next.idx).toBe(0);
+    expect(next.enemyHp).toBe(999);
+    expect(next.log).toEqual([]);
+  });
+
+  it('AN#7 mismatch 时 miss 档（grade < good）同样拒绝推进', () => {
+    const msgs: string[] = [];
+    const s = mid();
+    const next = answer(s, makeCard('c1'), GRADES.again, HALF, (m) => msgs.push(m));
+    expect(msgs).toEqual(['answer-card-mismatch']);
+    expect(next).toBe(s);
+  });
+
+  it('AN#8 不传 asserts（生产路径零开销）→ mismatch 静默放行，照常推进', () => {
+    const s = mid();
+    const next = answer(s, makeCard('c2'), GRADES.good, HALF);
+    expect(next).not.toBe(s);
+    expect(next.idx).toBe(1);
+    // 伤害倍率取自入参 card 的 srs（此处两档都是 review=1.0，锚点只钉推进）
+    expect(next.enemyHp).toBe(999 - Math.round(10 * 1.0 * 1.0));
+  });
+
+  it('AN#9 won 终局态幂等优先于断言：传入非当前卡也不报 mismatch（剩余卡作废是合法调用面）', () => {
+    const cards = pool(4);
+    let s = createBattle(cards, 7, STATS_10, HALF);
+    s = answer(s, cards[0], GRADES.good, HALF); // 立即 won
+    expect(s.phase).toBe('won');
+    const msgs: string[] = [];
+    const next = answer(s, cards[2], GRADES.good, HALF, (m) => msgs.push(m));
+    expect(next).toBe(s); // 幂等返回自身
+    expect(msgs).toEqual([]);
+  });
+
+  it('AN#10 脏池防御：pool[idx] 越界（idx ≥ pool.length）时报 mismatch 并拒进', () => {
+    const msgs: string[] = [];
+    const s = mid();
+    // 手工构造 idx 越界的脏 state（模拟存档回放损坏）
+    const dirty: BattleState = { ...s, idx: 5 };
+    const next = answer(dirty, makeCard('c0'), GRADES.good, HALF, (m) => msgs.push(m));
+    expect(msgs).toEqual(['answer-card-mismatch']);
+    expect(next).toBe(dirty);
   });
 });
 
