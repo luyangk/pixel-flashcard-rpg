@@ -125,7 +125,7 @@ export function review(srs: SRSState, grade: Grade, nowMs: number, p: Sm2Params)
   // 在 q=3（good）时得 −0.14，与 Wozniak 原始 SM-2 符号约定相反——原始语义中 good 是
   // 「正确回忆」的中性档，EF 不变；只有 easy 加 EF、again/hard 减 EF。门控写法：
   //   q ≥ easy → +EASE_BONUS（+0.1，即 q=5 代入原 delta 公式的档位值，独立常数）
-  //   q ≤ hard → delta(q)（again −0.54 / hard −0.28，原式下调）
+  //   q ≤ hard → delta(q)（again −0.54 / hard −0.32，原式下调）
   //   good     → 严格不变
   // 用显式数值比较而非符号假设（hard=2 < good=3 < easy=5 的档位序）。
   // 该修正使 good-only 链 EF 恒为 initialEase，间隔锚点回到 brief 的 1→6→15（round(6×2.5)）。

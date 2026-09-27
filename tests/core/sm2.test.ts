@@ -29,7 +29,7 @@ function sm2Ease(ease: number, q: number, minEase: number): number {
 
 /** good 档的 ease 增量：D27 门控后为 0（中性）。 */
 const GOOD_DELTA = sm2Ease(0, GRADES.good, Number.NEGATIVE_INFINITY);
-/** hard 档增量 −0.28（原式）、easy 档 +0.1（EASE_BONUS，非原式的 +0.14）。 */
+/** hard 档增量 −0.32（原式）、easy 档 +0.1（EASE_BONUS，非原式的 +0.14）。 */
 const HARD_DELTA = delta(GRADES.hard);
 
 // —— brief 公式的「可解释转写」（与实现独立，测试即规格）——
@@ -197,7 +197,7 @@ describe('review —— D27 ΔEF 门控（good 中性 / easy +0.1 / again·hard 
 
   it('hard 后 ease 下降且严格低于 2.5；again 同式下压', () => {
     const h = review(state({ ease: 2.5, interval: 6, reps: 2 }), GRADES.hard, T0, P);
-    expect(h.ease).toBeCloseTo(2.5 + HARD_DELTA, 10); // −0.28 → 2.22
+    expect(h.ease).toBeCloseTo(2.5 + HARD_DELTA, 10); // −0.32 → 2.18
     expect(h.ease).toBeLessThan(2.5);
     const a = review(state({ ease: 2.5, interval: 6, reps: 2 }), GRADES.again, T0, P);
     expect(a.ease).toBeCloseTo(2.5 + delta(GRADES.again), 10); // −0.54 → 1.96
