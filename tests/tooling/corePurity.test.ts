@@ -41,9 +41,11 @@ describe('check-core-purity', () => {
         '// window.foo 在注释里，不该报',
         '/* document.bar',
         ' * localStorage 块注释里，也不该报 */',
+        '// Math.random( 只活在注释里，不该报',
         'const a = Date.now();',
         'const b = indexedDB.open("x"); // fetch( 藏在行注释里',
         'export function f() { require("fs"); }',
+        'export const r = Math.random();',
       ].join('\n'),
     );
     writeFileSync(
@@ -54,7 +56,7 @@ describe('check-core-purity', () => {
     type Hit = { file: string; line: number; text: string; blacklisted: string };
     const hits: Hit[] = scanFiles([join(dir, 'bad.ts'), join(dir, 'clean.ts')], dir);
     const names = hits.map((h) => h.blacklisted);
-    expect(new Set(names)).toEqual(new Set(['Date.now(', 'indexedDB', 'require(']));
+    expect(new Set(names)).toEqual(new Set(['Date.now(', 'indexedDB', 'require(', 'Math.random(']));
     expect(hits.every((h) => h.file.endsWith('bad.ts'))).toBe(true);
     // 结构化三元组：行号与文本可核对（注释里的字面绝不进结果集）
     for (const h of hits) {
@@ -65,6 +67,10 @@ describe('check-core-purity', () => {
     expect(names).not.toContain('document.');
     expect(names).not.toContain('localStorage');
     expect(names).not.toContain('fetch(');
+    // Math.random( 的调用形态被检出、且只检出代码行那一次（第 8 行），注释行的字面不误报
+    const rndHits = hits.filter((h) => h.blacklisted === 'Math.random(');
+    expect(rndHits.length).toBe(1);
+    expect(rndHits[0].line).toBe(8);
   });
 
   it('stripComments 保留代码、剔除注释', () => {

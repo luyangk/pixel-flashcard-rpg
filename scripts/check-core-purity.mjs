@@ -5,7 +5,7 @@
  * 做法：递归遍历 src/core 下的 .ts 文件，先剥离注释与字符串字面量，
  * 再对黑名单正则做匹配；命中即打印 文件:行号:内容 并以 exit 1 结束。
  *
- * 黑名单：document. window. localStorage indexedDB fetch( Date.now( require(
+ * 黑名单：document. window. localStorage indexedDB fetch( Date.now( require( Math.random(
  * 说明：localDayString 的 tzOffset 是显式入参，不受影响；
  * core 内部模块互相 import（如 saveMigrate → reviewLedger）是合法依赖，不在检测范围。
  */
@@ -24,6 +24,7 @@ const FORBIDDEN = [
   { name: 'fetch(', re: /\bfetch\s*\(/ },
   { name: 'Date.now(', re: /\bDate\.now\s*\(/ },
   { name: 'require(', re: /\brequire\s*\(/ },
+  { name: 'Math.random(', re: /\bMath\.random\s*\(/ },
 ];
 
 /** 收集 dir 下所有 .ts 文件路径（导出供测试复用，避免逐字重复实现） */
