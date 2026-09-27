@@ -157,7 +157,7 @@ describe('rankRuns', () => {
     expect(ranked.map((r) => r.id)).toEqual(['b', 'a']);
   });
 
-  it('脏元素（null/非对象/缺 score）消毒补分或跳过，不产 undefined 行', () => {
+  it('脏元素（null/非对象/缺 score）剔除，不产 undefined 行', () => {
     const good = full('g', { cards: 4, misses: 0, level: 1 });
     const dirty = [good, null, 42, { id: 'h' }] as unknown as RunRecord[];
     expect(rankRuns(dirty)).toEqual([good]);

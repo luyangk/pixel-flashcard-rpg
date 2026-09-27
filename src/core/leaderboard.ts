@@ -14,10 +14,10 @@
  * 本文件只比较大小，从不读时钟。消毒风格与 stats.nonNegIntOr 对齐：
  * 非有限数回落 0、小数向下取整、负计数归零（输出永不含 NaN），
  * 但**不改写 result/kind 的语义**——域外枚举视为非 won/非 boss，与"宁保守不虚高"一致。
+ *
+ * 边界（Ruling R-T9-a）：BattleState→RunRecord 的组装属上层装配职责（Plan 3），
+ * 本层不预置转换器——零调用方的契约外便利件即 YAGNI，勿在此重新发明。
  */
-
-import type { BattleState } from './battle';
-import type { PlayerStats } from './stats';
 
 /** 单局战绩记录（榜单行）。id/at 由调用方注入，core 不生成也不读时钟。 */
 export interface RunRecord {
@@ -86,40 +86,4 @@ export function rankRuns(records: readonly RunRecord[], limit?: number): RunReco
   return rows
     .sort((a, b) => b.score - a.score || b.at - a.at)
     .slice(0, cap);
-}
-
-// ---------------------------------------------------------------------------
-// 上层组装辅助（brief "Consumes: BattleState、PlayerStats" 的落点）
-// ---------------------------------------------------------------------------
-
-/** buildRunInput 的显式补充项：这些字段无法从 state/stats 推导。 */
-export interface RunExtras {
-  /** 领域（卡组）id——通常取 battle 归属 deck。 */
-  domain: string;
-  /** 对局种类：普通遭遇 or Boss（决定 +50 加成）。 */
-  kind: 'encounter' | 'boss';
-  /** 本局失误数（answer 事件里 miss 的累计，上层持有）。 */
-  misses: number;
-  /** 时间戳：调用方注入（core 禁读时钟）。 */
-  at: number;
-}
-
-/**
- * 从终局 BattleState + PlayerStats 提炼 scoreRun 入参——上层建 RunRecord 时的
- * 便捷半程：cards 取已释放张数 min(idx, pool.length)，level 取玩家快照。
- * phase 非 'won'/'lost'（未终局）时 result 记 'lost'：未完局的中间态没有上榜资格，
- * 保守归零比虚报胜利安全。state 侧字段全部消毒，绝不抛异常。
- */
-export function buildRunInput(state: BattleState, stats: PlayerStats, extras: RunExtras): RunInput {
-  const poolLen = Array.isArray(state?.pool) ? state.pool.length : 0;
-  const idx = nonNegIntOr(state?.idx);
-  return {
-    at: nonNegIntOr(extras?.at),
-    result: state?.phase === 'won' ? 'won' : 'lost',
-    kind: extras?.kind === 'boss' ? 'boss' : 'encounter',
-    domain: typeof extras?.domain === 'string' ? extras.domain : '',
-    cards: Math.min(idx, poolLen),
-    misses: nonNegIntOr(extras?.misses),
-    level: nonNegIntOr(stats?.level),
-  };
 }
