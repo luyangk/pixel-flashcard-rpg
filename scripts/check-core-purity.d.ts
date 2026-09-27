@@ -11,7 +11,7 @@ export interface PurityHit {
 /** 结构化命中的展示格式（CLI 与报错信息共用）。 */
 export declare function formatHit(h: PurityHit): string;
 
-/** 剥离 // 与块注释及字符串字面量后的源码（纯正则单趟，无跨行状态）。 */
+/** 剥离 // 与块注释及字符串字面量后的源码（纯正则单趟，无跨行状态；各匹配替换为一个空格并保留其内部换行，行数守恒）。 */
 export declare function stripComments(src: string): string;
 
 /** 递归收集 dir 下全部 .ts 文件。 */

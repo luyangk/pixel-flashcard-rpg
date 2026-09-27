@@ -74,4 +74,37 @@ describe('check-core-purity', () => {
     expect(stripped).toContain('const z = 2;');
     expect(stripped).not.toContain('b');
   });
+
+  it('多行模板字面量剥离不吞行（行数守恒）', () => {
+    const input = 'const a = `\nx=1;\nwindow.location.href=1;\n`;';
+    expect(input.split('\n').length).toBe(4); // brief 输入：3 个换行、4 行
+    const stripped = stripComments(input);
+    expect(stripped.split('\n').length).toBe(input.split('\n').length);
+  });
+
+  it('模板后的真实代码行仍被检出且 line 号正确（行序守恒）', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'purity-tpl-'));
+    const file = join(dir, 'tpl.ts');
+    writeFileSync(
+      file,
+      [
+        'const a = `', // 1
+        'x=1;', // 2
+        'window.location.href=1;', // 3 — 模板内容，剥离后不报（已接受权衡）
+        '`;', // 4
+        'window.alert(1)', // 5 — 真实代码行，必须报且 line=5
+      ].join('\n'),
+    );
+    type Hit = { file: string; line: number; text: string; blacklisted: string };
+    const hits: Hit[] = scanFiles([file], dir);
+    // 模板内部命中为零
+    expect(hits.some((h) => h.text.includes('location'))).toBe(false);
+    // 紧随模板之后的真实代码行照常检出，行号不因剥离错位
+    expect(hits.length).toBe(1);
+    expect(hits[0].line).toBe(5);
+    expect(hits[0].text).toContain('window.alert(1)');
+    expect(hits[0].blacklisted).toBe('window.');
+  });
 });

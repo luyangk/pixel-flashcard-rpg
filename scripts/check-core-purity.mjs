@@ -49,17 +49,19 @@ const TOKEN_PATTERN = [
 const TOKEN_RE = new RegExp(TOKEN_PATTERN, 'g');
 
 /**
- * 剥离块注释、行注释与字符串字面量（各替换为一个空格，保持行数与大致列位）。
+ * 剥离块注释、行注释与字符串字面量（各替换为一个空格并保留其内部换行，行数守恒；
+ * 字符串内容本身不再参与匹配——设计权衡：无心使用+防误报优先，非对抗防护）。
  *
  * 设计要点（fix round 1 评审后重构，放弃手写跨行状态机——两例漏报均源于状态泄漏）：
  * - 纯正则单趟扫描，无跨调用/跨行可变状态；
+ * - 模板串等可跨行匹配整体替换时逐字保留其中的 \n，后续代码行的行序不错位；
  * - 块注释整体非贪婪匹配：`/* wi\n * ndow.location.href = 1; *\/` 注入形态中，
  *   闭合符所在行的星斜杠之后内容必然保留（旧状态机的"行首 * 丢整行"兜底会连带丢弃它）；
  * - 单/双引号串字符类排除裸换行：未闭合串止于行尾，后续行照常扫描；
  * - 撇号保守判定由 (?<![\w$]) lookbehind 承担："it's a trap" 的中缀 ' 不开启字符串态。
  */
 export function stripComments(src) {
-  return src.replace(TOKEN_RE, ' ');
+  return src.replace(TOKEN_RE, (m) => ' ' + '\n'.repeat((m.match(/\n/g) ?? []).length));
 }
 
 /** 返回结构化命中列表：每项 { file, line, text, blacklisted } */
