@@ -18,6 +18,11 @@
  *
  * Task 8 扩展：Settings 新增 battle.defaultPoolSize（默认 15、域 10–25 整数），
  * migrateSave 为 v2.1 前旧档（无 battle）补默认——DoD5「导入旧进度能正常开局」地基。
+ *
+ * Plan 3 · T3 扩展（R-P3-a 三段式）：Settings 新增 progress.exp（累计经验，非负整数）。
+ * 与 battle 完全同构的两层分工——validateSave 对 progress「在场严检 + 缺席整包拒」
+ * （reason 带路径并指路 migrateSave），migrateSave 只为缺 progress 的旧形状档补
+ * {exp:0}；schemaVersion 仍恰为 1，不发明新顶层字段。
  */
 
 import type { SaveFile } from './types';
@@ -59,6 +64,9 @@ const TIERS = [15, 30, 50] as const;
 const POOL_SIZE_MIN = 10;
 const POOL_SIZE_MAX = 25;
 export const DEFAULT_POOL_SIZE = 15;
+
+/** settings.progress.exp 默认值（Plan 3 · T3）：整数域裁决见 types.ts ProgressSettings 注释。 */
+export const DEFAULT_PROGRESS_EXP = 0;
 
 /** 内部信号：校验失败的路径化原因。不外泄——validateSave 捕获后转成 reason。 */
 class ValidationSignal extends Error {}
@@ -234,6 +242,20 @@ function validateSettings(raw: unknown): void {
   if (!('battle' in o) || o.battle === undefined) {
     fail('settings.battle', '缺失（v2.1 前旧档形状），请经 migrateSave 迁移后再导入');
   }
+  // progress 域（Plan 3 · T3）：与 battle 同构的「在场严检 + 缺席整包拒」。
+  // exp 采整数口径（Number.isInteger && ≥0）：expToNext/victoryExp/applyExp 全程整数域，
+  // 小数 exp 无合法来源——出现即视为脏档，宁拒不改（域畸形归 validateSave）。
+  if ('progress' in o && o.progress !== undefined) {
+    const progress = requireObject(o.progress, 'settings.progress');
+    assertShape(
+      Number.isInteger(progress.exp) && (progress.exp as number) >= 0,
+      'settings.progress.exp',
+      () => `应为非负整数，实际为 ${describeValue(progress.exp)}`,
+    );
+  }
+  if (!('progress' in o) || o.progress === undefined) {
+    fail('settings.progress', '缺失（T3 前旧档形状），请经 migrateSave 迁移后再导入');
+  }
 }
 
 function validateMeta(raw: unknown): void {
@@ -310,10 +332,11 @@ export function validateSave(raw: unknown): ValidateResult {
  * 失败形态与校验器一致：抛 Error，message 即含 JSON 路径的可读 reason。
  */
 export function migrateSave(raw: unknown): SaveFile {
-  // 旧形状档（无 battle）在 validateSettings 处即被拒，故先注入默认再整包校验：
-  // 这正是 brief Step 1 的「migrateSave 注入 {battle:{defaultPoolSize:15}} 后再 validate 过」。
-  const withBattle = injectBattleDefault(raw);
-  const validated = validateSave(withBattle);
+  // 旧形状档（无 battle / 无 progress）在 validateSettings 处即被拒，故先注入默认再整包校验：
+  // 这正是 brief Step 1 的「migrateSave 注入 {battle:{defaultPoolSize:15}} 后再 validate 过」
+  // （T3 起 progress 同待遇：注入 {progress:{exp:0}}）。
+  const migrated = injectProgressDefaults(injectBattleDefault(raw));
+  const validated = validateSave(migrated);
   if (!validated.ok) throw new Error(`存档不合法，无法迁移：${validated.reason}`);
   return validated.save;
 }
@@ -329,6 +352,20 @@ function injectBattleDefault(raw: unknown): unknown {
   if (!isPlainObject(settings)) return raw;
   if ('battle' in settings && settings.battle !== undefined) return raw;
   return { ...raw, settings: { ...settings, battle: { defaultPoolSize: DEFAULT_POOL_SIZE } } };
+}
+
+/**
+ * settings.progress 缺省时补 `{exp:0}`（Plan 3 · T3）——与 injectBattleDefault 完全同构：
+ * 只在 settings 为对象且 progress 缺席时浅拷贝注入；在场但畸形一律原样透传给
+ * validateSave 拒绝（域检查归校验器，本函数绝不消毒改写）。两次注入对同一份
+ * 全新档都是"原样返回"，幂等声明不受扩域影响。
+ */
+function injectProgressDefaults(raw: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  const settings = raw.settings;
+  if (!isPlainObject(settings)) return raw;
+  if ('progress' in settings && settings.progress !== undefined) return raw;
+  return { ...raw, settings: { ...settings, progress: { exp: DEFAULT_PROGRESS_EXP } } };
 }
 
 // ---------------------------------------------------------------------------

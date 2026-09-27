@@ -16,16 +16,16 @@
  * - enemyHp 按**实际池长**反推，不按请求 size：请求 15 实得 8 ⇒ ceil(8×10×0.7)=56，
  *   否则降级池会凭空变硬（stats.enemyHpForPool 的入参义务）。
  *
- * 【刻意中间态】vit/spi 传 0/0、level 固定 1：本任务（T2）尚无 growth.ts，全库口径的
- * vitCount/spiCount 与 levelFromExp 归 T3 落地。届时以 growth.playerStatsFor(save)
- * 替换下方 deriveStats(1, 0, 0) 一行——这是计划内的过渡，不是遗漏（brief 环境适配注记）。
+ * 【T3 已兑现】stats 注入：startFight 增可选 opts.stats（PlayerStats）。缺省时仍为
+ * deriveStats(1, 0, 0)——SF#5 的 atk=12 锚点逐字保留；装配层调用方传
+ * growth.playerStatsFor(save)，把全库口径 vit/spi 与 exp 派生等级带进战斗（N-1）。
  */
 
 import type { Card } from '@core/types';
 import type { Rng } from '@core/rng';
 import type { Grade } from '@core/sm2';
 import { buildPool } from '@core/deckBuild';
-import { deriveStats, enemyHpForPool } from '@core/stats';
+import { deriveStats, enemyHpForPool, type PlayerStats } from '@core/stats';
 import { createBattle, answer, type BattleState } from '@core/battle';
 import type { SessionCards } from './sessionTypes';
 
@@ -51,6 +51,12 @@ export interface StartFightOptions {
   readonly rng: Rng;
   /** 到期判定时钟（毫秒），由调用方从 platform/clock 取；core 层不自读时间。 */
   readonly nowMs: number;
+  /**
+   * 玩家六维快照（T3 注入位）：装配层传 growth.playerStatsFor(save)。
+   * 缺省 / 非法（非对象、含 NaN 字段）一律回落 deriveStats(1,0,0)——
+   * 与 T2 中间态逐字同值，SF#5 的 atk=12/maxHp=100 锚点因此不漂移。
+   */
+  readonly stats?: PlayerStats;
 }
 
 /** 有限正整数校验（与 deckBuild.isPositiveInt 同口径，此处用于前置分流而非依赖其回落）。 */
@@ -104,10 +110,29 @@ export function startFight(
   // 哪怕只有 1 张——单卡池打完即终局，数据流自洽（见 tests/app AC#4）。
   const enemyHp = enemyHpForPool(pool.length, 'encounter');
 
-  // 【刻意中间态】T3 growth.playerStatsFor 接管后替换此行（见头注释）。
-  const stats = deriveStats(1, 0, 0);
+  // stats 注入位（T3）：合法 PlayerStats 直用；缺省/脏值回落 T2 中间态同值，
+  // SF#5 锚点（atk=12/maxHp=100）由这条回落路径守护。
+  const stats = isUsableStats(opts.stats) ? opts.stats : deriveStats(1, 0, 0);
 
   return toView(createBattle(pool, enemyHp, stats, opts.rng), pool);
+}
+
+/**
+ * PlayerStats 可用性甄别：六个字段全为有限数才放行——任一 NaN/undefined/字符串
+ * 混入都会把 NaN 带进 damage/HP（createBattle 只快照不消毒，属性是它的裸入参）。
+ * 非法即整体回落默认派生，不做逐字段修补（半套属性比没有属性更危险）。
+ */
+function isUsableStats(s: unknown): s is PlayerStats {
+  if (typeof s !== 'object' || s === null) return false;
+  const o = s as Record<string, unknown>;
+  return (
+    typeof o.level === 'number' && Number.isFinite(o.level)
+    && typeof o.vit === 'number' && Number.isFinite(o.vit)
+    && typeof o.spi === 'number' && Number.isFinite(o.spi)
+    && typeof o.atk === 'number' && Number.isFinite(o.atk)
+    && typeof o.def === 'number' && Number.isFinite(o.def)
+    && typeof o.maxHp === 'number' && Number.isFinite(o.maxHp)
+  );
 }
 
 export interface AnswerDeps {

@@ -61,11 +61,23 @@ export interface BattleSettings {
   defaultPoolSize: number;
 }
 
+/**
+ * 成长进度（Plan 3 · T3 新增，R-P3-a 三段式扩域）：等级不单独存储——
+ * level 是 exp 的纯派生量（growth.levelFromExp），只存累计经验这一权威位，
+ * 杜绝 "level 与 exp 各说各话" 的双写漂移。exp 为**非负整数**（validateSave 严检；
+ * expToNext/victoryExp/applyExp 消费后全程整数域，小数无合法来源）。
+ * v2.1 形状前的旧档缺此字段，由 migrateSave 补默认 {exp:0}。
+ */
+export interface ProgressSettings {
+  exp: number;
+}
+
 /** 玩家设置。 */
 export interface Settings {
   bossThresholdTier: 15 | 30 | 50;
   sm2Params: Sm2Params;
   battle: BattleSettings;
+  progress: ProgressSettings;
 }
 
 /** 本地存档容器（本计划新增；导入时须整体通过 validateSave）。 */

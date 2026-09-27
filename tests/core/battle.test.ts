@@ -147,6 +147,16 @@ describe('answer —— dev 断言（N-9：card 必须等于 pool[idx]）', () =
     expect(next).toBe(dirty);
   });
 
+  it('AN#10b 脏池 null 占位：pool[idx] === null 同样报 mismatch 并拒进（与越界对称，T3 捎带）', () => {
+    // currentId === undefined 的旧写法漏防 null：null 会穿过防护喂进 damage 路径
+    // （card.srs TypeError）。== null 闭合后，null 洞与越界走同一条拒进分支。
+    const msgs: string[] = [];
+    const holed: BattleState = { ...mid(), pool: [null as unknown as string, 'c1', 'c2'] };
+    const next = answer(holed, makeCard('c0'), GRADES.good, HALF, (m) => msgs.push(m));
+    expect(msgs).toEqual(['answer-card-mismatch']);
+    expect(next).toBe(holed);
+  });
+
   it('CB#11 终局态直调不带 asserts → 实测返回同一引用（phase 检查先于一切短路，主体不可达）', () => {
     // lost 经池尽达成：idx === pool.length。若真穿过 phase 检查进入主体，
     // idx+1 与 end 事件都会造出新对象——实测同引用，即该路径不存在。

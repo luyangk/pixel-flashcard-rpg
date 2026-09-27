@@ -56,6 +56,7 @@ function validSave(): SaveFile {
       bossThresholdTier: 30,
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
+      progress: { exp: 0 },
     },
     meta: { savedAt: T0, plays: 7 },
   };
@@ -69,6 +70,20 @@ function sample(): Record<string, unknown> {
 /** v2.1 之前的旧形状档：settings 无 battle（RF#4 迁移对象）。 */
 function legacySample(): Record<string, unknown> {
   const raw = sample();
+  delete (raw.settings as Record<string, unknown>).battle;
+  return raw;
+}
+
+/** T3 前的旧形状档：battle 在场但无 progress（progress 缺省迁移对象）。 */
+function legacyProgressSample(): Record<string, unknown> {
+  const raw = sample();
+  delete (raw.settings as Record<string, unknown>).progress;
+  return raw;
+}
+
+/** 双旧形状档：battle 与 progress 皆缺（真实 v2.1 前存档形态）。 */
+function legacyBothSample(): Record<string, unknown> {
+  const raw = legacyProgressSample();
   delete (raw.settings as Record<string, unknown>).battle;
   return raw;
 }
@@ -306,6 +321,42 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('settings.battle');
   });
+
+  // ---- progress 域（Plan 3 · T3，R-P3-a 三段式之严检层）----
+
+  it('缺 settings.progress（T3 前旧形状）→ validate 拒且 reason 含路径与 migrateSave 指路', () => {
+    const r = validateSave(legacyProgressSample());
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('settings.progress');
+      expect(r.reason).toContain('migrateSave');
+    }
+  });
+
+  it('progress.exp=-1 / 2.5 / "100" / NaN → 拒绝且 reason 含路径 settings.progress.exp', () => {
+    for (const v of [-1, 2.5, '100', NaN]) {
+      const raw = sample();
+      (raw.settings as Record<string, Record<string, unknown>>).progress = { exp: v };
+      const r = validateSave(raw);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.progress.exp');
+    }
+  });
+
+  it('progress 整体非对象（数组/字符串）→ 路径 settings.progress；exp=0 合法', () => {
+    const raw = sample();
+    (raw.settings as Record<string, unknown>).progress = [0];
+    const r = validateSave(raw);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('settings.progress');
+    const raw2 = sample();
+    (raw2.settings as Record<string, unknown>).progress = 'x';
+    expect(validateSave(raw2).ok).toBe(false);
+    const okRaw = sample();
+    (okRaw.settings as Record<string, Record<string, unknown>>).progress = { exp: 0 };
+    expect(validateSave(okRaw).ok).toBe(true);
+  });
+
   it('meta.savedAt 类型错 → 路径 meta.savedAt', () => {
     const raw = sample();
     (raw.meta as Record<string, unknown>).savedAt = 'yesterday';
@@ -449,6 +500,35 @@ describe('migrateSave', () => {
     expect(validateSave(save).ok).toBe(true);
   });
 
+  // ---- progress 缺省迁移（Plan 3 · T3）----
+
+  it('T3 前旧形状档（有 battle 无 progress）→ validate 拒 → migrate 补 {exp:0} 后过', () => {
+    const raw = legacyProgressSample();
+    expect(validateSave(raw).ok).toBe(false);
+    const save = migrateSave(raw);
+    expect(save.settings.progress).toEqual({ exp: 0 });
+    expect(save.settings.battle).toEqual({ defaultPoolSize: 15 }); // 原值不被动
+    expect(validateSave(save).ok).toBe(true);
+  });
+
+  it('双缺旧档（battle、progress 皆无）→ 一次 migrate 两项默认全补', () => {
+    const raw = legacyBothSample();
+    const save = migrateSave(raw);
+    expect(save.settings.battle).toEqual({ defaultPoolSize: 15 });
+    expect(save.settings.progress).toEqual({ exp: 0 });
+    expect(validateSave(save).ok).toBe(true);
+    // 幂等：migrate(migrate(x)) deepEqual migrate(x)
+    expect(migrateSave(save)).toEqual(save);
+  });
+
+  it('progress.exp=2.5 / -1（域外）→ migrate 拒绝而非消毒改写——域检查归 validateSave', () => {
+    for (const v of [2.5, -1]) {
+      const raw = sample();
+      (raw.settings as Record<string, Record<string, unknown>>).progress = { exp: v };
+      expect(() => migrateSave(raw)).toThrow(/settings\.progress\.exp/);
+    }
+  });
+
   it('迁移保留其余字段原值（plays/deckId 引用均不丢），schemaVersion 仍恰为 1', () => {
     const raw = legacySample();
     const save = migrateSave(raw);
@@ -503,13 +583,14 @@ describe('migrateSave', () => {
   // migrate→importAndSave 一路到 load，落盘读回必须是补齐 battle 的完整新形状。
   // 本用例是纯 core+memory 载体，不触 DOM/IDB——"正常开局"的地基钉进回归网。
   it('跨模块串联：legacy 文本 → validate 拒 → migrateSave → importAndSave → load 得完整新形状', async () => {
-    const legacyText = serializeSave(migrateSave(legacySample())); // 迁移后导出形态
-    expect(validateSave(JSON.parse(JSON.stringify(legacySample()))).ok).toBe(false); // 原 legacy 仍被拒
+    const legacyText = serializeSave(migrateSave(legacyBothSample())); // 迁移后导出形态（双缺真实旧档形）
+    expect(validateSave(JSON.parse(JSON.stringify(legacyBothSample()))).ok).toBe(false); // 原 legacy 仍被拒
     const store = createMemoryStorage();
     expect(await importAndSave(legacyText, store)).toEqual({ ok: true });
     const loaded = await store.load();
-    expect(loaded).toEqual(validSave()); // deepEqual 完整新形状（含 battle 默认）
+    expect(loaded).toEqual(validSave()); // deepEqual 完整新形状（含 battle + progress 默认）
     expect(loaded?.settings.battle).toEqual({ defaultPoolSize: 15 });
+    expect(loaded?.settings.progress).toEqual({ exp: 0 });
   });
 });
 

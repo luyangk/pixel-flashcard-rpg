@@ -107,7 +107,9 @@ export function answer(
   // 放在幂等短路之后：终局后传入任意剩余卡是合法调用面（作废卡不该触发告警）。
   if (asserts !== undefined) {
     const currentId = state.pool[state.idx];
-    if (currentId === undefined || card.id !== currentId) {
+    // == null（非 === undefined）：null 占位的脏池与越界同罪——旧写法漏防 null，
+    // 会让 null card 穿过 mismatch 防护喂进 damage 路径（card.srs TypeError）。T3 捎带闭合。
+    if (currentId == null || card.id !== currentId) {
       asserts('answer-card-mismatch');
       return state; // 拒绝推进：idx/log/enemyHp 一律原样
     }

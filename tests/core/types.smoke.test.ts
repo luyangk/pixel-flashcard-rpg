@@ -43,6 +43,7 @@ function makeSaveFile(): SaveFile {
     bossThresholdTier: 30,
     sm2Params,
     battle: { defaultPoolSize: 15 },
+    progress: { exp: 0 },
   };
   return {
     schemaVersion: 1,
