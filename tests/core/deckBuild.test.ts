@@ -192,6 +192,47 @@ describe('buildPool —— 不变量：输出无重复 cardId（衔接 createBat
     assertNoDuplicateIds(pool);
   });
 
+  it('BP#17b R-T6-c：候选含重复 id 时自选段 i-- 重试，输出仍满额不缩水', () => {
+    // 智能段吃满 4 张到期卡；剩余池 [f0, f0dup(同id脏副本), g1, g2]。rng≡HALF 使
+    // pickWeighted 落点恒在 index1 = f0dup → take 被拒。修复前该轮空转（len 停在 4）；
+    // 修复后 i-- 重试同一轮抽到 g1 → 满额 5。i=1 轮 remaining=[f0,f0dup,g1,g2]、
+    // roll=0.5×4=2 → 过 f0(1)、f0dup(1) 后于 g1 处转负，选中 f0dup 的镜像序由实现决定，
+    // 故用 HALF 直接钉死确定性结果而非手推分支。
+    const due = dueRun('p', 4);
+    const fresh = [
+      makeCard('f0', { dueOffset: DAY }),
+      makeCard('f0', { dueOffset: 2 * DAY }), // 同 id 脏副本
+      makeCard('g1', { dueOffset: 3 * DAY }),
+      makeCard('g2', { dueOffset: 4 * DAY }),
+    ];
+    for (const rng of [HALF, mulberry32(7), mulberry32(12)]) {
+      const pool = buildPool([...due, ...fresh], { size: 5, rng, nowMs: NOW });
+      expect(pool).toHaveLength(5); // 修复前此断言红（输出 4 张）
+      assertNoDuplicateIds(pool);
+      expect(ids(pool).slice(0, 4)).toEqual(['p0', 'p1', 'p2', 'p3']);
+    }
+  });
+
+  it('BP#17c R-T6-c：dup 被智能段收编后自选段再遇 dup——i-- 重试不缩水', () => {
+    // 构造逐字推演（rng≡HALF）：dueQueue=[a1,a0] 吃智能段前 2；放宽段按 due 升序
+    // [f0(+1d), f0dup(+2d), g1(+3d)] 补足 smartWant=4 → f0 入 seen、f0dup 被 take 拒；
+    // 自选段 remaining=[g1]（两份 f0 均因同 id 被 filter 剔除），抽中 g1 但 take 必拒
+    // （id 已在 seen）→ 修复前该轮空转、输出停在 4；修复后 i-- 重试，remaining 已空、
+    // 循环 break——本构造钉"take 拒绝路径不产生重复 id、不死循环"。
+    const cards = [
+      makeCard('f0', { dueOffset: DAY }),
+      makeCard('f0', { dueOffset: 2 * DAY }), // 同 id 脏副本
+      makeCard('a0', { dueOffset: -DAY }),
+      makeCard('a1', { dueOffset: -2 * DAY }),
+      makeCard('g1', { dueOffset: 3 * DAY }),
+    ];
+    const pool = buildPool(cards, { size: 5, rng: HALF, nowMs: NOW });
+    assertNoDuplicateIds(pool);
+    expect(new Set(ids(pool))).toEqual(new Set(['a0', 'a1', 'f0', 'g1']));
+    // 去重后总可用仅 4 张（<size）→ 降级第二跳按实际长度返回，属规格行为非缩水 bug。
+    expect(pool).toHaveLength(4);
+  });
+
   it('BP#18 输出可直接喂 createBattle 不触发 duplicate-card / empty-pool', async () => {
     const { createBattle } = await import('@core/battle');
     const cards = [...dueRun('c', 12), ...Array.from({ length: 8 }, (_, i) => makeCard(`r${i}`, { dueOffset: DAY }))];
