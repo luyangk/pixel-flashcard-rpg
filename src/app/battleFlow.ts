@@ -119,7 +119,8 @@ export interface AnswerDeps {
 /**
  * 作答当前卡。card 不接受外部传入——恒取 pool[state.idx]，
  * 因此上层 UI 无论怎么乱序点击都不可能把 grade 落到别的卡上（RF#4 免疫）。
- * 脏视图（idx 越界取不到卡）时拒绝推进并上报 mismatch，绝不把 undefined 喂进 battle.answer。
+ * 脏视图（idx 越界或池含 null 占位，取不到卡）时拒绝推进并上报 mismatch，
+ * 绝不把 undefined/null 喂进 battle.answer。
  */
 export function answerCurrent(
   view: FightView,
@@ -127,12 +128,13 @@ export function answerCurrent(
   deps: AnswerDeps,
 ): FightView {
   const card = view.pool[view.state.idx];
-  if (card === undefined) {
+  if (card == null) {
     deps.asserts?.('answer-card-mismatch');
     return view;
   }
   const next = answer(view.state, card, grade, deps.rng, deps.asserts);
-  // battle.answer 在终局/违规时返回同一引用：此时视图无需重建（toView 结果等价）。
-  if (next === view.state) return view;
+  // 视图恒由 (next, pool) 重建：正确性不依赖 battle.answer 的返回引用同一性。
+  // （实测口径见 tests/core/battle.test.ts CB#11/CB#12：违规+mismatch 时同引用；
+  // 终局幂等短路依赖其 phase 检查调用序——非 answering 态先返回自身，主体不可达。）
   return toView(next, view.pool);
 }

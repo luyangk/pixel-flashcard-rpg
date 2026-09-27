@@ -146,6 +146,35 @@ describe('answer —— dev 断言（N-9：card 必须等于 pool[idx]）', () =
     expect(msgs).toEqual(['answer-card-mismatch']);
     expect(next).toBe(dirty);
   });
+
+  it('CB#11 终局态直调不带 asserts → 实测返回同一引用（phase 检查先于一切短路，主体不可达）', () => {
+    // lost 经池尽达成：idx === pool.length。若真穿过 phase 检查进入主体，
+    // idx+1 与 end 事件都会造出新对象——实测同引用，即该路径不存在。
+    let lost = createBattle(pool(3), 999, STATS_10, HALF);
+    for (const c of pool(3)) lost = answer(lost, c, GRADES.again, HALF);
+    expect(lost.phase).toBe('lost');
+    expect(lost.idx).toBe(lost.pool.length);
+    expect(answer(lost, makeCard('ghost'), GRADES.again, HALF)).toBe(lost);
+    // won 经 enemyHp 先归零达成：idx < pool.length，同样被 phase 检查挡住。
+    const cards = pool(3);
+    let won = createBattle(cards, 7, STATS_7, HALF);
+    won = answer(won, cards[0], GRADES.good, HALF);
+    expect(won.phase).toBe('won');
+    expect(won.idx).toBeLessThan(won.pool.length);
+    expect(answer(won, makeCard('ghost'), GRADES.easy, HALF)).toBe(won);
+    // 手工伪造的终局态（idx 在池内）也走同一条幂等短路——主体对任何终局输入都不可达。
+    const forged: BattleState = { ...mid(), phase: 'lost', idx: 1 };
+    expect(answer(forged, makeCard('c1'), GRADES.good, HALF)).toBe(forged);
+  });
+
+  it('CB#12 违规 + mismatch（answering 态、card.id ≠ pool[idx]）→ 同一引用拒绝推进', () => {
+    const s = mid(); // answering, idx=0 ⇒ 当前卡 c0
+    const msgs: string[] = [];
+    // 与 AN#6 同族，钉的是「违规分支返回同一引用」这一契约本身：
+    // battleFlow.answerCurrent 修复后不再读引用同一性，此性质由本例独立守护。
+    expect(answer(s, makeCard('c1'), GRADES.good, HALF, (m) => msgs.push(m))).toBe(s);
+    expect(msgs).toEqual(['answer-card-mismatch']);
+  });
 });
 
 describe('answer —— 命中路径（grade ≥ good）', () => {

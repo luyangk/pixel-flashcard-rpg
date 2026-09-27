@@ -212,4 +212,31 @@ describe('answerCurrent —— 依序推进与终局视图', () => {
     // 不带 asserts 时同样拒绝推进（静默），绝不把 undefined 喂进 battle.answer
     expect(answerCurrent(broken, GRADES.good, { rng: HALF })).toBe(broken);
   });
+
+  it('AC#7b null 占位脏池防御：pool[idx] 为 null（持久化恢复的洞）→ 拒绝推进，不抛', () => {
+    const v = fight();
+    // 手工构造含 null 占位的池（模拟存档损坏/恢复出的洞）。
+    // Card 类型不含 null，测试侧按既有消毒用例口径显式转型。
+    const holedPool = [...v.pool];
+    // 洞打在 idx=0（当前题卡位）：现状 `=== undefined` 漏防 null，null 会喂进
+    // battle.answer 的 damage 路径 → card.srs TypeError（评审探针复现的正是这一发）。
+    holedPool[0] = null as unknown as Card;
+    const dirty: FightView = { ...v, pool: holedPool };
+    const msgs: string[] = [];
+    const next = answerCurrent(dirty, GRADES.good, { rng: HALF, asserts: (m) => msgs.push(m) });
+    expect(msgs).toEqual(['answer-card-mismatch']);
+    expect(next.state).toBe(v.state); // state 不变
+    // 不带 asserts 同样静默拒进，且绝不把 null 喂进 battle.answer（现状此处泄漏 TypeError）
+    let result!: FightView;
+    expect(() => {
+      result = answerCurrent(dirty, GRADES.good, { rng: HALF });
+    }).not.toThrow();
+    expect(result).toBe(dirty);
+    expect(result.state).toBe(v.state);
+    // 第二次作答（brief 语义面）：修复后 current 恒 null ⇒ 短路拒进；
+    // 若 null 被喂进 battle.answer，这里会直接炸出 TypeError。
+    const second = answerCurrent(result, GRADES.again, { rng: HALF });
+    expect(second).toBe(dirty);
+    expect(second.state).toBe(v.state);
+  });
 });
