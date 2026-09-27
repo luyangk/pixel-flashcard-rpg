@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { Card, SRSState, Stability } from '@core/types';
 import { GRADES } from '@core/sm2';
 import type { Rng } from '@core/rng';
-import { createBattle, answer, type BattleEvent, type BattleState } from '@core/battle';
+import { createBattle, answer, type BattleState } from '@core/battle';
 
 /** rng≡0.5 → uniform(0.9,1.1) 恰为 1.0，伤害无浮动，便于手算。 */
 const HALF: Rng = () => 0.5;
