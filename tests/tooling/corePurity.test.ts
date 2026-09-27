@@ -51,18 +51,20 @@ describe('check-core-purity', () => {
       ['// 纯逻辑模块', 'export const n = 1 + 1;', "export const s = 'no platform api';"].join('\n'),
     );
 
-    const hits: string[] = scanFiles([join(dir, 'bad.ts'), join(dir, 'clean.ts')], dir);
-    const joined = hits.join('\n');
-    expect(joined).toContain('Date.now');
-    expect(joined).toContain('indexedDB');
-    expect(joined).toContain('require(');
-    expect(joined).toContain('bad.ts');
-    expect(joined).not.toContain('clean.ts');
-    // 注释里的字面绝不能误报
-    expect(hits.filter((h: string) => h.includes('window.')).length).toBe(0);
-    expect(hits.filter((h: string) => h.includes('document.')).length).toBe(0);
-    expect(hits.filter((h: string) => h.includes(' ← 命中黑名单 "localStorage"')).length).toBe(0);
-    expect(hits.filter((h: string) => h.includes(' ← 命中黑名单 "fetch("')).length).toBe(0);
+    type Hit = { file: string; line: number; text: string; blacklisted: string };
+    const hits: Hit[] = scanFiles([join(dir, 'bad.ts'), join(dir, 'clean.ts')], dir);
+    const names = hits.map((h) => h.blacklisted);
+    expect(new Set(names)).toEqual(new Set(['Date.now(', 'indexedDB', 'require(']));
+    expect(hits.every((h) => h.file.endsWith('bad.ts'))).toBe(true);
+    // 结构化三元组：行号与文本可核对（注释里的字面绝不进结果集）
+    for (const h of hits) {
+      expect(h.line).toBeGreaterThan(0);
+      expect(h.text).toContain(h.blacklisted.slice(0, 4));
+    }
+    expect(names).not.toContain('window.');
+    expect(names).not.toContain('document.');
+    expect(names).not.toContain('localStorage');
+    expect(names).not.toContain('fetch(');
   });
 
   it('stripComments 保留代码、剔除注释', () => {

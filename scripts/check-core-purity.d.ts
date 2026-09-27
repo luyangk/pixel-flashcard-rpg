@@ -1,12 +1,21 @@
 /** check-core-purity.mjs 的类型声明（守卫脚本本身是纯 Node ESM，不进 core 扫描范围）。 */
 
+/** 结构化命中：文件绝对路径、1-based 行号、命中所在文本、触发的黑名单项。 */
 export interface PurityHit {
-  /** 形如 `src/core/foo.ts:12: <行内容>  ← 命中黑名单 "window."` */
-  readonly message: string;
+  readonly file: string;
+  readonly line: number;
+  readonly text: string;
+  readonly blacklisted: string;
 }
 
-/** 按行剥离 // 与块注释后的源码（保留字符串字面量）。 */
+/** 结构化命中的展示格式（CLI 与报错信息共用）。 */
+export declare function formatHit(h: PurityHit): string;
+
+/** 剥离 // 与块注释及字符串字面量后的源码（纯正则单趟，无跨行状态）。 */
 export declare function stripComments(src: string): string;
 
-/** 扫描给定 .ts 文件，返回黑名单命中的报告行；空数组即纯净。 */
-export declare function scanFiles(files: readonly string[], rootDir: string): string[];
+/** 递归收集 dir 下全部 .ts 文件。 */
+export declare function collectTs(dir: string, acc?: string[]): string[];
+
+/** 扫描给定 .ts 文件，返回结构化命中列表；空数组即纯净。 */
+export declare function scanFiles(files: readonly string[], rootDir: string): PurityHit[];
