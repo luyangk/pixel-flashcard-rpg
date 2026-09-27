@@ -498,6 +498,19 @@ describe('migrateSave', () => {
     expect(validateSave(save).ok).toBe(true);
     expect(save.settings.battle.defaultPoolSize).toBe(15);
   });
+
+  // RF#4 全链回归网（T8 deferred 捎带，评审 Minor#3）：legacy 形状文本经
+  // migrate→importAndSave 一路到 load，落盘读回必须是补齐 battle 的完整新形状。
+  // 本用例是纯 core+memory 载体，不触 DOM/IDB——"正常开局"的地基钉进回归网。
+  it('跨模块串联：legacy 文本 → validate 拒 → migrateSave → importAndSave → load 得完整新形状', async () => {
+    const legacyText = serializeSave(migrateSave(legacySample())); // 迁移后导出形态
+    expect(validateSave(JSON.parse(JSON.stringify(legacySample()))).ok).toBe(false); // 原 legacy 仍被拒
+    const store = createMemoryStorage();
+    expect(await importAndSave(legacyText, store)).toEqual({ ok: true });
+    const loaded = await store.load();
+    expect(loaded).toEqual(validSave()); // deepEqual 完整新形状（含 battle 默认）
+    expect(loaded?.settings.battle).toEqual({ defaultPoolSize: 15 });
+  });
 });
 
 // ---------------------------------------------------------------------------

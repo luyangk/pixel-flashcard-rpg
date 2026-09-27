@@ -299,8 +299,11 @@ export function validateSave(raw: unknown): ValidateResult {
  * validateSettings 对 battle「在场严检 + 缺席整包拒」：存在则必须是对象且
  * defaultPoolSize ∈ 10–25 整数（99/3.5/'x' 一律拒，reason 带路径）；缺失报
  * `settings.battle: 缺失…请经 migrateSave 迁移`。域畸形始终归 validateSave，
- * 本函数绝不做消毒改写。对已是新档的输入幂等：battle 在场时不触碰、原样透传
- * （validateSave 同引用返回 + 现状核实其对未知多余键容忍，故无需拷贝重建）。
+ * 本函数绝不做消毒改写。**幂等声明的适用边界**：仅当输入已是"battle 在场且
+ * 整包合法的新档"时，本函数同引用透传、零 mutate（validateSave 同引用返回 +
+ * 现状核实其对未知多余键容忍，故无需拷贝重建）；legacy 档经注入后返回的是
+ * 新建浅拷贝对象，不在此列。另注意：**返回值与入参共享嵌套引用**（decks/cards
+ * 数组本体不复制），需独立副本请自行 structuredClone。
  *
  * 范围克制（R-T6-d 延伸）：本任务只做 settings.battle 缺省补值这一档迁移；
  * "上次备份时刻信封"仍留平台层，schemaVersion 保持恰 1，不发明新顶层字段。
