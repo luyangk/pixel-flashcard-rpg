@@ -50,7 +50,7 @@ PRD 未逐条写明、但最可能咬人的输入类别——每条在对应 Tas
 - Consumes: —
 - Produces: 可运行的 `npm test` / `npm run build` / `npm run dev` 脚本面；`tsconfig` 路径别名 `@core/* → src/core/*`、`@platform/* → src/platform/*`。
 
-- [ ] **Step 1: git init 与 .gitignore**
+- [x] **Step 1: git init 与 .gitignore**
 
 ```bash
 cd /sdcard/Documents/Projects/pixel-flashcard-rpg
@@ -58,22 +58,22 @@ git init -b main
 printf 'node_modules/\ndist/\n*.local\n.DS_Store\n' > .gitignore
 ```
 
-- [ ] **Step 2: 安装依赖**
+- [x] **Step 2: 安装依赖**
 
 Run: `npm install -D typescript vitest vite && npx tsc --version && npx vitest --version`
 Expected: tsc ≥5.5、vitest ≥3，退出码 0
 
-- [ ] **Step 3: 写 tsconfig.json（strict、ES2022、别名）、vitest.config.ts（alias 同步 tsconfig）、index.html + src/main.ts 占位**
+- [x] **Step 3: 写 tsconfig.json（strict、ES2022、别名）、vitest.config.ts（alias 同步 tsconfig）、index.html + src/main.ts 占位**
 
 `src/main.ts` 内容就一行：`console.log('zx-xia placeholder');`
 
-- [ ] **Step 4: 验证脚本面**
+- [x] **Step 4: 验证脚本面**
 
 在 `package.json` 加入 scripts：`"dev": "vite"`、`"build": "tsc --noEmit && vite build"`、`"test": "vitest run"`、`"typecheck": "tsc --noEmit"`。
 Run: `npm run typecheck && npm run build && npm test --passWithNoTests`
 Expected: 三条全部退出码 0
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A && git commit -m "chore: scaffold ts+vite+vitest toolchain"
@@ -100,15 +100,15 @@ export interface Settings { bossThresholdTier: 15|30|50; sm2Params: Sm2Params /*
 export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; settings: Settings; meta: { savedAt: number; plays: number } }
 ```
 
-- [ ] **Step 1: 写失败测试** —— 构造一个最小合法 `SaveFile` 对象字面量并通过 `expectTypeOf`/运行时断言各字段存在（smoke 即可，类型正确性由 tsc 把关）。
+- [x] **Step 1: 写失败测试** —— 构造一个最小合法 `SaveFile` 对象字面量并通过 `expectTypeOf`/运行时断言各字段存在（smoke 即可，类型正确性由 tsc 把关）。
 
-- [ ] **Step 2: 跑测试确认失败**（`npx vitest run tests/core/types.smoke.test.ts`，Expected: Cannot find module）
+- [x] **Step 2: 跑测试确认失败**（`npx vitest run tests/core/types.smoke.test.ts`，Expected: Cannot find module）
 
-- [ ] **Step 3: 实现 `types.ts`**（纯类型 + 无运行时代码；`Settings.sm2Params` 引用 Task 3 的 `Sm2Params`，此处先在本文件声明该 interface 以免循环依赖：`{ initialEase: number; minEase: number; firstInterval: number; secondInterval: number }`）
+- [x] **Step 3: 实现 `types.ts`**（纯类型 + 无运行时代码；`Settings.sm2Params` 引用 Task 3 的 `Sm2Params`，此处先在本文件声明该 interface 以免循环依赖：`{ initialEase: number; minEase: number; firstInterval: number; secondInterval: number }`）
 
-- [ ] **Step 4: 跑测试确认通过 + typecheck**
+- [x] **Step 4: 跑测试确认通过 + typecheck**
 
-- [ ] **Step 5: Commit** `feat: core domain types (card/deck/srs/savefile)`
+- [x] **Step 5: Commit** `feat: core domain types (card/deck/srs/savefile)`
 
 ---
 
@@ -128,11 +128,11 @@ export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; sett
   - `export function damageMultiplier(srs: SRSState): number` —— new=0.1, learning=0.5, review=1.0, mastered=1.5（PRD §2.1"熟练度倍率"；LORE"未入脑≈0"用 0.1 保底防零伤害死局）。
 - 域外输入策略：非法 grade/NaN 参数一律回落默认值，输出永不含 NaN（Review Focus #4）。
 
-- [ ] **Step 1: 写失败测试**，至少覆盖：初始态字段；again 降 ease+清 reps+lapse+1；good 三连后 interval 序列 1→6→15（ease 2.6 时允许 ±1 容差断言具体数）；mastered 晋升；damageMultiplier 四档映射；`review(review(s,g,t,p))` 不改前值（不可变性）；grade=NaN 与 ease=-1 输入输出仍为有限数。
-- [ ] **Step 2: 跑测试确认失败** Expected: cannot find module
-- [ ] **Step 3: 实现 `sm2.ts`**（无 Date.now()、无 IO；纯算术 + 查表）
-- [ ] **Step 4: 跑测试确认通过**
-- [ ] **Step 5: Commit** `feat: pure SM-2 engine with immutability and NaN guards`
+- [x] **Step 1: 写失败测试**，至少覆盖：初始态字段；again 降 ease+清 reps+lapse+1；good 三连后 interval 序列 1→6→15（ease 2.6 时允许 ±1 容差断言具体数）；mastered 晋升；damageMultiplier 四档映射；`review(review(s,g,t,p))` 不改前值（不可变性）；grade=NaN 与 ease=-1 输入输出仍为有限数。
+- [x] **Step 2: 跑测试确认失败** Expected: cannot find module
+- [x] **Step 3: 实现 `sm2.ts`**（无 Date.now()、无 IO；纯算术 + 查表）
+- [x] **Step 4: 跑测试确认通过**
+- [x] **Step 5: Commit** `feat: pure SM-2 engine with immutability and NaN guards`
 
 ---
 
@@ -150,11 +150,11 @@ export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; sett
   - `export function domainReviewCount(deckCards: Card[]): number` —— Σ 每张卡的 `effectiveReviewDays.length`。
   - `export function bossReady(deckCards: Card[], threshold: 15|30|50): boolean`。
 
-- [ ] **Step 1: 写失败测试**，覆盖：同日两次 record 计数仍为 1（RF#5）；跨日 +1；**23:59 与次日 00:01 判为两天**（tzOffset=480 即 UTC+8：用两个具体毫秒戳断言 dayString 不同，RF#1）；乱序 days 数组经 record 后仍升序；bossReady 阈值边界（count=threshold−1 false / =threshold true）。
-- [ ] **Step 2: 跑测试确认失败**
-- [ ] **Step 3: 实现 `reviewLedger.ts`**
-- [ ] **Step 4: 跑测试确认通过**
-- [ ] **Step 5: Commit** `feat: calendar-day effective-review ledger driving boss triggers`
+- [x] **Step 1: 写失败测试**，覆盖：同日两次 record 计数仍为 1（RF#5）；跨日 +1；**23:59 与次日 00:01 判为两天**（tzOffset=480 即 UTC+8：用两个具体毫秒戳断言 dayString 不同，RF#1）；乱序 days 数组经 record 后仍升序；bossReady 阈值边界（count=threshold−1 false / =threshold true）。
+- [x] **Step 2: 跑测试确认失败**
+- [x] **Step 3: 实现 `reviewLedger.ts`**
+- [x] **Step 4: 跑测试确认通过**
+- [x] **Step 5: Commit** `feat: calendar-day effective-review ledger driving boss triggers`
 
 ---
 
@@ -171,11 +171,11 @@ export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; sett
   - `export async function openStorage(dbName?: string): Promise<GameStorage>` —— 探测 IndexedDB 可用则 `idbStore`（单 store `saves`，键 `'current'`），否则回落 `memoryStore` 并由调用方决定 UI 警告文案（PRD 功能文案大白话："当前浏览器无法保存进度，关闭页面会丢失"）。
   - memoryStore 行为与 idbStore 完全一致（同一套契约测试跑两遍）。
 
-- [ ] **Step 1: 装 `npm i -D fake-indexeddb`，写共享契约测试套件**（save→load roundtrip、clear→load null、并发双 save 后 load 得后者、save 不接受被外部 mutate 的对象——内部深拷贝）。
-- [ ] **Step 2: 跑测试确认失败**
-- [ ] **Step 3: 实现三文件**。idbStore 用原生 IDB API 包 promise（不引第三方库）；open 失败/onerror 一律 catch 成降级路径。
-- [ ] **Step 4: 跑测试确认通过（两套 store 同绿）**
-- [ ] **Step 5: Commit** `feat: storage abstraction with idb impl and in-memory fallback`
+- [x] **Step 1: 装 `npm i -D fake-indexeddb`，写共享契约测试套件**（save→load roundtrip、clear→load null、并发双 save 后 load 得后者、save 不接受被外部 mutate 的对象——内部深拷贝）。
+- [x] **Step 2: 跑测试确认失败**
+- [x] **Step 3: 实现三文件**。idbStore 用原生 IDB API 包 promise（不引第三方库）；open 失败/onerror 一律 catch 成降级路径。
+- [x] **Step 4: 跑测试确认通过（两套 store 同绿）**
+- [x] **Step 5: Commit** `feat: storage abstraction with idb impl and in-memory fallback`
 
 ---
 
@@ -192,11 +192,11 @@ export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; sett
   - `export function serializeSave(f: SaveFile): string`（2 空格缩进、含 `exportedAt`）
   - `export function importAndSave(text: string, store: GameStorage): Promise<{ ok: boolean; reason?: string }>` —— 解析→validate→store.save，任一步失败不落盘（Review Focus #2）。
 
-- [ ] **Step 1: 写失败测试**，覆盖：合法样本往返相等；缺 `settings` → reject 且 reason 含 `settings`；`schemaVersion: 2` → reject 提示升级；悬空 deckId → reject；非 JSON 文本 → reject 不抛裸异常；importAndSave 失败路径下 store.load() 保持旧值。
-- [ ] **Step 2: 跑测试确认失败**
-- [ ] **Step 3: 实现 `saveMigrate.ts`**
-- [ ] **Step 4: 跑测试确认通过**
-- [ ] **Step 5: Commit** `feat: strict save validation with atomic import`
+- [x] **Step 1: 写失败测试**，覆盖：合法样本往返相等；缺 `settings` → reject 且 reason 含 `settings`；`schemaVersion: 2` → reject 提示升级；悬空 deckId → reject；非 JSON 文本 → reject 不抛裸异常；importAndSave 失败路径下 store.load() 保持旧值。
+- [x] **Step 2: 跑测试确认失败**
+- [x] **Step 3: 实现 `saveMigrate.ts`**
+- [x] **Step 4: 跑测试确认通过**
+- [x] **Step 5: Commit** `feat: strict save validation with atomic import`
 
 ---
 
@@ -210,11 +210,11 @@ export interface SaveFile { schemaVersion: 1; decks: Deck[]; cards: Card[]; sett
 - Consumes: 全部已完成源码
 - Produces: `npm run verify` 一键门禁；GitHub Actions push/PR 触发同一命令。
 
-- [ ] **Step 1: 写守卫脚本** —— 遍历 `src/core/**/*.ts`，正则检测 `document.|window.|localStorage|indexedDB|fetch(|Date.now(|require(` 出现即 exit 1 并打印命中行（`localDayString` 的 tzOffset 是入参不受影响；此清单落实 Global Constraints #2 与 PRD §1 平台约束）。
-- [ ] **Step 2: 本地跑 `npm run check:purity` 确认对现有代码通过**（故意在临时文件插入 `window.x` 验证能报错，然后删除）
-- [ ] **Step 3: 写 ci.yml**：`on: [push, pull_request]`，steps = checkout → setup-node 24 (cache npm) → `npm ci` → `npm run verify`。Pages 部署留给 Plan 5，此处不提前。
-- [ ] **Step 4: 跑 `npm run verify` 全绿**
-- [ ] **Step 5: Commit** `chore: core purity guard + CI verify pipeline`
+- [x] **Step 1: 写守卫脚本** —— 遍历 `src/core/**/*.ts`，正则检测 `document.|window.|localStorage|indexedDB|fetch(|Date.now(|require(` 出现即 exit 1 并打印命中行（`localDayString` 的 tzOffset 是入参不受影响；此清单落实 Global Constraints #2 与 PRD §1 平台约束）。
+- [x] **Step 2: 本地跑 `npm run check:purity` 确认对现有代码通过**（故意在临时文件插入 `window.x` 验证能报错，然后删除）
+- [x] **Step 3: 写 ci.yml**：`on: [push, pull_request]`，steps = checkout → setup-node 24 (cache npm) → `npm ci` → `npm run verify`。Pages 部署留给 Plan 5，此处不提前。
+- [x] **Step 4: 跑 `npm run verify` 全绿**
+- [x] **Step 5: Commit** `chore: core purity guard + CI verify pipeline`
 
 ---
 
