@@ -523,7 +523,8 @@ describe('装配集成 —— 导出即持久快照 / 导出时刻使 due 翻 fa
 
     // 导出成功后记录导出时刻：T7 起走真实写入路径 Coordinator.markExported（R-T5-p3-a），
     // 不再由测试手工塞 meta——持久位若没人喂，7 天闸门就是死代码，这条用例正是它的喂入方取证。
-    await coord.markExported(nowMs);
+    // M-2：返回值是"记上并落净"的判定位（调用方不必再靠 dirty() 反推）
+    expect(await coord.markExported(nowMs)).toBe(true);
     expect(coord.dirty()).toBe(false); // markExported 自带 flush()&&!dirty() 收口
     const persisted = await raw.load();
     expect(readLastExportedAt(persisted!)).toBe(nowMs);

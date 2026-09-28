@@ -394,8 +394,8 @@ describe('Plan 3 · T8 headless 整局冒烟', () => {
 
   it('SM#2 备份提醒闸门闭环：markExported 落位存活；他机 lastExportedAt 导入即剔除（R-T7-p3-a）', async () => {
     const run = await runSession();
-    // ① 导出成功后记时：唯一生产写入位 coordinator.markExported
-    await run.coord.markExported(clockNow());
+    // ① 导出成功后记时：唯一生产写入位 coordinator.markExported（M-2：返回 true = 已记上并落净）
+    expect(await run.coord.markExported(clockNow())).toBe(true);
     expect(run.coord.dirty()).toBe(false);
     const stored = await run.store.load();
     expect(stored?.meta.lastExportedAt).toBe(clockNow());

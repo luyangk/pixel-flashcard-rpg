@@ -498,7 +498,8 @@ describe('markExported / meta.lastExportedAt —— 7 天备份提醒闭环（R-
     await raw.save(makeSave([makeCard('a1')]));
     const coord = await makeCoord(raw, clock);
 
-    await coord.markExported(clock.now());
+    // M-2：返回值就是"有没有记上并落净"——true 不再只是"调用没报错"
+    expect(await coord.markExported(clock.now())).toBe(true);
     expect(coord.dirty()).toBe(false); // 写入路径自带持久收口
     const stored = await raw.load();
     expect(stored!.meta.lastExportedAt).toBe(NOW);
@@ -548,11 +549,12 @@ describe('markExported / meta.lastExportedAt —— 7 天备份提醒闭环（R-
     // 非法域三档：非有限 / 负值 / **超上界**。超上界是 T7 评审判 I1 实证的漏网档：
     // 修复前 markExported(1e300) 会把 1e300 写进权威位 ⇒ 此后 validateSave 整包拒 ⇒
     // dirty 恒 true、flush() 恒 false、无关改动也永久落不了盘（自检失败无自愈路径）。
-    await coord.markExported(Number.NaN);
-    await coord.markExported(-1);
-    await coord.markExported(Number.POSITIVE_INFINITY);
-    await coord.markExported(1e300);
-    await coord.markExported(8.64e15 + 1); // 越界 1ms 也不得放行（守卫与存储域严格同界）
+    // M-2：非法域五档一律返回 false（"没记上"必须能被调用方判定，而不是静默 void）
+    expect(await coord.markExported(Number.NaN)).toBe(false);
+    expect(await coord.markExported(-1)).toBe(false);
+    expect(await coord.markExported(Number.POSITIVE_INFINITY)).toBe(false);
+    expect(await coord.markExported(1e300)).toBe(false);
+    expect(await coord.markExported(8.64e15 + 1)).toBe(false); // 越界 1ms 也不得放行（守卫与存储域严格同界）
     expect(coord.snapshot().meta.lastExportedAt).toBeUndefined();
     expect('lastExportedAt' in coord.snapshot().meta).toBe(false); // fail-closed：字段根本没被写
     expect(coord.dirty()).toBe(false);
@@ -567,7 +569,7 @@ describe('markExported / meta.lastExportedAt —— 7 天备份提醒闭环（R-
     expect((await raw.load())!.meta.plays).toBe(99);
 
     // 后续合法调用仍能正常工作（脏值没有被写进权威位）
-    await coord.markExported(clock.now());
+    expect(await coord.markExported(clock.now())).toBe(true);
     expect(coord.snapshot().meta.lastExportedAt).toBe(NOW);
   });
 
@@ -577,7 +579,7 @@ describe('markExported / meta.lastExportedAt —— 7 天备份提醒闭环（R-
     await raw.save(makeSave([makeCard('a1')]));
     const coord = await makeCoord(raw, clock);
 
-    await coord.markExported(8.64e15); // Date 可表示范围的上界本身：合法
+    expect(await coord.markExported(8.64e15)).toBe(true); // Date 可表示范围的上界本身：合法
     expect(coord.dirty()).toBe(false);
     expect(validateSave(coord.snapshot()).ok).toBe(true);
     expect((await raw.load())!.meta.lastExportedAt).toBe(8.64e15);
