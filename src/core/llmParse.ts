@@ -163,6 +163,25 @@ function parseArray<T>(
   return { ok: true, value: truncated ? out.slice(0, max) : out, truncated };
 }
 
+/**
+ * 干扰项净化（**全仓唯一来源**：core 的解析与 `app/library.addCard` 都走它）。
+ *
+ * 口径：逐项 trim、剔空、去重、**剔除与正确答案逐字相同者**（否则选项里会出现答案本身），
+ * 按码点截到 `CHOICE_TEXT_MAX`、条数截到 `CHOICES_MAX`。非数组 ⇒ `[]`。
+ */
+export function sanitizeChoices(raw: unknown, back: string): string[] {
+  const list = Array.isArray(raw) ? raw : [];
+  const answer = typeof back === 'string' ? back.trim() : '';
+  const out: string[] = [];
+  for (const item of list) {
+    const text = clean(item, CHOICE_TEXT_MAX);
+    if (text.length === 0 || text === answer || out.includes(text)) continue;
+    out.push(text);
+    if (out.length >= CHOICES_MAX) break;
+  }
+  return out;
+}
+
 /** 解析卡片候选。`max` 缺省 CARDS_MAX。 */
 export function parseCards(text: string, opts: { max?: number } = {}): ParseResult<CardCandidate> {
   // `opts` 可能是显式 null（默认参数只兜 undefined）——"永不抛"是文件头写下的契约，故 `?? {}`
@@ -181,16 +200,7 @@ export function parseCards(text: string, opts: { max?: number } = {}): ParseResu
       if (tag.length > 0 && !tags.includes(tag)) tags.push(tag);
       if (tags.length >= TAGS_PER_CARD_MAX) break;
     }
-    // 干扰项（D41）：逐项净化 + **剔除与正确答案逐字相同者**（否则选项里会出现答案本身）
-    const choicesRaw = Array.isArray(o.choices) ? o.choices : [];
-    const choices: string[] = [];
-    for (const c of choicesRaw) {
-      const text = clean(c, CHOICE_TEXT_MAX);
-      if (text.length === 0 || text === back || choices.includes(text)) continue;
-      choices.push(text);
-      if (choices.length >= CHOICES_MAX) break;
-    }
-    return { front, back, tags, choices };
+    return { front, back, tags, choices: sanitizeChoices(o.choices, back) };
   });
 }
 

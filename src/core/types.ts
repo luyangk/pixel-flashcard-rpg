@@ -46,6 +46,14 @@ export interface Card {
   source?: SourceInfo;
   srs: SRSState;
   tags: string[]; // 主题筛选依据
+  /**
+   * 干扰项（Plan 6 · D41，可选扩位）：模型在**生成这张卡那一刻**产出的错误选项，
+   * 供选择题使用；复习时不再临时调模型（省额度、也省等待）。
+   *
+   * 三段式：可选 + 在场严检（字符串数组、≤5 条、每条 ≤200 码点）+ migrateSave **不补默认**
+   * （缺席 = 没有 AI 干扰项，由 `core/choices` 回落"同领域其他卡的背面"这一级来源）。
+   */
+  choices?: string[];
 }
 
 /** 卡组即知识领域（PRD §6.2，v2）。 */
@@ -150,6 +158,15 @@ export interface Settings {
    * 权威形状定义在 core/leaderboard.RunRecord（本文件只引用，不复制字段）。
    */
   leaderboard?: RunRecord[];
+  /**
+   * 作答模式（Plan 6 · D41）：默认选择题；`'qa'` = 问答模式（LLM 判定是否与答案一致）。
+   * 三段式：可选 + 在场严检枚举 + migrateSave 为缺席档补 `'choice'`。
+   */
+  answerMode?: AnswerMode;
+  /**
+   * LLM 每日额度（Plan 6 · D45）：见 `LlmQuota`。三段式同上，缺席档补零额度。
+   */
+  llmQuota?: LlmQuota;
 }
 
 /** 存档容器元信息。 */

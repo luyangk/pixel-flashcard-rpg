@@ -18,8 +18,10 @@ import {
   POOL_SIZE_MAX,
   POOL_SIZE_MIN,
   replayPrologue,
+  setAnswerMode,
   setBossThresholdTier,
   setDefaultPoolSize,
+  setLlmQuota,
   setSm2Params,
   validateSm2Params,
 } from '../../src/app/settingsFlow';
@@ -38,6 +40,11 @@ function save(over: Partial<SaveFile> = {}): SaveFile {
       progress: { exp: 0 },
       story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 },
       leaderboard: [],
+      // Plan 6 · T5：作答模式与每日额度进档（迁移器为缺席档补同款缺省；
+      // 夹具代表"当前形状的完整档"，缺席会让形状断言把归一化误读成丢字段——
+      // 与上面 leaderboard 在 T7 时的理由逐字相同）。
+      answerMode: 'choice',
+      llmQuota: { day: '', cards: 0, judges: 0 },
     },
     meta: { savedAt: NOW, plays: 0 },
     ...over,
@@ -130,5 +137,70 @@ describe('settingsFlow —— 写入与域对齐', () => {
     expect(coord.readOnly()).toBe(true);
     // 只读态下 mutate 抛 SaveReadOnlyError —— 写口不吞，调用方（设置屏）的 catch 负责上屏
     await expect(setBossThresholdTier(coord, 15)).rejects.toThrow();
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T5 */
+
+describe('setAnswerMode / setLlmQuota（Plan 6 · T5）', () => {
+  it('SF#A1 切换作答模式成功并**真的落盘**（过 validateSave 自检）', async () => {
+    const { coord, store } = await makeCoord();
+    const res = await setAnswerMode(coord, 'qa');
+    expect(res.ok).toBe(true);
+    expect(coord.snapshot().settings.answerMode).toBe('qa');
+    await coord.flush();
+    const disk = await store.load();
+    expect(disk?.settings.answerMode).toBe('qa');
+    expect(validateSave(disk).ok).toBe(true);
+    expect(await setAnswerMode(coord, 'choice')).toEqual({ ok: true });
+    expect(coord.snapshot().settings.answerMode).toBe('choice');
+  });
+
+  it('SF#A2 域外值拒绝且**零写入**；同值不重写（写放大纪律）', async () => {
+    const { coord, store } = await makeCoord();
+    for (const bad of ['x', true, 1, null, undefined, {}]) {
+      const res = await setAnswerMode(coord, bad);
+      expect(res.ok, String(bad)).toBe(false);
+      if (!res.ok) expect(res.reason).toContain('作答');
+    }
+    await coord.flush();
+    expect((await store.load())?.settings.answerMode ?? 'choice').toBe('choice');
+
+    // 同值：写入计数取证（markDirty 不该被触发 ⇒ 存储保持 clean）
+    await setAnswerMode(coord, 'choice');
+    expect(coord.dirty()).toBe(false);
+  });
+
+  it('SF#Q1 写额度：脏值拒绝（负数/小数/NaN/空 day），合法值落盘', async () => {
+    const { coord, store } = await makeCoord();
+    for (const bad of [
+      { day: 7, cards: 0, judges: 0 },
+      { day: '2026-10-01', cards: -1, judges: 0 },
+      { day: '2026-10-01', cards: 0, judges: 1.5 },
+      null,
+      'nope',
+    ]) {
+      const res = await setLlmQuota(coord, bad as never);
+      expect(res.ok, JSON.stringify(bad)).toBe(false);
+      if (!res.ok) expect(res.reason).toContain('额度');
+    }
+    // 空串 day 合法（= 未记录，与缺省值同形）
+    expect(await setLlmQuota(coord, { day: '', cards: 0, judges: 0 })).toEqual({ ok: true });
+    const good = { day: '2026-10-01', cards: 7, judges: 9 };
+    expect(await setLlmQuota(coord, good)).toEqual({ ok: true });
+    expect(coord.snapshot().settings.llmQuota).toEqual(good);
+    await coord.flush();
+    expect((await store.load())?.settings.llmQuota).toEqual(good);
+    expect(validateSave(await store.load()).ok).toBe(true);
+  });
+
+  it('SF#Q2 额度在只读态下如实失败（不谎报成功）', async () => {
+    // 坏档 ⇒ 只读闩锁
+    const store = createMemoryStorage();
+    await store.save({ schemaVersion: 99 } as unknown as SaveFile);
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    expect(coord.readOnly()).toBe(true);
+    await expect(setLlmQuota(coord, { day: '2026-10-01', cards: 1, judges: 1 })).rejects.toBeInstanceOf(Error);
+    await expect(setAnswerMode(coord, 'qa')).rejects.toBeInstanceOf(Error);
   });
 });

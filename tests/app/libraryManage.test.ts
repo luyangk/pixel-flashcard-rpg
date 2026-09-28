@@ -61,6 +61,11 @@ function seed(): SaveFile {
       progress: { exp: 0 },
       story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 },
       leaderboard: [],
+      // Plan 6 · T5：作答模式与每日额度进档（迁移器为缺席档补同款缺省；
+      // 夹具代表"当前形状的完整档"，缺席会让形状断言把归一化误读成丢字段——
+      // 与上面 leaderboard 在 T7 时的理由逐字相同）。
+      answerMode: 'choice',
+      llmQuota: { day: '', cards: 0, judges: 0 },
     },
     meta: { savedAt: NOW, plays: 0 },
   };

@@ -114,6 +114,11 @@ function makeSave(cards: Card[], over: Partial<SaveFile> = {}): SaveFile {
       // BK#25**（两者都拿夹具档与 migrateSave 产物做严格比对）；**BK#26 不依赖它**——
       // BK#26 的存档来自空存储的种子档（persist 侧自带空榜），压根不经过 migrateSave。
       leaderboard: [],
+      // Plan 6 · T5：作答模式与每日额度进档（迁移器为缺席档补同款缺省；
+      // 夹具代表"当前形状的完整档"，缺席会让形状断言把归一化误读成丢字段——
+      // 与上面 leaderboard 在 T7 时的理由逐字相同）。
+      answerMode: 'choice',
+      llmQuota: { day: '', cards: 0, judges: 0 },
     },
     meta: { savedAt: NOW, plays: 0 },
     ...over,

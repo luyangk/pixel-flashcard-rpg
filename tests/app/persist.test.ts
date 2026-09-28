@@ -1219,6 +1219,9 @@ describe('Coordinator 契约面 —— brief Produces 逐字对齐', () => {
     // 夹具 makeSave 不带该字段，故期望值必须显式带上这条迁移默认——这不是新行为，
     // 而是"载入路径与 parseBackup 同规格"的可见结果。
     expected.settings.leaderboard = [];
+    // 同理（Plan 6 · T5）：载入路径的 migrateSave 还会为缺席档补作答模式与零额度。
+    expected.settings.answerMode = 'choice';
+    expected.settings.llmQuota = { day: '', cards: 0, judges: 0 };
     expected.meta = { savedAt: NOW, plays: 3 };
     expect(revived.snapshot()).toEqual(expected);
   });

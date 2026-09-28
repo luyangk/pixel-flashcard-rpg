@@ -59,6 +59,11 @@ function seed(over: Partial<SaveFile> = {}): SaveFile {
       progress: { exp: 0 },
       story: { prologueSeen: false, beatIndex: 0, arcSeen: 0 },
       leaderboard: [],
+      // Plan 6 · T5：作答模式与每日额度进档（迁移器为缺席档补同款缺省；
+      // 夹具代表"当前形状的完整档"，缺席会让形状断言把归一化误读成丢字段——
+      // 与上面 leaderboard 在 T7 时的理由逐字相同）。
+      answerMode: 'choice',
+      llmQuota: { day: '', cards: 0, judges: 0 },
     },
     meta: { savedAt: NOW - 1000, plays: 0 },
     ...over,
@@ -286,5 +291,78 @@ describe('addDeck', () => {
     expect(await coord.flush()).toBe(true);
     const persisted = await store.load();
     expect(() => validateSave(persisted)).not.toThrow();
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T5 */
+
+/**
+ * `Card.choices` 随卡入库（Plan 6 · D41）：生成卡时由模型产出的干扰项要真的落进存档，
+ * 否则选择题永远只能退回到"同领域其他卡的背面"这一级来源。
+ */
+describe('addCard —— 干扰项 choices（Plan 6 · T5）', () => {
+  it('LB#C1 带 choices ⇒ 落盘保留（顺序不变）；flush 后仍是合法档', async () => {
+    const { coord, store } = await makeCoord(seed());
+    const res = await addCard(coord, {
+      front: '唐朝开国皇帝是谁？',
+      back: '李渊',
+      deckId: 'deck-a',
+      id: 'card-1',
+      nowMs: NOW,
+      choices: ['李世民', '杨坚', '赵匡胤'],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.choices).toEqual(['李世民', '杨坚', '赵匡胤']);
+    await coord.flush();
+    const disk = await store.load();
+    expect(disk?.cards[0].choices).toEqual(['李世民', '杨坚', '赵匡胤']);
+    expect(validateSave(disk).ok).toBe(true);
+  });
+
+  it('LB#C2 缺席 / 空数组 / 全是脏项 ⇒ **不写该字段**（缺席 = 没有干扰项，不是空数组）', async () => {
+    const { coord } = await makeCoord(seed());
+    const a = await addCard(coord, { front: 'f', back: 'b', deckId: 'deck-a', id: 'c1', nowMs: NOW });
+    expect(a.ok).toBe(true);
+    if (a.ok) expect('choices' in a.value).toBe(false);
+
+    const b = await addCard(coord, {
+      front: 'f2', back: 'b2', deckId: 'deck-a', id: 'c2', nowMs: NOW, choices: [],
+    });
+    expect(b.ok).toBe(true);
+    if (b.ok) expect('choices' in b.value).toBe(false);
+
+    // 与答案相同 / 空串 / 非字符串 ⇒ 逐项剔除后为空 ⇒ 同样不写字段
+    const c = await addCard(coord, {
+      front: 'f3', back: '答案', deckId: 'deck-a', id: 'c3', nowMs: NOW,
+      choices: ['答案', '   ', 7 as never],
+    });
+    expect(c.ok).toBe(true);
+    if (c.ok) expect('choices' in c.value).toBe(false);
+  });
+
+  it('LB#C3 干扰项超上限 / 重复 ⇒ 按 core 口径净化（去重后取前 5 条）', async () => {
+    const { coord } = await makeCoord(seed());
+    const res = await addCard(coord, {
+      front: 'f', back: 'b', deckId: 'deck-a', id: 'c1', nowMs: NOW,
+      choices: [' 错1 ', '错1', '错2', '错3', '错4', '错5', '错6'],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.choices).toEqual(['错1', '错2', '错3', '错4', '错5']); // 去重 + 截到 5
+    expect(validateSave(coord.snapshot()).ok).toBe(true);
+  });
+
+  it('LB#C4 干扰项超长 ⇒ 按码点截到 200（不是整条丢掉）', async () => {
+    const { coord } = await makeCoord(seed());
+    const long = '乙'.repeat(300);
+    const res = await addCard(coord, {
+      front: 'f', back: 'b', deckId: 'deck-a', id: 'c1', nowMs: NOW, choices: [long],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const got = res.value.choices?.[0] ?? '';
+    expect(Array.from(got).length).toBe(200);
+    expect(validateSave(coord.snapshot()).ok).toBe(true);
   });
 });

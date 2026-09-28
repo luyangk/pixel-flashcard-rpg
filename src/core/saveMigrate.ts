@@ -33,6 +33,9 @@
  * - Settings.leaderboard?: RunRecord[]（战绩榜落盘位）：缺席**不拒**（可选派生数据，
  *   拒绝会让 T7 前存档全部打不开），migrateSave 补 []；在场逐行九字段严检（类级联
  *   引用 core/leaderboard.RunRecord，权威形状不在此复制）。
+ * - Settings.answerMode?: AnswerMode（Plan 6 · D41）：可选位，缺席不拒、migrateSave 补 `'choice'`；
+ * - Settings.llmQuota?: LlmQuota（Plan 6 · D45）：可选位，缺席不拒、migrateSave 补零额度；
+ * - Card.choices?: string[]（Plan 6 · D41）：可选位，**不补默认**（缺席 = 没有 AI 干扰项）；
  * - meta.lastExportedAt?: number（7 天备份提醒的唯一喂入位）：缺席 = 从未导出，
  *   validateSave 在场严检（有限数且 ≥0，负值/NaN/超界整包拒），**migrateSave 不补默认**
  *   ——补一个假时刻会让 backupReminderDue 静默失效 7 天。写入路径：Coordinator.markExported。
@@ -55,7 +58,8 @@ import type { GameStorage } from '@platform/storage';
 // 两者同属 core、无循环依赖，复制反会制造"两份定义各自漂移"的隐患。
 import { DAY_KEY_RE, MAX_EFFECTIVE_DAYS } from './reviewLedger';
 // 彩蛋长度上限的唯一权威在 llmParse（模型产出的同一封顶）：跨模块 import 复用而非复制。
-import { EGG_MAX } from './llmParse';
+import { CHOICE_TEXT_MAX, CHOICES_MAX, EGG_MAX } from './llmParse';
+import type { AnswerMode, LlmQuota } from './types';
 
 // ---------------------------------------------------------------------------
 // validateSave
@@ -85,6 +89,8 @@ function assertShape(pred: boolean, path: string, detail: () => string): asserts
 const STABILITIES = ['new', 'learning', 'review', 'mastered'] as const;
 const SOURCE_TYPES = ['preset', 'hotspot', 'domain', 'manual', 'llm'] as const;
 const TIERS = [15, 30, 50] as const;
+/** 作答模式的枚举域（Plan 6 · D41）。 */
+const ANSWER_MODES = ['choice', 'qa'] as const;
 /** 战绩榜行的枚举域（core/leaderboard.RunRecord）。域外值视为"非 won/非 boss"的语义在
  *  leaderboard 内部是保守回落，但在**落盘形状**上必须整包拒——脏枚举一旦进档就会让
  *  rankRuns 静默丢行。 */
@@ -106,6 +112,14 @@ export const DEFAULT_PROGRESS_EXP = 0;
  * 绝不让两份存档共享同一个可变 story 对象（T7 leaderboard 的同款教训）。
  */
 export const DEFAULT_STORY: StorySettings = Object.freeze({ prologueSeen: false, beatIndex: 0, arcSeen: 0 });
+
+/**
+ * Plan 6 · D41/D45 的两个缺省值（**单一来源**：migrateSave 的注入器与 persist 的种子档
+ * 共用同一份，保证"种子档"与"迁移档"形状不长期分叉——这是 T7 leaderboard 的同款教训）。
+ * `day: ''` 永不等于任何真实日界 ⇒ app/quota 读时视为"新的一天"，两本账归零。
+ */
+export const DEFAULT_ANSWER_MODE: AnswerMode = 'choice';
+export const DEFAULT_LLM_QUOTA: LlmQuota = Object.freeze({ day: '', cards: 0, judges: 0 });
 
 /** 内部信号：校验失败的路径化原因。不外泄——validateSave 捕获后转成 reason。 */
 class ValidationSignal extends Error {}
@@ -286,6 +300,39 @@ function validateCard(raw: unknown, i: number): void {
   validateSrs(o.srs, `${p}.srs`);
   requireStringArray(o.tags, `${p}.tags`);
   if ('source' in o && o.source !== undefined) validateSource(o.source, `${p}.source`);
+  // choices（Plan 6 · T5）：**可选位**——在场严检（字符串数组、≤5 条、每条 ≤200 码点），
+  // 缺席不拒、migrateSave 也**不补默认**（缺席 = 没有 AI 干扰项，由 core/choices 回落
+  // "同领域其他卡的背面"这一级来源；补个空数组等于凭空多一个字段）。
+  if ('choices' in o && o.choices !== undefined) validateChoices(o.choices, `${p}.choices`);
+}
+
+/** 卡片自带的干扰项（Plan 6 · D41）：条数与长度上限的唯一权威在 llmParse（模型产出的同一封顶）。 */
+function validateChoices(raw: unknown, path: string): void {
+  const list = requireStringArray(raw, path);
+  assertShape(list.length <= CHOICES_MAX, path,
+    () => `干扰项不得超过 ${CHOICES_MAX} 条，实际为 ${list.length}`);
+  for (let i = 0; i < list.length; i++) {
+    const points = [...(list[i] as string)].length;
+    assertShape(points <= CHOICE_TEXT_MAX, `${path}[${i}]`,
+      () => `每条干扰项不得超过 ${CHOICE_TEXT_MAX} 个字符，实际为 ${points}`);
+  }
+}
+
+/**
+ * LLM 每日额度（Plan 6 · T5）：三个字段都必须在场且合法（整块在场严检）。
+ *
+ * `day` **允许空串**：`''` 正是缺省值（"还没记过任何一天"），`app/quota` 读时视为
+ * "与今天不同" ⇒ 两本账归零。要求非空会让默认值自己过不了校验（首版就踩了这个坑：
+ * 注入 `{day:''}` 的缺省后每个存档都整包拒）。
+ */
+function validateLlmQuota(raw: unknown, path: string): void {
+  const o = requireObject(raw, path);
+  // 注意：本文件的 `requireString` 要求**非空**，而 `day` 的合法缺省就是空串
+  // （'' = 还没记过任何一天）⇒ 这里必须用形状检查而不是 requireString（首版踩过：
+  // 用它会让注入缺省后的每个存档都整包拒，进而让协调器进只读态、全线用例雪崩）。
+  assertShape(typeof o.day === 'string', `${path}.day`, () => `应为字符串，实际为 ${describeValue(o.day)}`);
+  requireNonNegInt(o.cards, `${path}.cards`);
+  requireNonNegInt(o.judges, `${path}.judges`);
 }
 
 /**
@@ -388,6 +435,15 @@ function validateSettings(raw: unknown): void {
     const rows = requireArray(o.leaderboard, 'settings.leaderboard');
     for (let i = 0; i < rows.length; i++) validateRunRecord(rows[i], `settings.leaderboard[${i}]`);
   }
+  // answerMode / llmQuota（Plan 6 · T5）：与 leaderboard 同款**可选位**——在场严检、缺席不拒。
+  // 做成拒绝点会让 v2.5 之前写下的存档整包打不开；而域外值必须拒（脏枚举进档后，
+  // 此后每次落盘自检都会失败 ⇒ dirty 永久为真、玩家的所有改动静默写不进去）。
+  if ('answerMode' in o && o.answerMode !== undefined) {
+    requireEnum(o.answerMode, 'settings.answerMode', ANSWER_MODES);
+  }
+  if ('llmQuota' in o && o.llmQuota !== undefined) {
+    validateLlmQuota(o.llmQuota, 'settings.llmQuota');
+  }
 }
 
 function validateMeta(raw: unknown): void {
@@ -470,7 +526,7 @@ export function validateSave(raw: unknown): ValidateResult {
  * 范围克制（R-T6-d 延伸）：迁移只做"缺省补值"这一件事，现有四档——settings.battle
  * → {defaultPoolSize:15}、settings.progress → {exp:0}、settings.story →
  * {prologueSeen:false,beatIndex:0,arcSeen:0}（story 在场但缺 arcSeen 时只补该键）、
- * settings.leaderboard → []；
+ * settings.leaderboard → []、settings.answerMode → 'choice'、settings.llmQuota → 零额度；
  * "上次备份时刻"（meta.lastExportedAt）**不补**（缺席 = 从未导出，补默认有害），
  * schemaVersion 保持恰 1，不发明新顶层字段。
  * 失败形态与校验器一致：抛 Error，message 即含 JSON 路径的可读 reason。
@@ -479,8 +535,10 @@ export function migrateSave(raw: unknown): SaveFile {
   // 旧形状档（无 battle / 无 progress / 无 story）在 validateSettings 处即被拒，故先注入默认再整包校验：
   // 这正是 brief Step 1 的「migrateSave 注入 {battle:{defaultPoolSize:15}} 后再 validate 过」
   // （T3 起 progress 同待遇：注入 {progress:{exp:0}}；T6 起 story；T7 起 leaderboard：注入 {leaderboard:[]}）。
-  const migrated = injectLeaderboardDefault(
-    injectStoryDefaults(injectProgressDefaults(injectBattleDefault(raw))),
+  const migrated = injectPlan6Defaults(
+    injectLeaderboardDefault(
+      injectStoryDefaults(injectProgressDefaults(injectBattleDefault(raw))),
+    ),
   );
   const validated = validateSave(migrated);
   if (!validated.ok) throw new Error(`存档不合法，无法迁移：${validated.reason}`);
@@ -558,6 +616,33 @@ function injectLeaderboardDefault(raw: unknown): unknown {
   if (!isPlainObject(settings)) return raw;
   if ('leaderboard' in settings && settings.leaderboard !== undefined) return raw;
   return { ...raw, settings: { ...settings, leaderboard: [] } };
+}
+
+/**
+ * `settings.answerMode` / `settings.llmQuota` 缺省时补默认（Plan 6 · T5）。
+ *
+ * 与 injectLeaderboardDefault 同构：只在 settings 是对象且对应键缺席时浅拷贝注入；
+ * 在场（哪怕是脏值）一律原样返回，交给 validateSave 逐项拒绝并给路径 —— 迁移器
+ * 只做"缺省补值"，绝不做消毒改写。
+ *
+ * 默认值：`'choice'`（选择题是默认作答方式）与 `{day:'',cards:0,judges:0}`
+ * （`day:''` 永不等于任何真实日界 ⇒ app/quota 读时视为"新的一天"，两本账归零）。
+ */
+function injectPlan6Defaults(raw: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  const settings = raw.settings;
+  if (!isPlainObject(settings)) return raw;
+  let next = settings;
+  let changed = false;
+  if (!('answerMode' in next) || next.answerMode === undefined) {
+    next = { ...next, answerMode: DEFAULT_ANSWER_MODE };
+    changed = true;
+  }
+  if (!('llmQuota' in next) || next.llmQuota === undefined) {
+    next = { ...next, llmQuota: { ...DEFAULT_LLM_QUOTA } };
+    changed = true;
+  }
+  return changed ? { ...raw, settings: next } : raw;
 }
 
 // ---------------------------------------------------------------------------

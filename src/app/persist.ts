@@ -54,7 +54,14 @@
 
 import type { Card, SaveFile, Settings } from '@core/types';
 import type { GameStorage } from '@platform/storage';
-import { DEFAULT_STORY, MAX_TIME_MS, migrateSave, validateSave } from '@core/saveMigrate';
+import {
+  DEFAULT_ANSWER_MODE,
+  DEFAULT_LLM_QUOTA,
+  DEFAULT_STORY,
+  MAX_TIME_MS,
+  migrateSave,
+  validateSave,
+} from '@core/saveMigrate';
 import type { SettleResult } from './growth';
 
 // ---------------------------------------------------------------------------
@@ -227,6 +234,11 @@ const DEFAULT_SETTINGS: Settings = {
   // T7：新档直接带空榜（与 migrateSave 为旧档补的缺省同形），
   // 免得"种子档"与"迁移档"两种形状长期分叉。数组本体在 seedSave 里每次新建。
   leaderboard: [],
+  // Plan 6 · T5：作答模式与每日额度同理——新档直接带上，与注入器补出的缺省同形。
+  // 缺省值的**单一来源**在 core/saveMigrate（DEFAULT_ANSWER_MODE / DEFAULT_LLM_QUOTA）：
+  // 写死在这里会让种子档与迁移档在某次改动后悄悄分叉。
+  answerMode: DEFAULT_ANSWER_MODE,
+  llmQuota: { ...DEFAULT_LLM_QUOTA },
 };
 
 /**
@@ -247,6 +259,7 @@ function seedSave(nowMs: number): SaveFile {
       progress: { ...DEFAULT_SETTINGS.progress },
       story: { ...DEFAULT_STORY }, // 同上：story 本体不可跨种子档共享
       leaderboard: [], // 每份种子档各持一个空数组，绝不跨实例共享可变引用
+      llmQuota: { ...DEFAULT_LLM_QUOTA }, // 同理：额度对象也不能跨种子档共享引用
     },
     // meta 不含 lastExportedAt：缺席正是"从未导出"（R-T5-p3-a），种子档不得假装已备份。
     meta: { savedAt: nowMs, plays: 0 },

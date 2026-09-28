@@ -67,6 +67,11 @@ function validSave(): SaveFile {
       // ②它是当前形状的一部分，夹具应代表"当前形状的完整档"；
       // ③meta.lastExportedAt 刻意**不**在此列：缺席 = 从未导出，是合法且语义化的缺省。
       leaderboard: [],
+      // Plan 6 · T5：作答模式与每日额度进档（迁移器为缺席档补同款缺省；
+      // 夹具代表"当前形状的完整档"，缺席会让形状断言把归一化误读成丢字段——
+      // 与上面 leaderboard 在 T7 时的理由逐字相同）。
+      answerMode: 'choice',
+      llmQuota: { day: '', cards: 0, judges: 0 },
     },
     meta: { savedAt: T0, plays: 7 },
   };
@@ -1111,5 +1116,103 @@ describe('importAndSave', () => {
       const r = await importAndSave(text, store);
       expect(r.ok).toBe(false);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T5 */
+
+/**
+ * v2.6 扩位三段式：`settings.answerMode`、`settings.llmQuota`、`Card.choices`。
+ *
+ * 判别力：
+ * - 三者都是**可选位**（缺席不拒）——把新字段做成拒绝点，会让 v2.5 之前的存档整包打不开；
+ * - 在场**严检**（域外值整包拒，reason 带 JSON 路径）：脏枚举/脏计数一旦进档，
+ *   此后每次落盘自检都失败 ⇒ dirty 永久为真、玩家的所有改动静默写不进去；
+ * - `Card.choices` **不补默认**（缺席 = 没有 AI 干扰项，由 choices.ts 回落本地方案）。
+ */
+describe('answerMode / llmQuota / choices 三段式（Plan 6 · T5）', () => {
+  it('v2.5 形状档（三处全缺）⇒ 迁移补出默认：choice 与零额度、卡上不出现 choices', () => {
+    const raw = sample();
+    delete (raw.settings as Record<string, unknown>).answerMode;
+    delete (raw.settings as Record<string, unknown>).llmQuota;
+    for (const c of raw.cards as Record<string, unknown>[]) delete c.choices;
+
+    // 三个都是**可选位** ⇒ 缺席时 validateSave 放行（不会因为多了个新功能就让旧档打不开）；
+    // migrateSave 仍会补出与种子档同形的缺省，保证"种子档/迁移档"两种形状不分叉。
+    expect(validateSave(raw).ok).toBe(true);
+    const save = migrateSave(raw);
+    expect(save.settings.answerMode).toBe('choice');
+    expect(save.settings.llmQuota).toEqual({ day: '', cards: 0, judges: 0 });
+    expect('choices' in save.cards[0]).toBe(false); // 不补默认
+    expect(validateSave(save).ok).toBe(true);
+    // 幂等
+    expect(migrateSave(save)).toEqual(save);
+  });
+
+  it('answerMode 域外值（申花/true/1）⇒ 整包拒，reason 带路径', () => {
+    for (const bad of ['x', true, 1, null, ['choice']]) {
+      const raw = sample();
+      (raw.settings as Record<string, unknown>).answerMode = bad;
+      const r = validateSave(raw);
+      expect(r.ok, `answerMode=${String(bad)} 应被拒`).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.answerMode');
+    }
+    for (const good of ['choice', 'qa']) {
+      const raw = sample();
+      (raw.settings as Record<string, unknown>).answerMode = good;
+      expect(validateSave(raw).ok).toBe(true);
+    }
+  });
+
+  it('llmQuota 在场严检：day 必须是字符串（允许空串）、两个计数必须非负整数', () => {
+    const bads: unknown[] = [
+      { day: 20261001, cards: 0, judges: 0 },
+      { day: '2026-10-01', cards: -1, judges: 0 },
+      { day: '2026-10-01', cards: 1.5, judges: 0 },
+      { day: '2026-10-01', cards: 0, judges: '3' },
+      { day: '2026-10-01', cards: 0 },
+      { cards: 0, judges: 0 },
+    ]; // 注：多余的键（如 extra）**不在拒绝之列**——validateSave 对未知键一贯容忍
+    for (const bad of bads) {
+      const raw = sample();
+      (raw.settings as Record<string, unknown>).llmQuota = bad;
+      const r = validateSave(raw);
+      expect(r.ok, JSON.stringify(bad)).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.llmQuota');
+    }
+    const ok = sample();
+    (ok.settings as Record<string, unknown>).llmQuota = { day: '2026-10-01', cards: 200, judges: 300 };
+    expect(validateSave(ok).ok).toBe(true);
+    // day 允许空串：'' 就是缺省值（"还没记过任何一天"），读侧按"新的一天"归零
+    const empty = sample();
+    (empty.settings as Record<string, unknown>).llmQuota = { day: '', cards: 0, judges: 0 };
+    expect(validateSave(empty).ok).toBe(true);
+  });
+
+  it('Card.choices 在场严检：字符串数组、≤5 条、每条 ≤200 码点；脏值整包拒', () => {
+    const bads: unknown[] = ['错', ['a', 3], ['a', null], [null]];
+    for (const bad of bads) {
+      const raw = sample();
+      (raw.cards as Record<string, unknown>[])[0].choices = bad;
+      const r = validateSave(raw);
+      expect(r.ok, JSON.stringify(bad)).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('choices');
+    }
+    // 6 条 ⇒ 超出上限
+    const tooMany = sample();
+    (tooMany.cards as Record<string, unknown>[])[0].choices = ['a', 'b', 'c', 'd', 'e', 'f'];
+    expect(validateSave(tooMany).ok).toBe(false);
+    // 单条超长（201 码点）⇒ 拒
+    const tooLong = sample();
+    (tooLong.cards as Record<string, unknown>[])[0].choices = ['乙'.repeat(201)];
+    expect(validateSave(tooLong).ok).toBe(false);
+    // 合法
+    const good = sample();
+    (good.cards as Record<string, unknown>[])[0].choices = ['错1', '错2', '错3'];
+    expect(validateSave(good).ok).toBe(true);
+    // 空数组合法（= 没有干扰项）
+    const empty = sample();
+    (empty.cards as Record<string, unknown>[])[0].choices = [];
+    expect(validateSave(empty).ok).toBe(true);
   });
 });

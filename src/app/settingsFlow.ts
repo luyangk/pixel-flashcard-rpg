@@ -86,6 +86,50 @@ export async function setDefaultPoolSize(coord: Coordinator, size: unknown): Pro
 }
 
 /**
+ * 设置作答模式（Plan 6 · D41）：`'choice'`（选择题，默认）或 `'qa'`（问答模式）。
+ *
+ * 域检查与 `saveMigrate` 的枚举逐条对齐（ANSWER_MODES）：域外值一旦进档，
+ * 此后每次落盘自检都会失败 ⇒ dirty 永久为真、玩家所有改动静默写不进去。
+ */
+export async function setAnswerMode(coord: Coordinator, mode: unknown): Promise<SettingsWriteResult> {
+  if (mode !== 'choice' && mode !== 'qa') {
+    return { ok: false, reason: '作答方式只能是「选择题」或「问答模式」。' };
+  }
+  if (coord.snapshot().settings.answerMode === mode) return { ok: true }; // 同值不重写
+  await coord.mutate((save) => {
+    save.settings.answerMode = mode;
+  });
+  return { ok: true };
+}
+
+/**
+ * 写入 LLM 每日额度（Plan 6 · D45）。**只由装配层在生成/判定之后调用**：
+ * 额度是计数，不是玩家设置，所以界面上没有直接编辑它的入口。
+ *
+ * 域检查与 `validateLlmQuota` 逐条对齐：`day` 字符串（允许空串 = 未记录）、两个计数非负整数。
+ */
+export async function setLlmQuota(coord: Coordinator, quota: unknown): Promise<SettingsWriteResult> {
+  const bad = (why: string): { ok: false; reason: string } => ({ ok: false, reason: `额度没记上：${why}` });
+  if (quota === null || typeof quota !== 'object') return bad('没有拿到额度对象。');
+  const o = quota as Record<string, unknown>;
+  // day 允许空串（'' = 还没记过任何一天，与缺省值同形；app/quota 读时按"新的一天"归零）
+  if (typeof o.day !== 'string') return bad('日期键缺失。');
+  for (const key of ['cards', 'judges'] as const) {
+    const v = o[key];
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) return bad(`${key} 必须是非负整数。`);
+  }
+  const next = { day: o.day, cards: o.cards as number, judges: o.judges as number };
+  const cur = coord.snapshot().settings.llmQuota;
+  if (cur && cur.day === next.day && cur.cards === next.cards && cur.judges === next.judges) {
+    return { ok: true }; // 同值不重写（额度几乎每局都写一次，写放大在这里最贵）
+  }
+  await coord.mutate((save) => {
+    save.settings.llmQuota = next;
+  });
+  return { ok: true };
+}
+
+/**
  * 把 `settings.story.prologueSeen` 重置为 false（设置页的"重看序章"，LORE §5.1 的
  * "设置页可重看"）。下一次宿主挂屏时 `needsPrologue` 即为真。已为 false 时不写。
  */

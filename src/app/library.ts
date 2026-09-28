@@ -27,12 +27,19 @@
  */
 import type { Card, Deck } from '@core/types';
 import type { Sm2Params } from '@core/types';
+import { sanitizeChoices } from '@core/llmParse';
 import { MAX_TIME_MS } from '@core/saveMigrate';
 import { createInitialSRS } from '@core/sm2';
 import type { Coordinator } from './persist';
 
 /** 加卡的入参（front/back/deckId 来自表单；id/nowMs 来自装配层注入）。 */
 export interface AddCardInput {
+  /**
+   * 干扰项（Plan 6 · D41）：模型在生成这张卡时一并产出。经 `core/llmParse.sanitizeChoices`
+   * 净化后落盘；**净化后为空则不写该字段**（缺席 = 没有 AI 干扰项，由 core/choices 回落
+   * "同领域其他卡的背面"）。只允许手工/辅建这两条路带它，SRS 与 UI 都不产生干扰项。
+   */
+  readonly choices?: readonly string[];
   readonly front: string;
   readonly back: string;
   readonly deckId: string;
@@ -120,6 +127,7 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
   }
   const tags = usableTags(input.tags);
   if (tags === null) return { ok: false, reason: '加卡失败：标签只能是一串文字。' };
+  const back = input.back.trim();
   if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
 
   const save = coord.snapshot();
@@ -132,6 +140,8 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
   }
 
   const sourceType: 'manual' | 'llm' = input.sourceType === 'llm' ? 'llm' : 'manual';
+  // 干扰项：净化后为空 ⇒ 不写字段（与 Card.choices 的"可选位、不补默认"同一口径）
+  const choices = sanitizeChoices(input.choices, back);
   const card: Card = {
     id: input.id,
     deckId: input.deckId,
@@ -140,6 +150,9 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
     source: { type: sourceType, createdAt: input.nowMs },
     srs: createInitialSRS(input.nowMs, input.sm2Params),
     tags,
+    // 只在净化后有内容时才带这个字段：`choices: []` 与"没有干扰项"是两回事，
+    // 而 validateSave 对在场值严检、缺席放行 —— 少写一个空数组，存档更干净。
+    ...(choices.length > 0 ? { choices } : {}),
   };
 
   // 走到这里说明判断放行了；闩锁仍会在 mutate 内再拒一次（fail-closed 的第二道）。
