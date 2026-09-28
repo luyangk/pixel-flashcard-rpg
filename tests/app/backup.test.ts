@@ -324,11 +324,13 @@ describe('exportBackup ⇄ parseBackup —— 往返无损', () => {
   /**
    * BK#5b（T7 fix round 1，评审 M3）：榜单是本存档里**唯一可为非空的对象数组**，
    * 此前所有往返夹具的 leaderboard 恒为 []，"非空榜单能否逐行无损过 JSON 往返"
-   * 其实没有覆盖。此处钉两件事：①两行 RunRecord 的九字段逐一保真；
+   * 其实没有覆盖。此处钉两件事：①三行 RunRecord 的九字段逐一保真；
    * ②**顺序原样保留**（导出/导入都不做 rankRuns 重排——排序是 recordRun 的写入侧职责，
    * 导入侧若偷偷重排，用户手里的榜单顺序会在换机后变化）。
+   *
+   * [T8 订正] 标题与注释原写"两行"，夹具实为三行（r-a/r-b/r-c）——纯改字，行为不变。
    */
-  it('BK#5b 非空榜单往返无损：两行 RunRecord 九字段保真，且顺序不被重排', () => {
+  it('BK#5b 非空榜单往返无损：三行 RunRecord 九字段保真，且顺序不被重排', () => {
     const rows: RunRecord[] = [
       // 有意让 at 与 score 都**不**单调：任何"导入时顺手排序"的实现都会露出马脚
       { id: 'r-a', at: NOW - 3 * DAY, result: 'won', kind: 'boss', domain: '领域A', cards: 15, misses: 4, level: 6, score: 190 },
