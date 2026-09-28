@@ -25,6 +25,7 @@ import type { Card, Deck, SaveFile, Sm2Params, SRSState, Stability } from '@core
 import type { GameStorage } from '@platform/storage';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { validateSave } from '@core/saveMigrate';
+import type { RunRecord } from '@core/leaderboard';
 import {
   ENVELOPE_ERROR_PREFIX,
   SAVE_ERROR_PREFIX,
@@ -106,8 +107,11 @@ function makeSave(cards: Card[], over: Partial<SaveFile> = {}): SaveFile {
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
       // T7 起 leaderboard 是当前形状的一部分（可选位，migrateSave 为缺席档补 []）：
-      // 夹具带上它，才能让 BK#2/BK#25/BK#26 的 toStrictEqual 逐键断言区分
-      // "归一化补默认"与"丢字段"——否则迁移注入的空榜会被读成往返丢键。
+      // 夹具带上它，才能让**过 migrateSave 的** toStrictEqual 逐键断言区分"归一化补默认"
+      // 与"丢字段"——否则迁移注入的空榜会被读成往返丢键。
+      // 实测口径（T7 fix round 1，评审 M2 变异取证）：去掉本行后失败的**恰是 BK#2 与
+      // BK#25**（两者都拿夹具档与 migrateSave 产物做严格比对）；**BK#26 不依赖它**——
+      // BK#26 的存档来自空存储的种子档（persist 侧自带空榜），压根不经过 migrateSave。
       leaderboard: [],
     },
     meta: { savedAt: NOW, plays: 0 },
@@ -315,6 +319,32 @@ describe('exportBackup ⇄ parseBackup —— 往返无损', () => {
     if (!twice.ok) return;
     expect(twice.save).toStrictEqual(once.save);
     expect(twice.save.settings.battle).toEqual({ defaultPoolSize: 15 });
+  });
+
+  /**
+   * BK#5b（T7 fix round 1，评审 M3）：榜单是本存档里**唯一可为非空的对象数组**，
+   * 此前所有往返夹具的 leaderboard 恒为 []，"非空榜单能否逐行无损过 JSON 往返"
+   * 其实没有覆盖。此处钉两件事：①两行 RunRecord 的九字段逐一保真；
+   * ②**顺序原样保留**（导出/导入都不做 rankRuns 重排——排序是 recordRun 的写入侧职责，
+   * 导入侧若偷偷重排，用户手里的榜单顺序会在换机后变化）。
+   */
+  it('BK#5b 非空榜单往返无损：两行 RunRecord 九字段保真，且顺序不被重排', () => {
+    const rows: RunRecord[] = [
+      // 有意让 at 与 score 都**不**单调：任何"导入时顺手排序"的实现都会露出马脚
+      { id: 'r-a', at: NOW - 3 * DAY, result: 'won', kind: 'boss', domain: '领域A', cards: 15, misses: 4, level: 6, score: 190 },
+      { id: 'r-b', at: NOW - 1 * DAY, result: 'lost', kind: 'encounter', domain: '领域B', cards: 3, misses: 3, level: 1, score: 0 },
+      { id: 'r-c', at: NOW - 5 * DAY, result: 'won', kind: 'encounter', domain: '领域A', cards: 5, misses: 0, level: 2, score: 60 },
+    ];
+    const save = makeSave([makeCard('rt-1')]);
+    save.settings.leaderboard = rows;
+
+    const parsed = parseBackup(exportBackup(save, NOW), NOW);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.save).toStrictEqual(save); // 逐键无损（含榜单行内九个字段）
+    expect(parsed.save.settings.leaderboard).toStrictEqual(rows);
+    expect(parsed.save.settings.leaderboard!.map((r) => r.id)).toEqual(['r-a', 'r-b', 'r-c']);
+    expect(validateSave(parsed.save).ok).toBe(true);
   });
 });
 

@@ -537,22 +537,50 @@ describe('markExported / meta.lastExportedAt —— 7 天备份提醒闭环（R-
     expect(backupReminderDue(snap.meta.lastExportedAt ?? null, clock.now())).toBe(true);
   });
 
-  it('ME#4 非法时刻 fail-closed：不写脏值、不标脏、不毒化整包自检', async () => {
+  it('ME#4 非法时刻 fail-closed：不写脏值、不标脏、不毒化整包自检（含 I1 的 1e300 上界）', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    const seeded = makeSave([makeCard('a1')]);
+    seeded.meta.plays = 1;
+    await raw.save(seeded);
+    const coord = await makeCoord(raw, clock);
+
+    // 非法域三档：非有限 / 负值 / **超上界**。超上界是 T7 评审判 I1 实证的漏网档：
+    // 修复前 markExported(1e300) 会把 1e300 写进权威位 ⇒ 此后 validateSave 整包拒 ⇒
+    // dirty 恒 true、flush() 恒 false、无关改动也永久落不了盘（自检失败无自愈路径）。
+    await coord.markExported(Number.NaN);
+    await coord.markExported(-1);
+    await coord.markExported(Number.POSITIVE_INFINITY);
+    await coord.markExported(1e300);
+    await coord.markExported(8.64e15 + 1); // 越界 1ms 也不得放行（守卫与存储域严格同界）
+    expect(coord.snapshot().meta.lastExportedAt).toBeUndefined();
+    expect('lastExportedAt' in coord.snapshot().meta).toBe(false); // fail-closed：字段根本没被写
+    expect(coord.dirty()).toBe(false);
+    expect(validateSave(coord.snapshot()).ok).toBe(true);
+
+    // I1 的回归证据：非法调用之后，**无关改动照样能落盘**（毒化未发生）
+    await coord.mutate((s) => {
+      s.meta.plays = 99;
+    });
+    expect(await coord.flush()).toBe(true);
+    expect(coord.dirty()).toBe(false);
+    expect((await raw.load())!.meta.plays).toBe(99);
+
+    // 后续合法调用仍能正常工作（脏值没有被写进权威位）
+    await coord.markExported(clock.now());
+    expect(coord.snapshot().meta.lastExportedAt).toBe(NOW);
+  });
+
+  it('ME#6 上界边界：8.64e15 合法可写（与 validateSave 同域），且落盘后能读回', async () => {
     const clock = useFakeClock(NOW);
     const raw = createMemoryStorage();
     await raw.save(makeSave([makeCard('a1')]));
     const coord = await makeCoord(raw, clock);
 
-    await coord.markExported(Number.NaN);
-    await coord.markExported(-1);
-    await coord.markExported(Number.POSITIVE_INFINITY);
-    expect(coord.snapshot().meta.lastExportedAt).toBeUndefined();
+    await coord.markExported(8.64e15); // Date 可表示范围的上界本身：合法
     expect(coord.dirty()).toBe(false);
     expect(validateSave(coord.snapshot()).ok).toBe(true);
-
-    // 后续合法调用仍能正常工作（脏值没有被写进权威位）
-    await coord.markExported(clock.now());
-    expect(coord.snapshot().meta.lastExportedAt).toBe(NOW);
+    expect((await raw.load())!.meta.lastExportedAt).toBe(8.64e15);
   });
 
   it('ME#5 markExported 不碰业务数据：plays/榜单/进度/cards 逐字原样（savedAt 归既有落盘刷新）', async () => {

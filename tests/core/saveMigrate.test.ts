@@ -113,10 +113,18 @@ function legacyProgressSample(): Record<string, unknown> {
   return raw;
 }
 
-/** 双旧形状档：battle 与 progress 皆缺（真实 v2.1 前存档形态）。 */
+/**
+ * 双旧形状档：battle / progress / leaderboard 三项皆缺（真实的 v2.1 前存档形态）。
+ *
+ * leaderboard 也在删除之列（T7 fix round 1，评审 M1）：sample() 派生自 validSave，
+ * 而 validSave 自 T7 起自带 `leaderboard: []`——不删的话"双缺旧档补空榜"那条断言
+ * 恒真（空数组对空数组），覆盖不到真正的注入路径。真实的 T7 前旧档当然也没有榜单。
+ */
 function legacyBothSample(): Record<string, unknown> {
   const raw = legacyProgressSample();
-  delete (raw.settings as Record<string, unknown>).battle;
+  const settings = raw.settings as Record<string, unknown>;
+  delete settings.battle;
+  delete settings.leaderboard;
   return raw;
 }
 

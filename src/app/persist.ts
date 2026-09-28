@@ -50,6 +50,17 @@ export const DEFAULT_MAX_BATCH_MS = 5000;
  */
 const MAX_FLUSH_ROUNDS = 5;
 
+/**
+ * 时间戳上界（Date 可表示范围 ±8.64e15ms），**与 core/saveMigrate.requireTimestamp /
+ * requireNonNegTimestamp 同值同域**——markExported 的守卫必须与落盘自检的域严格一致，
+ * 否则放行的值会在下一次 flush 里让 validateSave 整包拒（I1 的实证教训：1e300 进档后
+ * dirty 恒 true、连无关改动都写不进去）。
+ *
+ * 此处是本地副本而非 import：core 侧该常量尚未导出（R-T6-d 的"不发明新导出面"），
+ * 而 core 文件不在本任务授权面内。域值若变更（几乎不可能），两处需同步——已登记报告。
+ */
+const MAX_TIME_MS = 8.64e15;
+
 /** brief Produces 声明的最小接口；实现返回的对象是其超集（结构兼容，CT#3 钉住）。 */
 export interface Coordinator {
   /** 对权威存档做一次可变更新并标脏；fn 可为 async，mutate 之间串行执行（无交错丢更新）。 */
@@ -436,12 +447,18 @@ export async function createCoordinator(
 
   /**
    * 备份导出时刻的持久位（R-T5-p3-a）：唯一生产写入者是这里。
-   * 消毒 fail-closed：非有限 / 负值直接返回、**不标脏**——写进权威位会让下一次落盘
-   * 自检整包失败（validateSave 严检 meta.lastExportedAt），把无关改动一起拖住；
-   * 而闸门对"缺席"本就 fail-open（提醒照响），代价只是多提醒一次。
+   *
+   * 消毒 fail-closed，且**必须与存储域完全同界**：validateSave 对 meta.lastExportedAt 的
+   * 严检是 `0 ≤ v ≤ MAX_TIME_MS`，故本守卫对 非有限 / 负值 / **超上界** 三档一律直接返回、
+   * 不标脏。缺上界是评审判 I1 的实证缺陷：`markExported(1e300)` 曾把 1e300 写进权威位，
+   * 之后每次落盘自检整包失败 ⇒ dirty 恒 true、`flush()` 恒 false，**无关改动也永久写不进去**
+   * （自检失败不走退避自愈路径）。这正是此处注释自称要防的"毒化整包自检、拖住无关改动"，
+   * 漏掉的恰是上界那一条。而闸门对"缺席"本就 fail-open（提醒照响），代价只是多提醒一次。
    */
   async function markExported(nowMs: number): Promise<void> {
-    if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || nowMs < 0) return;
+    if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || nowMs < 0 || nowMs > MAX_TIME_MS) {
+      return;
+    }
     await mutate((s) => {
       s.meta.lastExportedAt = nowMs;
     });
