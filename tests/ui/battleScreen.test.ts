@@ -326,6 +326,59 @@ describe('mountBattleScreen —— 脉冲式视觉反馈（T4 教训）', () => 
   });
 });
 
+describe('mountBattleScreen —— 新卡伤害提示（终审 J-1）', () => {
+  /** 造一张指定稳定度的卡（本文件的 makeCard 固定 review，故这里单独造）。 */
+  function cardWith(id: string, stability: SRSState['stability']): Card {
+    const base = makeCard(id);
+    return { ...base, srs: { ...base.srs, stability } };
+  }
+
+  it('BS#H1 当前卡是 new 时才挂说明；换到 review 卡即收回（不是一次性开关）', () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const h = setup();
+    const handle = mountBattleScreen(root, h.ctrl, h.deps);
+
+    // 先断言"review 卡不显示"，避免"永远显示"的实现蒙对
+    expect((root.querySelector('[data-ui="new-card-hint"]') as HTMLElement).hidden).toBe(true);
+
+    const pool = [cardWith('n1', 'new'), cardWith('r1', 'review')];
+    const view: FightView = {
+      state: { ...h.ctrl.snapshot().fight!.state, idx: 0, pool: ['n1', 'r1'] },
+      pool,
+      current: pool[0],
+    };
+
+    h.ctrl.push({ ...h.ctrl.snapshot(), fight: view });
+    const hint = root.querySelector('[data-ui="new-card-hint"]') as HTMLElement;
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toContain('一成伤害');
+
+    h.ctrl.push({
+      ...h.ctrl.snapshot(),
+      fight: { ...view, state: { ...view.state, idx: 1 }, current: pool[1] },
+    });
+    expect((root.querySelector('[data-ui="new-card-hint"]') as HTMLElement).hidden).toBe(true);
+    handle.unmount();
+  });
+});
+
+describe('mountBattleScreen —— 退出本局（终审 I-2）', () => {
+  it('BS#Q1 点「退出本局」发一次 toMenu，并把四档锁住（此前 UI 层没有任何生产者）', () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const h = setup();
+    const handle = mountBattleScreen(root, h.ctrl, h.deps);
+
+    const quit = root.querySelector('[data-ui="quit"]') as HTMLButtonElement;
+    expect(quit).not.toBeNull();
+    quit.click();
+    expect(h.ctrl.intents).toEqual([{ type: 'toMenu' }]);
+    expect(btn(root, 'good').disabled).toBe(true);
+    handle.unmount();
+  });
+});
+
 describe('mountBattleScreen —— rAF / resize / destroy', () => {
   it('rAF 的 timestamp 原样作为 tMs 传给 stage.frame；resize 事件转 onResize', () => {
     const hs = setup();

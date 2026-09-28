@@ -59,6 +59,12 @@ export interface ResultHandle {
 const DEFAULT_FLASH_MS = 800;
 const DEFAULT_HOLD_MS = 1200;
 const REVEAL_TEXT = '假的。幸好你没记住它。';
+/**
+ * 败局的一句"下一步"（终审 J-1/J-2：两处必败都没有任何解释与引导）。
+ * 功能轨大白话，只讲机制与动作，不编叙事。
+ */
+const LOSE_HINT =
+  '空转不计伤害，而敌人每回合都会出手。把卡背熟——稳定度从「初识」升到「复习」后，每击伤害会从一成涨到十成，再来打。';
 const CROSS = '✕';
 
 /** 败局演出的状态：第 `idx` 张假记忆是否已打叉，以及是否已走完。 */
@@ -125,6 +131,7 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
     fakeSkipBtn,
   ]);
 
+  const loseHintEl = h('p', { 'data-ui': 'lose-hint', class: 'lose-hint', hidden: true }, LOSE_HINT);
   const beatEl = h('p', { 'data-ui': 'beat', class: 'beat', hidden: true });
   const replayBtn = h('button', { 'data-ui': 'replay', class: 'replay-btn', type: 'button' }, '再来一场') as HTMLButtonElement;
   const menuBtn = h('button', { 'data-ui': 'to-menu', class: 'menu-btn', type: 'button' }, '回菜单') as HTMLButtonElement;
@@ -141,6 +148,7 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
   const screen = h('div', { 'data-ui': 'result-screen', class: 'result-screen' }, [
     summaryEl,
     emptyEl,
+    loseHintEl,
     fakeEl,
     beatEl,
     actionsEl,
@@ -221,6 +229,8 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
         : `等级 ${res.levelAfter}`;
       statsEl.textContent = `出战 ${res.poolLen} 张 · 空转 ${res.misses} 次`;
     }
+    // 败局才有那句"下一步"（胜局不需要劝说）
+    setHidden(loseHintEl, !(res !== null && !res.won));
     renderFake(res !== null && !res.won);
 
     // 只胜局抽碎片（LORE §5.2；败局的叙事面是假记忆演出）

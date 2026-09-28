@@ -41,6 +41,12 @@ const DEFAULT_BANNER_TEXT = '只读模式：存档当前不可写，本局的改
 const MISS_HINT_TEXT = '空转 —— 这题没想起来，怪物纹丝不动';
 /** 战斗中唯一的退出口（终审 I-2：此前拒战只能刷新页面）。文案是功能轨大白话。 */
 const QUIT_TEXT = '退出本局';
+/**
+ * 新卡伤害低到几乎打不动的说明（终审 J-1："首战必败但玩家不知道为什么"）。
+ * 只在当前卡还是 `new` 时挂着——这正是玩家最可能的第一场，也是"苦修"循环的入口；
+ * 一旦背熟（稳定度晋升）它自动消失。文案是功能轨大白话，不编叙事。
+ */
+const NEW_CARD_HINT = '新卡每击只有一成伤害——先把它背熟（稳定度升到「复习」后每击满伤害）。';
 
 /** resize 监听只需要这么点面：够注入假 window，也够真 window 直接喂进来。 */
 export interface BattleScreenWindow {
@@ -118,6 +124,7 @@ export function mountBattleScreen(
   });
   const fxEl = h('div', { 'data-ui': 'fx', class: 'fx' });
   const missEl = h('div', { 'data-ui': 'miss-hint', class: 'miss-hint', hidden: true }, MISS_HINT_TEXT);
+  const newCardHintEl = h('p', { 'data-ui': 'new-card-hint', class: 'new-card-hint', hidden: true }, NEW_CARD_HINT);
   const frontEl = h('div', { 'data-ui': 'card-front', class: 'card-front' });
   const backEl = h('div', { 'data-ui': 'card-back', class: 'card-back', hidden: true });
   // 两段式翻面：先看题面 → 点"看答案" → 再自评。答案因此恒属于**当前这张卡**，
@@ -132,7 +139,7 @@ export function mountBattleScreen(
     revealed = true;
     render(ctrl.snapshot());
   });
-  const cardEl = h('div', { 'data-ui': 'card', class: 'card' }, [frontEl, revealBtn, backEl]);
+  const cardEl = h('div', { 'data-ui': 'card', class: 'card' }, [frontEl, newCardHintEl, revealBtn, backEl]);
 
   const gradeButtons = GRADE_BUTTONS.map((spec) => {
     const b = h(
@@ -246,6 +253,8 @@ export function mountBattleScreen(
     setHidden(backEl, !(mine && revealed));
     if (mine && revealed) backEl.textContent = `答案：${current.back}`;
     setHidden(revealBtn, !(current && !(mine && revealed)));
+    // 新卡提示：跟着当前卡走（换卡即重算），背熟后自然消失
+    setHidden(newCardHintEl, current?.srs?.stability !== 'new');
   }
 
   function render(snap: ControllerSnapshot): void {

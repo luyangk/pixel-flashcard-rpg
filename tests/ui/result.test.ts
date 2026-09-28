@@ -68,6 +68,18 @@ describe('mountResult —— 胜负与成长', () => {
     expect(ui(root, 'level').textContent).toBe('等级 2 → 3（升级！）');
   });
 
+  it('RS#10 败局给"下一步"引导（终审 J-1/J-2：两处必败此前毫无解释），胜局不给', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(snapWith(summary({ won: false, expGained: 0 })));
+    mountResult(root, ctrl, {});
+    const hint = ui(root, 'lose-hint');
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toContain('一成涨到十成'); // 讲清机制：稳定度决定伤害
+
+    ctrl.push(snapWith(summary({ won: true })));
+    expect((root.querySelector('[data-ui="lose-hint"]') as HTMLElement).hidden).toBe(true);
+  });
+
   it('RS#7 败局经验为 0 也照常上屏；lastResult 为 null 时给大白话与回菜单', () => {
     const root = makeRoot();
     const ctrl = makeCtrl(snapWith(summary({ won: false, expGained: 0 })));

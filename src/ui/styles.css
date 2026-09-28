@@ -381,6 +381,18 @@ h1 {
   gap: 0.4rem;
 }
 
+.new-card-hint,
+.lose-hint {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-left: 3px solid var(--neon-cyan);
+  background: rgba(70, 224, 255, 0.08);
+  color: var(--paper);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
 .card-front {
   font-size: 1.05rem;
   line-height: 1.5;
