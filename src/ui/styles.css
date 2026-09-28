@@ -774,3 +774,95 @@ h1 {
 .save-cancel {
   min-height: 2.5rem;
 }
+
+/* ---------------------------------------------------- 战斗屏作答区（Plan 6 · D41） */
+/*
+ * 作答区三态共用一块位置：选项（asking）→ 判定面板（verdict）。样式上要让
+ * ①选项一眼可点、②完整答案比选项更醒目（那才是玩家要读的东西）、③「继续」是唯一的放行口。
+ */
+.answer-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.answer-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* 选项：左对齐、允许多行（长答案会被截断成一行预览，但换行余量留着以防窄屏） */
+.choice-btn {
+  text-align: left;
+  line-height: 1.5;
+  min-height: 2.75rem;
+  padding: 0.6rem 0.8rem;
+  word-break: break-word;
+}
+
+.verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.7rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
+}
+
+.verdict-result {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: 0.05em;
+}
+
+.verdict[data-verdict-kind] .verdict-result {
+  color: var(--paper);
+}
+
+/* 答对用青色、答错用品红——与战斗反馈同一套"对/错"色感（D41 的判定面板） */
+.verdict [data-ui='verdict-result'][data-verdict-kind='right'] {
+  color: var(--neon-cyan);
+}
+
+.verdict [data-ui='verdict-result'][data-verdict-kind='wrong'],
+.verdict [data-ui='verdict-result'][data-verdict-kind='guessed'] {
+  color: var(--neon-magenta);
+}
+
+/* 完整答案：本块最重要的内容，字号与行距都给足（不截断） */
+.answer-full {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.7;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--wash);
+  background: rgba(216, 211, 198, 0.05);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.verdict-missing {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.9rem;
+  color: var(--paper-dim);
+}
+
+.guess-btn {
+  align-self: flex-start;
+  min-height: 2.2rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+  border-color: var(--wash);
+}
+
+.continue-btn {
+  margin-top: 0.2rem;
+  font-size: 1.05rem;
+  padding: 0.9rem;
+  border-color: var(--neon-cyan);
+  background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
+}

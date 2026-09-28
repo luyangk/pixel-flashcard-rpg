@@ -160,6 +160,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
           caf: deps.caf,
           toastMs: deps.toastMs,
           bannerText: deps.readOnlyText,
+          // 选项洗牌的随机源走宿主注入位（Plan 6 · T6）：测试要确定性，生产要每次都变
+          rng: deps.rng,
         });
       }
       case 'result': {

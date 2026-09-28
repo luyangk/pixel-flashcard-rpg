@@ -21,6 +21,9 @@
  * 假记忆演出属 T7。
  */
 import { GRADES, type Grade } from '@core/sm2';
+import { buildChoices, CHOICE_COUNT_DEFAULT, type ChoiceSet } from '@core/choices';
+import type { Rng } from '@core/rng';
+import type { Card } from '@core/types';
 import type { BattleEvent } from '@core/battle';
 import type { FightView } from '../app/battleFlow';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
@@ -29,13 +32,21 @@ import type { StageSprites } from '../stage/renderer';
 import { docOf, h, setHidden } from './dom';
 import { mountBanner, showToast } from './toast';
 
-/** 四档按钮（顺序即屏上顺序）：白话文案 ↔ GRADES 的映射就这一处。 */
-const GRADE_BUTTONS: ReadonlyArray<{ readonly key: string; readonly grade: Grade; readonly label: string }> = [
-  { key: 'again', grade: GRADES.again, label: '忘了' },
-  { key: 'hard', grade: GRADES.hard, label: '想起来了' },
-  { key: 'good', grade: GRADES.good, label: '对了' },
-  { key: 'easy', grade: GRADES.easy, label: '太简单' },
-];
+/**
+ * 作答区的文案（Plan 6 · D41/D42；功能文本轨大白话）。
+ *
+ * **为什么没有四档**：UI 只发 `good`（答对）/ `again`（答错 / 看答案 / 判错）两档 ——
+ * `easy`/`hard` 在界面上不可达（core 的 `GRADES` 与引擎一字未改，四档语义完整保留）。
+ * 这是 D41 登记过的代价：`easy` 的 `interval×1.3` 与 `EF+0.1` 路径随之消失。
+ */
+const RESULT_RIGHT = '答对了';
+const RESULT_WRONG = '答错了';
+/** 点它把这次答对改判为答错（4 选 1 有 25% 蒙对率，不该静默记成"记住了"）。 */
+const GUESS_TEXT = '其实是猜的';
+const GUESSED_TEXT = '答对了（按「猜的」记 —— 这次记为答错）';
+const CONTINUE_TEXT = '继续';
+const NO_CHOICE_HINT = '这个领域只有这一张卡，凑不出选项——先看答案吧。';
+const ANSWER_PREFIX = '答案：';
 
 const DEFAULT_BANNER_TEXT = '只读模式：存档当前不可写，本局的改动不会保存';
 const MISS_HINT_TEXT = '空转 —— 这题没想起来，怪物纹丝不动';
@@ -79,6 +90,12 @@ export interface BattleScreenDeps {
   readonly toastMs?: number;
   /** 只读横幅文案覆盖位。 */
   readonly bannerText?: string;
+  /**
+   * 选项洗牌的随机源（Plan 6 · D41）。缺省用 `Math.random`：UI 层不在分层守卫的范围内
+   * （`src/core`/`src/app` 才受限），而**正确项的位置必须每次都不同**——固定顺序会让
+   * 玩家记住"永远选第三个"。测试注入 `mulberry32` 以断言确定性。
+   */
+  readonly rng?: Rng;
 }
 
 /** 挂载句柄：unmount/destroy 同一件事（unmount 是 brief 的对外名，destroy 是行文习惯）。 */
@@ -132,7 +149,6 @@ export function mountBattleScreen(
   const newCardHintEl = h('p', { 'data-ui': 'new-card-hint', class: 'new-card-hint', hidden: true }, NEW_CARD_HINT);
   const tutorialHintEl = h('p', { 'data-ui': 'tutorial-hint', class: 'new-card-hint', hidden: true }, TUTORIAL_HINT);
   const frontEl = h('div', { 'data-ui': 'card-front', class: 'card-front' });
-  const backEl = h('div', { 'data-ui': 'card-back', class: 'card-back', hidden: true });
   // 两段式翻面：先看题面 → 点"看答案" → 再自评。答案因此恒属于**当前这张卡**，
   // 不会把上一张卡的 back 挂在下一张卡的 front 上（评审 Important 的修复面）。
   const revealBtn = h(
@@ -140,23 +156,42 @@ export function mountBattleScreen(
     { 'data-ui': 'reveal', class: 'reveal-btn', type: 'button' },
     REVEAL_TEXT
   ) as HTMLButtonElement;
-  revealBtn.addEventListener('click', () => {
-    if (destroyed || !canAnswer(ctrl.snapshot())) return;
-    revealed = true;
-    render(ctrl.snapshot());
-  });
-  const cardEl = h('div', { 'data-ui': 'card', class: 'card' }, [frontEl, newCardHintEl, revealBtn, backEl]);
+  revealBtn.addEventListener('click', () => onReveal());
+  const cardEl = h('div', { 'data-ui': 'card', class: 'card' }, [frontEl, newCardHintEl, revealBtn]);
 
-  const gradeButtons = GRADE_BUTTONS.map((spec) => {
-    const b = h(
-      'button',
-      { 'data-grade': spec.key, class: 'grade-btn', type: 'button' },
-      spec.label
-    ) as HTMLButtonElement;
-    b.addEventListener('click', () => onGrade(spec));
-    return b;
-  });
-  const gradesEl = h('div', { 'data-ui': 'grades', class: 'grades' }, gradeButtons);
+  /* -------- 作答区（Plan 6）：选项 → 判定面板（完整答案）→ 继续 -------- */
+  const choicesEl = h('div', { 'data-ui': 'answer-choices', class: 'answer-choices' });
+  const noChoiceHintEl = h(
+    'p',
+    { 'data-ui': 'no-choice-hint', class: 'field-hint', hidden: true },
+    NO_CHOICE_HINT
+  );
+  const verdictResultEl = h('p', { 'data-ui': 'verdict-result', class: 'verdict-result' });
+  const verdictReasonEl = h('p', { 'data-ui': 'verdict-reason', class: 'field-hint', hidden: true });
+  const verdictMissingEl = h('ul', { 'data-ui': 'verdict-missing', class: 'verdict-missing', hidden: true });
+  // 完整答案：**不截断**（选项里是预览，这里是玩家真正要读的那份）
+  const answerFullEl = h('p', { 'data-ui': 'answer-full', class: 'answer-full' });
+  const guessBtn = h('button', { 'data-ui': 'verdict-guess', class: 'guess-btn', type: 'button' }, GUESS_TEXT) as HTMLButtonElement;
+  guessBtn.addEventListener('click', () => onGuess());
+  const continueBtn = h(
+    'button',
+    { 'data-ui': 'verdict-continue', class: 'continue-btn', type: 'button' },
+    CONTINUE_TEXT
+  ) as HTMLButtonElement;
+  continueBtn.addEventListener('click', () => onContinue());
+  const verdictEl = h('div', { 'data-ui': 'verdict', class: 'verdict', hidden: true }, [
+    verdictResultEl,
+    verdictReasonEl,
+    verdictMissingEl,
+    answerFullEl,
+    guessBtn,
+    continueBtn,
+  ]);
+  const answerEl = h('div', { 'data-ui': 'answer-area', class: 'answer-area' }, [
+    choicesEl,
+    noChoiceHintEl,
+    verdictEl,
+  ]);
   // 退出本局：控制器早就有 toMenu（未终局不落账）——此前 UI 层没有任何生产者，
   // 玩家误选领域后只能刷新页面（终审 I-2）。这里补齐这个生产者。
   const quitBtn = h('button', { 'data-ui': 'quit', class: 'quit-btn', type: 'button' }, QUIT_TEXT) as HTMLButtonElement;
@@ -179,7 +214,7 @@ export function mountBattleScreen(
     fxEl,
     missEl,
     cardEl,
-    gradesEl,
+    answerEl,
   ]);
   root.appendChild(screen);
 
@@ -219,14 +254,32 @@ export function mountBattleScreen(
     frameHandle = !destroyed && raf ? raf(loop) : null;
   };
 
+  /** 选项洗牌的随机源（缺省 Math.random：位置必须每次都变，见 BattleScreenDeps.rng）。 */
+  const pickRng: Rng = deps.rng ?? (() => Math.random());
+
   /* ------------------------------------------------------------ 渲染与脉冲 */
   let primed = false; // 首帧只对齐：挂载时已有的历史战报不重放（T4 FX_UNPRIMED 同口径）
   let seenLogLen = 0;
 
   /** 当前显示的是哪张卡：换卡即重置翻面态（答案永远只属于它自己那张 front）。 */
   let shownCardId: string | null = null;
-  /** 本卡是否已翻面（两段式：看答案 → 自评）。 */
-  let revealed = false;
+  /**
+   * 作答区状态机（Plan 6 · D41）：`asking` 出选项/看答案 → `verdict` 展示对错与**完整答案**
+   * → 玩家点「继续」才派发 `answer` intent。
+   *
+   * **为什么"继续"要单独一步**：判定与派发分开，才能保证"答案一定先于结算出现在屏上"。
+   * 点完选项就派发的话，快照会立刻推进到下一张卡，玩家可能一眼都没看到那张卡的答案
+   * ——而"看到答案"正是复习真正发生的地方。
+   */
+  let phase: 'asking' | 'verdict' = 'asking';
+  /** 判定面板上「继续」要派发的档位（null = 尚未作答）。 */
+  let pendingGrade: Grade | null = null;
+  /** 判定面板的内容（对错 / 理由 / 缺失要点 / 是否已被「其实是猜的」改判）。 */
+  let verdict: { kind: 'right' | 'wrong'; reason: string; missing: readonly string[]; guessed: boolean } | null = null;
+  /** 当前卡的选项（`null` = 凑不出干扰项 ⇒ 回落看答案）。 */
+  let choices: ChoiceSet | null = null;
+  /** 选项按哪张卡算的（换卡即重算；同一张卡内不重算，避免快照重放时选项乱跳）。 */
+  let choicesFor: string | null = null;
   let fightPool: readonly string[] | null = null;
   let lastNotice: string | null = null;
   let bannerOff: (() => void) | null = null;
@@ -249,35 +302,123 @@ export function mountBattleScreen(
     return fresh;
   }
 
-  /** 卡面渲染：**只画当前这张卡**——front 常显，back 仅在玩家翻面后显示。 */
+  /** 卡面渲染：**只画当前这张卡**——front 常显，answer 区随作答状态切换。 */
   function renderCard(snap: ControllerSnapshot): void {
     const fight = snap.fight;
     const current = fight?.current ?? null;
     frontEl.textContent = current ? current.front : fight ? '本局结束' : '未在战斗中';
-    // 翻面属于"当前这张卡"的状态：换卡即收回答案（T5 首版用 lastGraded 把上一张卡的
-    // back 挂在下一张卡的 front 上，真实同步快照链路上整局错配——评审 Important）。
-    const mine = current !== null && shownCardId === current.id;
-    setHidden(backEl, !(mine && revealed));
-    if (mine && revealed) backEl.textContent = `答案：${current.back}`;
-    setHidden(revealBtn, !(current && !(mine && revealed)));
+    // 答案的可见性**完全由判定面板负责**（Plan 6 起不再用一张独立的 back 块：
+    // 作答之后对错与完整答案要在同一处一起给）——`card` 里只剩正面与提示。
+    // 「直接看答案」只在"还没作答"时出现
+    setHidden(revealBtn, !(current !== null && phase === 'asking' && canAnswer(snap)));
     // 新卡提示：跟着当前卡走（换卡即重算），背熟后自然消失
     setHidden(newCardHintEl, current?.srs?.stability !== 'new');
   }
 
+  /**
+   * 给当前卡算选项（Plan 6 · D41 的三级来源）：
+   * ① 卡上自带的 `choices`（模型在生成这张卡时产出）→ ② 本局池里其他卡的背面与它们自带的选项
+   * → ③ 本局池不够时用**同领域**其他卡补。凑不出 ⇒ `null`，由 UI 回落「看答案」并说明原因。
+   *
+   * 只在**换卡时**算一次（`choicesFor`）：同一张卡内重复计算会让选项在每次快照重放时重新洗牌，
+   * 玩家刚看清的第二个选项下一帧就变了位置。
+   */
+  function ensureChoices(snap: ControllerSnapshot): void {
+    const current = snap.fight?.current ?? null;
+    if (current === null) {
+      choices = null;
+      choicesFor = null;
+      return;
+    }
+    if (choicesFor === current.id) return;
+    choicesFor = current.id;
+    const others = (snap.fight?.pool ?? []).filter((c) => c && c.id !== current.id);
+    const sameDeck = (snap.save?.cards ?? []).filter(
+      (c) => c && c.id !== current.id && c.deckId === current.deckId,
+    );
+    const poolTexts: string[] = [];
+    for (const c of [...others, ...sameDeck]) {
+      if (typeof c.back === 'string') poolTexts.push(c.back);
+      for (const extra of c.choices ?? []) poolTexts.push(extra);
+    }
+    choices = buildChoices({
+      answer: current.back,
+      stored: current.choices,
+      pool: poolTexts,
+      count: CHOICE_COUNT_DEFAULT,
+      rng: pickRng,
+    });
+  }
+
+  /** 选项按钮：按当前 `choices` 重建（数量少、内容短，直接 replaceChildren 最省心）。 */
+  function renderChoices(snap: ControllerSnapshot): void {
+    const asking = phase === 'asking' && canAnswer(snap);
+    const show = asking && choices !== null;
+    choicesEl.replaceChildren();
+    if (show && choices) {
+      choices.options.forEach((_option, i) => {
+        const b = h(
+          'button',
+          { 'data-choice': String(i), class: 'choice-btn', type: 'button' },
+          // 屏上是**截断预览**（完整答案在判定面板里）：长答案的四个选项会把舞台挤没
+          choices?.labels[i] ?? '',
+        ) as HTMLButtonElement;
+        b.addEventListener('click', () => onChoice(i));
+        choicesEl.appendChild(b);
+      });
+    }
+    setHidden(choicesEl, !show);
+    // 凑不出干扰项的情形必须说明原因（不静默把选择题变成"只能看答案"）
+    setHidden(noChoiceHintEl, !(asking && choices === null && (snap.fight?.current ?? null) !== null));
+  }
+
+  /** 判定面板：对错 + （问答模式的）理由与缺失要点 + **完整答案** + 继续/其实是猜的。 */
+  function renderVerdict(snap: ControllerSnapshot): void {
+    const current = snap.fight?.current ?? null;
+    const inVerdict = phase === 'verdict' && verdict !== null;
+    setHidden(verdictEl, !inVerdict);
+    if (!inVerdict || !verdict) {
+      // 不在判定态时把两个按钮都收起来：留着「其实是猜的」在屏上，
+      // 下一张卡作答时会变成一颗"看着能点、点了却什么也不发生"的按钮。
+      setHidden(guessBtn, true);
+      guessBtn.disabled = false;
+      continueBtn.disabled = true;
+      return;
+    }
+    verdictResultEl.textContent = verdict.guessed
+      ? GUESSED_TEXT
+      : verdict.kind === 'right'
+        ? RESULT_RIGHT
+        : RESULT_WRONG;
+    verdictResultEl.setAttribute('data-verdict-kind', verdict.guessed ? 'guessed' : verdict.kind);
+    setHidden(verdictReasonEl, verdict.reason.length === 0);
+    verdictReasonEl.textContent = verdict.reason;
+    verdictMissingEl.replaceChildren();
+    for (const item of verdict.missing) {
+      verdictMissingEl.appendChild(h('li', { class: 'verdict-missing-item' }, item));
+    }
+    setHidden(verdictMissingEl, verdict.missing.length === 0);
+    answerFullEl.textContent = current ? `${ANSWER_PREFIX}${current.back}` : '';
+    // 「其实是猜的」只在"答对了且还没改判"时可用（答错了没有可改的东西）
+    setHidden(guessBtn, verdict.guessed || verdict.kind !== 'right');
+    continueBtn.disabled = pending;
+  }
+
   function render(snap: ControllerSnapshot): void {
     const fight = snap.fight;
-    // 换局（池子对象变了）就把翻面态收掉；fight 清空时也收。
+    // 换局（池子对象变了）就把作答态收掉；fight 清空时也收。
     if ((fight?.state.pool ?? null) !== fightPool) {
       fightPool = fight?.state.pool ?? null;
       shownCardId = null;
-      revealed = false;
+      resetAnswer();
     }
-    // 换卡（idx 前进）⇒ 新卡从"未翻面"开始：答案永远只属于它自己那张 front。
+    // 换卡（idx 前进）⇒ 新卡从"未作答"开始：答案与判定永远只属于它自己那张 front。
     const currentId = fight?.current?.id ?? null;
     if (currentId !== shownCardId) {
       shownCardId = currentId;
-      revealed = false;
+      resetAnswer();
     }
+    ensureChoices(snap);
 
     // 教学局提示：按本局难度档显隐（快照驱动，不做一次性开关）
     setHidden(tutorialHintEl, fight?.difficulty !== 'tutorial');
@@ -321,39 +462,96 @@ export function mountBattleScreen(
       lastNotice = null;
     }
 
-    // 两段式：未翻面不给评分（否则玩家在看不到答案的情况下自评，等同盲打分）。
-    setEnabled(!pending && canAnswer(snap) && revealed);
+    renderChoices(snap);
+    renderVerdict(snap);
   }
 
+  /** 换卡/换局：把作答区收回"未作答"（判定面板、待发档位、猜的标记都清掉）。 */
+  function resetAnswer(): void {
+    phase = 'asking';
+    pendingGrade = null;
+    verdict = null;
+    // choices 不在这里清：ensureChoices 会按新卡 id 重算（清掉反而让"同卡重放"多算一次）
+  }
+
+  /** 锁/解锁作答区（选项、继续、看答案三处一起管）。 */
   function setEnabled(on: boolean): void {
-    for (const b of gradeButtons) b.disabled = !on;
+    for (const b of Array.from(choicesEl.querySelectorAll('button'))) {
+      (b as HTMLButtonElement).disabled = !on;
+    }
+    continueBtn.disabled = !on;
+    revealBtn.disabled = !on;
   }
 
   /* ------------------------------------------------------------ 防连点（UI 层） */
   let pending = false;
   let snapshotAtClick: ControllerSnapshot | null = null;
 
-  function onGrade(spec: { readonly grade: Grade; readonly key: string }): void {
-    if (destroyed || pending) return;
+  /**
+   * 进入判定面板：记下待发档位与对错内容，**先让玩家看到完整答案**，再由「继续」放行。
+   * `reason` / `missing` 留给问答模式（Plan 6 · T7）；选择题与看答案都是空。
+   */
+  function enterVerdict(grade: Grade, info: { reason?: string; missing?: readonly string[] } = {}): void {
     const snap = ctrl.snapshot();
     if (!canAnswer(snap)) return;
+    phase = 'verdict';
+    pendingGrade = grade;
+    verdict = {
+      kind: grade >= GRADES.good ? 'right' : 'wrong',
+      reason: info.reason ?? '',
+      missing: info.missing ?? [],
+      guessed: false,
+    };
+    render(snap);
+  }
 
-    // ① 立刻锁住四档；记下点击时的快照对象，只有"新对象"能解禁（重放不解禁）。
+  /** 点选项：对 ⇒ good、错 ⇒ again（D41；没有第三档）。 */
+  function onChoice(index: number): void {
+    if (destroyed || pending || phase !== 'asking' || !choices) return;
+    const grade = index === choices.correctIndex ? GRADES.good : GRADES.again;
+    enterVerdict(grade);
+  }
+
+  /** 「直接看答案」：跳过作答，**记为答错**（D41：没回忆就记正分等于把自评时代的漏洞留着）。 */
+  function onReveal(): void {
+    if (destroyed || pending || phase !== 'asking') return;
+    if (!canAnswer(ctrl.snapshot())) return;
+    enterVerdict(GRADES.again);
+  }
+
+  /** 「其实是猜的」：把这次答对改判为答错（默认不用点，只有靠蒙的时候才多点一下）。 */
+  function onGuess(): void {
+    if (destroyed || pending || !verdict || verdict.kind !== 'right' || verdict.guessed) return;
+    verdict = { ...verdict, guessed: true };
+    pendingGrade = GRADES.again;
+    render(ctrl.snapshot());
+  }
+
+  /** 「继续」：把作答真正派发出去（判定面板是唯一的派发口）。 */
+  function onContinue(): void {
+    if (destroyed || pending || phase !== 'verdict' || pendingGrade === null) return;
+    const snap = ctrl.snapshot();
+    if (!canAnswer(snap)) return;
+    const grade = pendingGrade;
+
+    // ① 立刻锁住作答区；记下点击时的快照对象，只有"新对象"能解禁（重放不解禁）。
     pending = true;
     snapshotAtClick = snap;
     setEnabled(false);
-    // ② 作答后本卡保持"已翻面"，直到新快照带来下一张卡（render 内按 id 重置）。
-    revealed = true;
+    verdict = null; // 面板收起，避免在 intent 返回前被再点一次「继续」
+    phase = 'asking';
+    pendingGrade = null;
     renderCard(snap);
+    renderVerdict(snap);
 
     const unlock = (): void => {
       if (destroyed) return;
       pending = false;
-      setEnabled(canAnswer(ctrl.snapshot()) && revealed);
+      setEnabled(canAnswer(ctrl.snapshot()));
     };
 
     try {
-      const res = ctrl.intent({ type: 'answer', grade: spec.grade });
+      const res = ctrl.intent({ type: 'answer', grade });
       // intent 抛错/被拒也要解禁，否则一次失败就把屏幕冻死（controller 侧 phase 守卫仍是第二层）。
       void Promise.resolve(res).catch(unlock);
     } catch {

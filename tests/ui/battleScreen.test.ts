@@ -20,6 +20,7 @@ import type { FightView } from '../../src/app/battleFlow';
 import type { ControllerSnapshot, GameController, GameIntent } from '../../src/app/controllerTypes';
 import type { BattleStage, BattleStageDeps } from '../../src/stage/battleStage';
 import type { StageSprites } from '../../src/stage/renderer';
+import { mulberry32 } from '@core/rng';
 import { mountBattleScreen, type BattleScreenDeps } from '../../src/ui/battleScreen';
 
 /* ------------------------------------------------------------------ 夹具 */
@@ -130,7 +131,7 @@ interface Harness {
   readonly deps: BattleScreenDeps;
 }
 
-function setup(stageSprites: StageSprites = {} as StageSprites): Harness {
+function setup(stageSprites: StageSprites = {} as StageSprites, extra: Partial<BattleScreenDeps> = {}): Harness {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const ctrl = makeCtrl();
@@ -150,6 +151,8 @@ function setup(stageSprites: StageSprites = {} as StageSprites): Harness {
   const addListener = vi.fn(window.addEventListener.bind(window));
   const deps: BattleScreenDeps = {
     sprites: stageSprites,
+    // 选项洗牌用注入的确定性 rng（core/choices 只用注入的随机源；UI 的默认值见生产代码）
+    rng: mulberry32(7),
     raf,
     caf,
     mountStage: (_host: HTMLElement, _d: BattleStageDeps) => stage,
@@ -159,6 +162,7 @@ function setup(stageSprites: StageSprites = {} as StageSprites): Harness {
       addEventListener: addListener as unknown as Window['addEventListener'],
       removeEventListener: removeListener as unknown as Window['removeEventListener'],
     },
+    ...extra,
   };
   return {
     root,
@@ -188,6 +192,34 @@ const reveal = (root: HTMLElement): void => {
   if (!el) throw new Error('missing reveal button');
   el.click();
 };
+/** Plan 6：作答区新辅助 —— 选项按钮、继续按钮、「其实是猜的」。 */
+const choiceBtns = (root: HTMLElement): HTMLButtonElement[] =>
+  Array.from(root.querySelectorAll<HTMLButtonElement>('button[data-choice]'));
+const choiceByLabel = (root: HTMLElement, label: string): HTMLButtonElement => {
+  const el = choiceBtns(root).find((b) => (b.textContent ?? '') === label);
+  if (!el) throw new Error(`没有这个选项：${label}`);
+  return el;
+};
+/**
+ * 当前卡的正确/错误选项标签。
+ *
+ * 夹具的背面形如 `a-cN`，而 `makeCard` 的 front/back 同源 ⇒ **正确项就是当前卡的 back**。
+ * （首版用 `/^a-/` 猜"正确项"，但池里每张卡的背面都以 `a-` 开头 ⇒ 猜到了干扰项上，
+ * BS#A2 因此假红——教训：判"哪个是对的"必须来自被测对象自身的数据，不能靠形状猜。）
+ */
+const correctLabelFor = (card: Card): string => card.back;
+const wrongLabelFor = (root: HTMLElement, card: Card): string => {
+  const labels = choiceBtns(root).map((b) => b.textContent ?? '');
+  const wrong = labels.find((l) => l !== card.back);
+  if (!wrong) throw new Error(`选项里没有干扰项：${labels.join('/')}`);
+  return wrong;
+};
+const verdictBtn = (root: HTMLElement, ui: string): HTMLButtonElement => {
+  const el = root.querySelector<HTMLButtonElement>(`[data-ui="${ui}"]`);
+  if (!el) throw new Error(`missing ${ui}`);
+  return el;
+};
+
 const hidden = (root: HTMLElement, ui: string): boolean =>
   root.querySelector(`[data-ui="${ui}"]`)!.hasAttribute('hidden');
 const text = (root: HTMLElement, ui: string): string =>
@@ -195,46 +227,50 @@ const text = (root: HTMLElement, ui: string): string =>
 
 /* ------------------------------------------------------------------ 用例 */
 
-describe('mountBattleScreen —— 结构与四档按钮', () => {
-  it('挂载后四档按钮齐全，档位映射到 GRADES，卡面只显 front', () => {
+/**
+ * 结构与作答区（Plan 6 · T6 把这一组从"四档自评"**逐条重述**到"选项 → 判定面板 → 继续"，
+ * 而不是删掉：这里每一条原本守着的是"作答必须经手玩家、且看不到答案不能打分"，
+ * 新形态下这些性质仍然必须成立）。
+ */
+describe('mountBattleScreen —— 结构与作答区', () => {
+  it('挂载后选项齐全（含正确答案）、「直接看答案」在、卡面只显 front', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
 
-    expect(grades(hs.root)).toHaveLength(4);
-    expect(btn(hs.root, 'again').textContent).toBe('忘了');
-    expect(btn(hs.root, 'hard').textContent).toBe('想起来了');
-    expect(btn(hs.root, 'good').textContent).toBe('对了');
-    expect(btn(hs.root, 'easy').textContent).toBe('太简单');
-
+    const labels = choiceBtns(hs.root).map((b) => b.textContent ?? '');
+    expect(labels).toHaveLength(3); // 夹具池 3 张：1 正确 + 2 干扰
+    expect(labels).toContain('a-c1');
     expect(text(hs.root, 'card-front')).toContain('q-c1');
-    expect(hidden(hs.root, 'card-back')).toBe(true); // 作答前不显背面
+    expect(hidden(hs.root, 'verdict')).toBe(true); // 未作答不显判定面板
     expect(hs.root.querySelector('[data-ui="stage-host"]')).not.toBeNull();
     expect(hs.root.querySelector('[data-ui="fx"]')).not.toBeNull(); // 回击飘字容器
+    // 四档自评**已按 D41 下线**：界面上不再有 data-grade
+    expect(hs.root.querySelectorAll('[data-grade]')).toHaveLength(0);
   });
 
-  it('点击 good 恰发一次 answer intent（grade=GRADES.good），四档立即 disabled', () => {
+  it('点正确选项 → 判定面板；「继续」恰发一次 answer intent（grade=good），期间选项立即 disabled', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
+    const answer = 'a-c1';
 
-    reveal(hs.root);
-    btn(hs.root, 'good').click();
+    choiceByLabel(hs.root, answer).click();
+    expect(hs.ctrl.intents).toHaveLength(0); // 判定面板先给答案，不派发
+    verdictBtn(hs.root, 'verdict-continue').click();
 
     expect(hs.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.good }]);
-    expect(grades(hs.root).every((b) => b.disabled)).toBe(true);
-    // 作答后背面出现（自评流程的"确认答案"）
-    expect(hidden(hs.root, 'card-back')).toBe(false);
-    expect(text(hs.root, 'card-back')).toContain('a-c1');
+    expect(verdictBtn(hs.root, 'verdict-continue').disabled).toBe(true); // 防连点
   });
 
-  it('pending 期间第二档点击被吞掉（不产生第二个 intent）', () => {
+  it('pending 期间第二次点「继续」被吞掉（不产生第二个 intent）', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
 
     reveal(hs.root);
-    btn(hs.root, 'easy').click();
-    btn(hs.root, 'again').click();
+    const cont = verdictBtn(hs.root, 'verdict-continue');
+    cont.click();
+    cont.click();
 
-    expect(hs.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.easy }]);
+    expect(hs.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
   });
 
   it('同一快照重放不解禁；新快照到达才解禁', () => {
@@ -243,27 +279,26 @@ describe('mountBattleScreen —— 结构与四档按钮', () => {
     const same = hs.ctrl.snapshot();
 
     reveal(hs.root);
-    btn(hs.root, 'good').click();
+    verdictBtn(hs.root, 'verdict-continue').click();
     hs.ctrl.push(same); // 旧对象重放：不是"新快照"
-    expect(btn(hs.root, 'good').disabled).toBe(true);
+    expect(verdictBtn(hs.root, 'verdict-continue').disabled).toBe(true);
 
     hs.ctrl.push(makeSnap({ fight: makeFight(1, [{ kind: 'damage', cardId: 'c1', amount: 12 }]) }));
     expect(text(hs.root, 'card-front')).toContain('q-c2');
-    // 换了卡就必须重新翻面：新卡未看答案前不给评分（两段式语义）
-    expect(grades(hs.root).every((b) => b.disabled)).toBe(true);
-    reveal(hs.root);
-    expect(grades(hs.root).every((b) => !b.disabled)).toBe(true);
+    // 换了卡就必须重新作答：新卡的判定面板收起、选项重新出现且可用
+    expect(hidden(hs.root, 'verdict')).toBe(true);
+    expect(choiceBtns(hs.root).every((b) => !b.disabled)).toBe(true);
   });
 
-  it('终局快照（非 answering）不解禁答题按钮', () => {
+  it('终局快照（非 answering）不解禁作答区', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
 
     reveal(hs.root);
-    btn(hs.root, 'good').click();
     hs.ctrl.push(makeSnap({ fight: makeFight(0, [{ kind: 'end' }], 'won') }));
 
-    expect(grades(hs.root).every((b) => b.disabled)).toBe(true);
+    expect(choiceBtns(hs.root).every((b) => b.disabled)).toBe(true);
+    expect(verdictBtn(hs.root, 'verdict-continue').disabled).toBe(true);
   });
 });
 
@@ -389,7 +424,7 @@ describe('mountBattleScreen —— 教学局提示（Plan 5 数值改进）', ()
 });
 
 describe('mountBattleScreen —— 退出本局（终审 I-2）', () => {
-  it('BS#Q1 点「退出本局」发一次 toMenu，并把四档锁住（此前 UI 层没有任何生产者）', () => {
+  it('BS#Q1 点「退出本局」发一次 toMenu，并把作答区锁住（此前 UI 层没有任何生产者）', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
     const h = setup();
@@ -399,7 +434,10 @@ describe('mountBattleScreen —— 退出本局（终审 I-2）', () => {
     expect(quit).not.toBeNull();
     quit.click();
     expect(h.ctrl.intents).toEqual([{ type: 'toMenu' }]);
-    expect(btn(root, 'good').disabled).toBe(true);
+    // 退出后作答区全锁：选项、看答案、「继续」都不该再能派发
+    expect(choiceBtns(root).every((b) => b.disabled)).toBe(true);
+    expect((root.querySelector('[data-ui="reveal"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((root.querySelector('[data-ui="verdict-continue"]') as HTMLButtonElement).disabled).toBe(true);
     handle.unmount();
   });
 });
@@ -448,15 +486,19 @@ describe('mountBattleScreen —— rAF / resize / destroy', () => {
 
 /* --------------------------------------------------- T5 评审 Important 回归钉 */
 describe('mountBattleScreen —— 答案归属（跨卡错配的回归钉）', () => {
-  it('R#1 未翻面时四档禁用：看不到答案就无法自评（两段式的机器保证）', () => {
+  it('R#1 未作答时没有任何"提交档位"的路径：选项是唯一的作答入口，且未作答时「继续」不可用', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
-    expect(grades(hs.root).every((b) => b.disabled)).toBe(true);
-    expect(hidden(hs.root, 'card-back')).toBe(true);
+    // 新形态下"看不到答案就打分"这条缝被结构性堵死：档位只能由「选项」或「看答案」产生，
+    // 而两者都会先把判定面板（含完整答案）摆出来。
+    expect(hidden(hs.root, 'verdict')).toBe(true);
+    expect(verdictBtn(hs.root, 'verdict-continue').disabled).toBe(true);
+    expect(hs.ctrl.intents).toHaveLength(0);
+
     reveal(hs.root);
-    expect(grades(hs.root).every((b) => !b.disabled)).toBe(true);
-    expect(hidden(hs.root, 'card-back')).toBe(false);
-    expect(text(hs.root, 'card-back')).toContain('a-c1');
+    expect(hidden(hs.root, 'verdict')).toBe(false);
+    expect(text(hs.root, 'answer-full')).toContain('a-c1');
+    expect(verdictBtn(hs.root, 'verdict-continue').disabled).toBe(false);
   });
 
   it('R#2 作答后新快照换卡（**同一 pool 引用**）：答案立刻收回，绝不把上一张的 back 挂在新 front 上', () => {
@@ -468,9 +510,9 @@ describe('mountBattleScreen —— 答案归属（跨卡错配的回归钉）', 
     const f0 = makeFight(0, []);
     hs.ctrl.push(makeSnap({ fight: f0 }));
     reveal(hs.root);
-    expect(text(hs.root, 'card-back')).toContain('a-c1');
+    expect(text(hs.root, 'answer-full')).toContain('a-c1');
 
-    btn(hs.root, 'good').click();
+    verdictBtn(hs.root, 'verdict-continue').click();
     const f1: FightView = {
       ...f0,
       state: { ...f0.state, idx: 1, log: [{ kind: 'damage', cardId: 'c1', amount: 12 }] },
@@ -479,16 +521,156 @@ describe('mountBattleScreen —— 答案归属（跨卡错配的回归钉）', 
     hs.ctrl.push(makeSnap({ fight: f1 }));
 
     expect(text(hs.root, 'card-front')).toContain('q-c2');
-    expect(hidden(hs.root, 'card-back')).toBe(true); // 旧实现：这里仍显示「答案：a-c1」
+    // 旧答案必须随卡一起收回（旧实现：这里仍显示「答案：a-c1」）
+    expect(hidden(hs.root, 'verdict')).toBe(true);
   });
 
-  it('R#3 同一张卡内翻面状态稳定：快照重放不会把答案收回（只按卡 id 重置）', () => {
+  it('R#3 同一张卡内状态稳定：快照重放不会把判定面板收回（只按卡 id 重置）', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
     reveal(hs.root);
     const same = hs.ctrl.snapshot();
     hs.ctrl.push(same); // 重放同一快照对象
-    expect(hidden(hs.root, 'card-back')).toBe(false);
-    expect(text(hs.root, 'card-back')).toContain('a-c1');
+    expect(hidden(hs.root, 'verdict')).toBe(false);
+    expect(text(hs.root, 'answer-full')).toContain('a-c1');
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T6 */
+
+/**
+ * 选择题作答 + 判定面板（Plan 6 · T6 / D41）。
+ *
+ * 判别力：
+ * - BS#A2 **作答之后先展开完整答案，再放行「继续」**：点完选项就派发 intent 的实现必红
+ *   （那就回到"看到答案之前已经判分"的老问题）；
+ * - BS#A3 「继续」才派发，档位是 `good`/`again` **两档**（UI 只发两档是 D41 的口径）；
+ * - BS#A6 干扰项凑不出（领域只有一张卡）⇒ 不出选项、回落看答案并说明原因；
+ * - BS#A7 答对后点「其实是猜的」⇒ 派发的是 `again`（4 选 1 有 25% 蒙对率，不该静默算记住）；
+ * - BS#A8 换卡即清干净（判定面板/选项/猜按钮都不会残留上一张的状态）。
+ */
+describe('mountBattleScreen —— 选择题与判定面板（Plan 6 · T6）', () => {
+  it('BS#A1 出选项：当前卡的正确背面是其中一个选项，另有两个来自本局池', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    const labels = choiceBtns(h.root).map((b) => b.textContent ?? '');
+    expect(labels).toHaveLength(3); // 夹具池 3 张卡：1 正确 + 2 干扰
+    expect(labels).toContain('a-c1'); // 当前卡（idx=0）的背面
+    expect(labels).toContain('a-c2');
+    expect(labels).toContain('a-c3');
+    expect(hidden(h.root, 'verdict')).toBe(true); // 未作答不显示判定面板
+  });
+
+  it('BS#A2 点选项：先展开完整答案与对错，**此时不派发 intent**', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    choiceByLabel(h.root, correctLabelFor(makeCard('c1'))).click();
+
+    expect(h.ctrl.intents).toHaveLength(0); // ← 关键：还没放行
+    expect(hidden(h.root, 'verdict')).toBe(false);
+    expect(text(h.root, 'verdict-result')).toBe('答对了');
+    expect(text(h.root, 'answer-full')).toContain('a-c1'); // 完整答案
+    expect(choiceBtns(h.root)).toHaveLength(0); // 选项收起（避免误触第二下）
+  });
+
+  it('BS#A3 点「继续」才派发，且档位只有 good / again 两档', () => {
+    const right = setup();
+    mountBattleScreen(right.root, right.ctrl, right.deps);
+    choiceByLabel(right.root, correctLabelFor(makeCard('c1'))).click();
+    verdictBtn(right.root, 'verdict-continue').click();
+    expect(right.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.good }]);
+
+    const wrong = setup();
+    mountBattleScreen(wrong.root, wrong.ctrl, wrong.deps);
+    choiceByLabel(wrong.root, wrongLabelFor(wrong.root, makeCard('c1'))).click();
+    expect(text(wrong.root, 'verdict-result')).toBe('答错了');
+    verdictBtn(wrong.root, 'verdict-continue').click();
+    expect(wrong.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
+  });
+
+  it('BS#A4 选项按码点截断预览，但判定面板里是完整答案（长背面不挤爆屏幕）', () => {
+    const long = '很长的答案'.repeat(20);
+    const card: Card = { ...makeCard('long'), back: long };
+    const snap = makeSnap({
+      fight: { ...makeFight(0, []), pool: [card, makeCard('c2')], current: card },
+      save: { ...makeSave(), cards: [card, makeCard('c2')] },
+    });
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, { ...h.deps, ctrlSnap: undefined } as never);
+    h.ctrl.push(snap);
+    const labels = choiceBtns(h.root).map((b) => b.textContent ?? '');
+    for (const l of labels) expect(Array.from(l).length).toBeLessThanOrEqual(40);
+    choiceByLabel(h.root, labels.find((l) => l.startsWith('很长的答案')) as string).click();
+    expect(text(h.root, 'answer-full')).toContain(long); // 全文
+  });
+
+  it('BS#A5 「直接看答案」⇒ 展开全文并记为答错', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    reveal(h.root);
+    expect(text(h.root, 'answer-full')).toContain('a-c1');
+    expect(h.ctrl.intents).toHaveLength(0);
+    verdictBtn(h.root, 'verdict-continue').click();
+    expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
+  });
+
+  it('BS#A6 领域只有一张卡（凑不出干扰项）⇒ 不出选项、回落看答案并说明原因', () => {
+    const solo = makeCard('solo');
+    const state: BattleState = { ...makeFight(0, []).state, pool: ['solo'] };
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    h.ctrl.push(
+      makeSnap({
+        fight: { state, pool: [solo], current: solo },
+        save: { ...makeSave(), cards: [solo] },
+      }),
+    );
+    expect(choiceBtns(h.root)).toHaveLength(0);
+    expect(hidden(h.root, 'no-choice-hint')).toBe(false);
+    reveal(h.root); // 仍然可以看答案
+    expect(text(h.root, 'answer-full')).toContain('a-solo');
+  });
+
+  it('BS#A7 答对后点「其实是猜的」⇒ 改判 again，且屏上标明按答错记', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    choiceByLabel(h.root, correctLabelFor(makeCard('c1'))).click();
+    verdictBtn(h.root, 'verdict-guess').click();
+    expect(text(h.root, 'verdict-result')).toContain('猜'); // 文案说明已改判
+    verdictBtn(h.root, 'verdict-continue').click();
+    expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
+  });
+
+  it('BS#A8 换到下一张卡 ⇒ 判定面板、选项、猜按钮全部重置（不残留上一张的状态）', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+
+    // **同一 pool 引用**、idx 前进：真实链路（battleFlow 的 toView 原样透传 view.pool）
+    // 整局就是同一个 pool 数组，所以只有"按卡 id 重置"这一条能救 —— 用 makeFight 重建
+    // pool 会让"换局重置"那条分支替它兜住，判据就失去区分力（变异实测发现的假绿）。
+    const f0 = makeFight(0, []);
+    h.ctrl.push(makeSnap({ fight: f0 }));
+    choiceByLabel(h.root, 'a-c1').click(); // 进入判定面板
+    const f1: FightView = {
+      ...f0,
+      state: { ...f0.state, idx: 1, log: [{ kind: 'damage', cardId: 'c1', amount: 12 }] },
+      current: f0.pool[1] ?? null,
+    };
+    h.ctrl.push(makeSnap({ fight: f1 }));
+    expect(hidden(h.root, 'verdict')).toBe(true); // 面板收起（不看旧内容，看可见性）
+    expect(choiceBtns(h.root).length).toBeGreaterThan(0); // 新卡的选项在
+    // 「其实是猜的」也随面板一起收起（残留在屏上会让下一张卡误触改判）
+    expect(hidden(h.root, 'verdict-guess')).toBe(true);
+    // 新卡再作答时，面板显示的是**新卡**的对错与答案，而不是上一张的
+    choiceByLabel(h.root, 'a-c2').click();
+    expect(text(h.root, 'verdict-result')).toBe('答对了');
+    expect(text(h.root, 'answer-full')).toContain('a-c2');
+  });
+
+  it('BS#A9 终局（非 answering）不给选项也不给继续（不再产生 intent）', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    h.ctrl.push(makeSnap({ fight: makeFight(3, [], 'won') }));
+    for (const b of choiceBtns(h.root)) expect(b.disabled).toBe(true);
   });
 });
