@@ -40,7 +40,9 @@
  * **装配层硬契约（R-T4-p3-d）**：凡"我的改动此刻已持久"的语义，必须用
  * `flush() && !dirty()` 收口，不得只信 `flush()` 的 boolean——它只承诺"被认领的那批
  * 已写"，在途 mutate 的那批还没写。导出前与记录 lastExportedAt 前都照此口径收口，
- * 否则导出的文件与"标记为已备份"的进度可能不是同一份（tests/app/backup.test.ts BK#26 取证）。
+ * 否则导出的文件与"标记为已备份"的进度可能不是同一份
+ *（tests/app/backup.test.ts BK#26 取证口径；**生产落点是 transfer.exportAndMark**，
+ *  Final Fix Wave · I-2 补齐——本模块是纯函数，收口只能由调用方做，而不能只是测试里这么做）。
  *
  * 时间纪律：本文件不读宿主时钟——所有时刻（nowMs）一律入参化（与 persist.ts 同规格）。
  * 纯函数、无 I/O、无 store 依赖：信封文本怎么落成文件属平台/UI 层（R-T6-b）。
