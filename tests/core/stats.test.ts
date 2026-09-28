@@ -109,7 +109,7 @@ describe('enemyHpForPool —— 卡池反推（HP = ceil(poolSize × 10 × 难�
 // 来历：D28（PRD v2.2 / Plan 4 · T1）——enemyPower 与 HP 同源反推但独立成数：
 // ceil(BASE_CARD_DAMAGE × difficulty)，遭遇战 7 / Boss 11。它是反击公式的强度锚点。
 describe('enemyPowerFor —— 敌人反击强度反推（D28：ceil(10 × 难度系数)）', () => {
-  it('EP#1 两档锚点：encounter → ceil(10×0.7)=7、boss → ceil(10×1.5)=11（brief verbatim 7/11）', () => {
+  it('EP#1 两档锚点：encounter → ceil(10×0.7)=7、boss → ceil(10×1.1)=11（POWER_FACTOR 封顶，R-T1-p4-b）', () => {
     expect(enemyPowerFor('encounter')).toBe(7);
     expect(enemyPowerFor('boss')).toBe(11);
   });

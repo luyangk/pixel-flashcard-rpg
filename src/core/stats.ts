@@ -99,14 +99,18 @@ export function enemyHpForPool(poolSize: number, difficulty: keyof typeof DIFFIC
 }
 
 /**
- * D28：敌人每回合反击强度，与 HP 同源反推但**与池长解耦**——
- * enemyPower = ceil(BASE_CARD_DAMAGE × difficulty)（遭遇战 7 / Boss 11）。
- * HP 决定"要打掉多少"，power 决定"每回合挨多少"；共用难度系数是刻意的
- * （PRD §6.5 第四红线）。未知难度键 throw 'invalid-difficulty'，与
- * enemyHpForPool 同纪律（difficultyOf 单点把关）。
+ * 反击强度专用系数（D28）：与 HP 的难度系数**同源但不共用**——boss 档封顶到
+ * 1.1（power=11 < good 档基础输出 12），保「全对必胜」红线不被反击磨穿（裁定
+ * R-T1-p4-b，PRD §6.5 同步改写；取 HP 系数 1.5→15 会击穿该红线）。
  */
-/** 反击强度专用系数：与 HP 的难度系数同源，但 boss 档封顶到 good 档倍率（×1.0）。 */
 const POWER_FACTOR = { encounter: 0.7, boss: 1.1 } as const;
+
+/**
+ * D28：敌人每回合反击强度，与 HP 同源反推但**与池长解耦**——
+ * enemyPower = ceil(BASE_CARD_DAMAGE × POWER_FACTOR[d])（遭遇战 7 / Boss 11）。
+ * HP 决定"要打掉多少"，power 决定"每回合挨多少"。未知难度键 throw
+ * 'invalid-difficulty'，与 enemyHpForPool 同纪律（difficultyOf 单点把关）。
+ */
 
 export function enemyPowerFor(difficulty: keyof typeof DIFFICULTY): number {
   // difficultyOf 单点把关未知键（throw invalid-difficulty），POWER_FACTOR 与
