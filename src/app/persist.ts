@@ -188,10 +188,12 @@ export async function createCoordinator(
   }
 
   // 攒批硬上界锚点：本批脏数据"首次被排窗"的时刻。maxBatch 的语义是"脏数据悬着的
-  // 总时长上界"（Q#4 教训）。锚点有两个处置点，都在 performFlush 一侧：
+  // 总时长上界"（Q#4 教训）。锚点有三个处置点，不都在 performFlush 一侧
+  //（净态置 null 在 armWindow 的撤窗分支；另两处见下）：
   // - **成功**：批次在 `await store.save` **之前**就被认领，认领即置 null
   //   （本批已提交，下一批重新定格；见 performFlush 内的认领段）；
-  // - **失败**：复位到当下，使重试窗按**完整 debounce** 退避，而不是被陈旧 maxBatch
+  // - **失败**：复位到当下（performFlush 的 catch 与 flushDetailed 尾部的失败重排各一处），
+  //   使重试窗按**完整 debounce** 退避，而不是被陈旧 maxBatch
   //   界压成 0ms（否则"内容持续非法"时 0ms 定时器反复自触发空转）。退避这段时间
   //   因此不计入下一次的悬脏上界。
   let batchStartedAt: number | null = null;
