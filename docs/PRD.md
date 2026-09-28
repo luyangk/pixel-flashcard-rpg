@@ -257,7 +257,7 @@ validateSave 在场严检 + migrateSave 为缺席档补默认）：
 |---|---|---|---|
 | `answerMode` | `'choice' \| 'qa'` | `'choice'` | 作答模式（D41）；战斗屏可本局内切换并写回 |
 | `Card.choices` | `string[]`（≤5 条、每条 ≤200 码点） | 不补（缺席 = 没有） | 生成卡时由模型产出的干扰项（D41 的第三级来源之上）；三段式：可选 + 在场严检 + 不补默认（与 `deck.egg` 同款） |
-| `llmQuota` | `{ day: string; cards: number; judges: number }` | `{ day:'', cards:0, judges:0 }` | LLM 每日额度计数（D45）：`day` 为本地日界，跨天读时归零；`cards` 计生成张数、`judges` 只计数不设限 |
+| `llmQuota` | `{ day: string; cards: number; judges: number }` | `{ day:'', cards:0, judges:0 }` | LLM 每日额度计数（D45）：`day` 为本地日界、**允许空串**（`''` = 「还没记过任何一天」，读侧按「新的一天」归零），跨天读时归零；`cards` 计生成张数（上限 200）、`judges` 计判定次数（上限 300） |
 
 两条都**可选且缺席不拒**：新增字段做成拒绝点会让 v2.5 前的存档整包打不开（与 leaderboard 同款理由）。
 
