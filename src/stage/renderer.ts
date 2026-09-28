@@ -34,14 +34,21 @@ export interface StageSprites {
   readonly bg: StageImage;
 }
 
-/** 敌方受击闪白的一档时长（毫秒）：亮两帧 = 180ms，视觉上是一次干脆的白闪。 */
+/** 闪白节拍步进（毫秒）：亮两帧、灭两帧的可数节拍。 */
 const FLASH_FRAME_MS = 90;
+
+/**
+ * 受击反馈的**一次性窗口**（毫秒）：只在"该事件发生后的这段时间内"闪，
+ * 之后自行消失。T4 首版把"日志末项"当作持续状态，导致玩家红闪在整段阅题
+ * 时间内无限频闪（评审 Critical）——反馈必须是脉冲而非开关。
+ */
+export const FLASH_WINDOW_MS = 180;
 
 /** 脚底基线（逻辑像素）：侠客与怪物的 y 对齐点，保证"站在地上"。 */
 const GROUND_Y = 178;
 
-/** 侠客目标高与左缘；boss 比杂兵大一圈（T3 的 difficulty 决定用哪张图）。 */
-const HERO_X = 44;
+/** 侠客目标高与**右缘**（素材非方形时左缘随宽高比漂移，故以右缘定位）；boss 比杂兵大一圈。 */
+const HERO_RIGHT = 84;
 const HERO_H = 76;
 const MOB_H = 60;
 const MOB_RIGHT = 236;
@@ -149,12 +156,13 @@ function drawBar(
     if (align === 'left') ctx.fillRect(x, y, fillW, h);
     else ctx.fillRect(x + w - fillW, y, fillW, h);
   }
-  ctx.fillStyle = '#e8e8f0';
-  ctx.font = '8px monospace';
-  ctx.textAlign = align === 'left' ? 'left' : 'right';
-  ctx.textBaseline = 'top';
+  // 数字画在血条**内部**居中（首版画在条外侧，两条在 320 宽度下必然叠字——评审 Important）。
+  ctx.fillStyle = '#f2f2fa';
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   const label = `${Math.max(0, Math.round(cur))}/${Math.max(0, Math.round(max))}`;
-  ctx.fillText(label, align === 'left' ? x + w + 4 : x - 4, y - 3);
+  ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
 }
 
 /** 敌人满血上限：BattleState 只存当前值，上限由池长 + 难度档反推（与 T3 同源）。 */
@@ -175,11 +183,47 @@ function frameIndex(tMs: number): number {
   return Math.floor(t / FLASH_FRAME_MS);
 }
 
-/** 最近一条战斗事件；空日志返回 null。 */
-function lastEvent(st: BattleState): BattleState['log'][number] | null {
+/**
+ * 取**本回合的动作事件**（damage | miss），跳过每回合固定追加在其后的
+ * retaliate/end。日志末项永远是 retaliate 或 end（core/battle.ts 的追加顺序），
+ * 所以"末项 === damage"永不成立——T4 首版据此判断导致怪物闪白死路径（评审 Critical）。
+ * 从尾部向前扫到第一个 damage/miss 即为本回合动作；空日志返回 null。
+ */
+export function turnAction(st: BattleState): 'damage' | 'miss' | null {
   const log = st?.log;
-  if (!Array.isArray(log) || log.length === 0) return null;
-  return log[log.length - 1] ?? null;
+  if (!Array.isArray(log)) return null;
+  for (let i = log.length - 1; i >= 0; i--) {
+    const k = log[i]?.kind;
+    if (k === 'damage' || k === 'miss') return k;
+  }
+  return null;
+}
+
+/** 本回合是否发生过反击（供 hero 闪红判定；同样跳过尾随 end）。 */
+export function turnRetaliated(st: BattleState): boolean {
+  const log = st?.log;
+  if (!Array.isArray(log)) return false;
+  for (let i = log.length - 1; i >= 0; i--) {
+    const k = log[i]?.kind;
+    if (k === 'retaliate') return true;
+    if (k === 'damage' || k === 'miss') return false; // 扫到本回合动作即停：本轮无反击
+  }
+  return false;
+}
+
+/** 帧内 FX 输入（由 battleStage 依"日志增量 + 注入时间轴"算好后传入；renderer 保持纯函数）。 */
+export interface FrameFx {
+  /** 距最近一次"命中怪物"的毫秒数；undefined/窗口外 = 不闪。 */
+  readonly mobHitElapsedMs?: number;
+  /** 距最近一次"被反击"的毫秒数；undefined/窗口外 = 不闪。 */
+  readonly heroHitElapsedMs?: number;
+}
+
+/** 脉冲判定：落在 [0, FLASH_WINDOW_MS) 内才闪，且按帧节拍亮两帧灭两帧。 */
+function pulsing(elapsed: number | undefined, tMs: number): boolean {
+  if (typeof elapsed !== 'number' || !Number.isFinite(elapsed)) return false;
+  if (elapsed < 0 || elapsed >= FLASH_WINDOW_MS) return false;
+  return frameIndex(elapsed) % 4 < 2;
 }
 
 /**
@@ -196,14 +240,15 @@ export function drawFrame(
   view: FightView,
   sprites: StageSprites,
   tMs: number,
+  fx: FrameFx = {},
 ): void {
   if (!ctx) return;
-  const ev = lastEvent(st);
-  const flash = frameIndex(tMs) % 4 < 2;
-  const hitMob = ev?.kind === 'damage' && flash;
-  const hitHero = ev?.kind === 'retaliate' && flash;
+  // 反馈来源是**注入的脉冲时长**（frameElapsed），不是"日志末项"这类持续状态——
+  // 否则一击的反馈会一直挂着（首版 Critical）。tMs 仅用于节拍。
+  const hitMob = pulsing(fx.mobHitElapsedMs, tMs);
+  const hitHero = pulsing(fx.heroHitElapsedMs, tMs);
   // miss 回合：不闪、不抖——怪物一动不动是 D28 的可见语义。
-  const mobShake = hitMob ? (frameIndex(tMs) % 2 === 0 ? -1 : 1) : 0;
+  const mobShake = hitMob ? (frameIndex(fx.mobHitElapsedMs ?? 0) % 2 === 0 ? -1 : 1) : 0;
 
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
@@ -212,7 +257,7 @@ export function drawFrame(
   blit(ctx, sprites?.bg, 0, 0, LOGICAL_W, LOGICAL_H);
 
   // 2) 侠客（玩家）——闪红表示被反击。
-  const hero = placeSprite(sprites?.hero, HERO_H, HERO_X + 40, GROUND_Y);
+  const hero = placeSprite(sprites?.hero, HERO_H, HERO_RIGHT, GROUND_Y);
   drawShadow(ctx, hero.x + hero.w / 2, GROUND_Y, hero.w);
   blit(ctx, sprites?.hero, hero.x, hero.y, hero.w, hero.h);
   if (hitHero) {

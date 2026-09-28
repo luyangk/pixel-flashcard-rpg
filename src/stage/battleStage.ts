@@ -102,10 +102,28 @@ export function mountBattleStage(host: HTMLElement, deps: BattleStageDeps): Batt
   const initial = measure(host);
   applyScale(initial.w, initial.h);
 
+  // —— 受击脉冲的锚点状态（本模块唯一的可变状态，全在注入时间轴 tMs 上记时）——
+  // 首版把"日志末项"当持续状态，导致反馈永挂/永不出现（评审 Critical）。正确做法：
+  // 观测日志**增量**，在事件真实追加的那一刻记下 tMs 锚点，之后由 elapsed 自行过期。
+  let lastLogLen = 0;
+  let mobHitAt: number | undefined;
+  let heroHitAt: number | undefined;
+
   return {
     frame(st: BattleState, view: FightView, tMs: number): void {
       if (destroyed || !ctx) return;
-      drawFrame(ctx, st, view, deps.sprites, tMs);
+      const log = Array.isArray(st?.log) ? st.log : [];
+      if (log.length !== lastLogLen) {
+        // 只看新增切片：本回合打出的动作与被反击与否各有其锚点。
+        const appended = log.slice(lastLogLen);
+        if (appended.some((e) => e?.kind === 'damage')) mobHitAt = tMs;
+        if (appended.some((e) => e?.kind === 'retaliate')) heroHitAt = tMs;
+        lastLogLen = log.length;
+      }
+      drawFrame(ctx, st, view, deps.sprites, tMs, {
+        mobHitElapsedMs: mobHitAt === undefined ? undefined : tMs - mobHitAt,
+        heroHitElapsedMs: heroHitAt === undefined ? undefined : tMs - heroHitAt,
+      });
     },
     onResize(viewW: number, viewH: number): void {
       if (destroyed) return;
@@ -114,8 +132,12 @@ export function mountBattleStage(host: HTMLElement, deps: BattleStageDeps): Batt
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
-      const parent = canvas.parentNode;
-      if (parent && typeof parent.removeChild === 'function') parent.removeChild(canvas);
+      // 幂等且容错：canvas 可能已被宿主摘除（removeChild 会抛 NotFoundError）。
+      if (typeof (canvas as { remove?: () => void }).remove === 'function') {
+        (canvas as { remove: () => void }).remove();
+      } else if (canvas.parentNode) {
+        canvas.parentNode.removeChild(canvas);
+      }
     },
   };
 }

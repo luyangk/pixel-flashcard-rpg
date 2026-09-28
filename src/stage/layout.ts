@@ -46,8 +46,9 @@ export function fitScale(viewW: number, viewH: number, maxInt: number = DEFAULT_
   const cap = sanitizeScale(maxInt);
   const w = sanitizeView(viewW);
   const h = sanitizeView(viewH);
+  // sanitizeView 已把非有限/负视口收成 0 ⇒ raw 恒有限，无需再判；非有限视口的
+  // 策略是"保守退化到 1 倍"（宁可小也不放大到糊），已由测试钉住。
   const raw = Math.floor(Math.min(w / LOGICAL_W, h / LOGICAL_H));
-  if (!Number.isFinite(raw)) return 1;
   return Math.min(Math.max(raw, 1), cap);
 }
 

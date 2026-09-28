@@ -122,6 +122,9 @@ describe('letterbox', () => {
       expect(Number.isInteger(s)).toBe(true);
       expect(box.w).toBe(LOGICAL_W * s);
       expect(box.h).toBe(LOGICAL_H * s);
+      // 落位必须是整数像素（半像素会让整幅像素画糊掉）——比"等于公式"更强的不变量。
+      expect(Number.isInteger(box.x)).toBe(true);
+      expect(Number.isInteger(box.y)).toBe(true);
       expect(box.x + box.w).toBeLessThanOrEqual(Math.max(w, box.w));
       expect(box.y + box.h).toBeLessThanOrEqual(Math.max(h, box.h));
       // 两侧留白差不超过 1px（居中）
