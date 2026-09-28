@@ -441,6 +441,54 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     expect(validateSave(okRaw).ok).toBe(true);
   });
 
+  it('arcSeen 域（T8 扩位）：-1 / 4 / 1.5 / 字符串 / 缺席都拒且带路径；0 与 3 是合法边界', () => {
+    // 缺席（T6/T7 形状）走 validate 的"严检"面：整包拒、reason 带路径与 migrate 指路
+    const missing = sample();
+    (missing.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 3 };
+    const missRes = validateSave(missing);
+    expect(missRes.ok).toBe(false);
+    if (!missRes.ok) expect(missRes.reason).toContain('settings.story.arcSeen');
+
+    for (const arcSeen of [-1, 4, 1.5, '0', null]) {
+      const raw = sample();
+      (raw.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 0, arcSeen };
+      const r = validateSave(raw);
+      expect(r.ok, `arcSeen=${String(arcSeen)} 应被拒`).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.story.arcSeen');
+    }
+
+    for (const arcSeen of [0, 3]) {
+      const raw = sample();
+      (raw.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 0, arcSeen };
+      expect(validateSave(raw).ok, `arcSeen=${arcSeen} 应合法`).toBe(true);
+    }
+  });
+
+  it('arcSeen 三段式（T8 评审判 C-1）：T6/T7 形状档（story 在场但缺 arcSeen）必须能被迁移补 0', () => {
+    // 这正是"升级即只读闩锁"的病灶：schemaVersion 仍是 1，所以这种档真实存在于用户设备上
+    const t6Shape = sample();
+    (t6Shape.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 3 };
+    expect(validateSave(t6Shape).ok).toBe(false); // 校验面：缺席整包拒
+
+    const migrated = migrateSave(t6Shape);
+    expect(migrated.settings.story).toEqual({ prologueSeen: true, beatIndex: 3, arcSeen: 0 }); // 迁移面：只补缺的那个键
+    expect(validateSave(migrated).ok).toBe(true);
+    (t6Shape.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 3, arcSeen: 0 };
+    expect(migrateSave(t6Shape).settings.story).toEqual({ prologueSeen: true, beatIndex: 3, arcSeen: 0 });
+
+    // 迁移不得"消毒改写"已畸形的 arcSeen（域检查归校验器）
+    const dirty = sample();
+    (dirty.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 0, arcSeen: 9 };
+    expect(() => migrateSave(dirty)).toThrow();
+
+    // 迁移后与入参不共享引用（改一份不污染另一份）
+    const shared = sample();
+    (shared.settings as Record<string, unknown>).story = { prologueSeen: false, beatIndex: 0 };
+    const a = migrateSave(shared);
+    a.settings.story.arcSeen = 3;
+    expect(migrateSave(shared).settings.story.arcSeen).toBe(0);
+  });
+
   it('meta.savedAt 类型错 → 路径 meta.savedAt', () => {
     const raw = sample();
     (raw.meta as Record<string, unknown>).savedAt = 'yesterday';
@@ -892,6 +940,33 @@ async function storeWithOld(): Promise<GameStorage> {
 }
 
 describe('importAndSave', () => {
+  /**
+   * R-T11-p4-a（Plan 4 Global Constraints 的 FFW 带入项 + T8 评审 C-1 的第二半）：
+   * 只校验不迁移的实现会把"上一版导出的备份"判成坏档——而那种档的 schemaVersion 仍是 1，
+   * 用户完全看不出为什么打不开。本用例钉"导入链路先剔字段、再迁移、最后落盘"。
+   */
+  it('T6/T7 形状的旧备份（story 在场但缺 arcSeen）能被导入：补 0 后落盘并校验通过', async () => {
+    const store = await storeWithOld();
+    const old = sample();
+    (old.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 3 };
+    const text = JSON.stringify({ ...old, exportedAt: T0 });
+
+    expect(await importAndSave(text, store)).toEqual({ ok: true });
+    const loaded = await store.load();
+    expect(loaded?.settings.story).toEqual({ prologueSeen: true, beatIndex: 3, arcSeen: 0 });
+    expect(validateSave(loaded).ok).toBe(true);
+    expect(loaded !== null && 'exportedAt' in loaded).toBe(false);
+  });
+
+  it('缺 battle 的 v2.1 前旧备份同样能被导入（迁移面不只覆盖 story）', async () => {
+    const store = await storeWithOld();
+    const text = serializeSave(migrateSave(legacyBothSample()));
+    expect(await importAndSave(text, store)).toEqual({ ok: true });
+    const loaded = await store.load();
+    expect(validateSave(loaded).ok).toBe(true);
+    expect(loaded?.settings.battle).toEqual({ defaultPoolSize: 15 });
+  });
+
   it('落盘值等于剔除 exportedAt 后的存档本体（信封不残留）', async () => {
     const store = await storeWithOld();
     const incoming = validSave();

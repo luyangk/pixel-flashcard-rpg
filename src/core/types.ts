@@ -76,7 +76,8 @@ export interface ProgressSettings {
 
 /**
  * 叙事进度（Plan 4 · T6，R-P4-preflight-c 三段式：**types 必填** + validateSave 在场严检
- * 且缺席整包拒 + migrateSave 为缺席档补 {prologueSeen:false, beatIndex:0}）。
+ * 且缺席整包拒 + migrateSave 为缺席档补 {prologueSeen:false, beatIndex:0, arcSeen:0}；
+ * T8 起 migrateSave 还会为"story 在场但缺 arcSeen"的 T6/T7 形状档补 arcSeen）。
  *
  * - prologueSeen：序章是否已演出过。跳过与看完**同待遇**（LORE §5.1「可跳过」），
  *   写成 true 之后宿主不再挂序章（读侧见 app/storyState.needsPrologue）；

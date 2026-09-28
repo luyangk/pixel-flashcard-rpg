@@ -17,6 +17,7 @@
  * 时间与随机一律注入（nowMs）；本模块零 DOM、零时钟读取（与 app 层同纪律）。
  */
 import type { Card, Deck, SaveFile } from '@core/types';
+import { MAX_TIME_MS } from '@core/saveMigrate';
 import { bossCheck } from '@core/deckBuild';
 import type { Coordinator } from './persist';
 
@@ -127,7 +128,10 @@ export async function markPurified(
     if (typeof id === 'string' && id.length > 0) wanted.add(id);
   }
   if (wanted.size === 0) return [];
-  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) return []; // 脏时刻不写（fail-closed）
+  // 脏时刻不写（fail-closed），**域与 saveMigrate.requireTimestamp 同界**：
+  // 只判 Number.isFinite 会放过 1e300 —— 它能通过有限性检查，却会让落盘自检整包拒，
+  // 于是 dirty 永久为真、此后任何进度都写不进存储（I-2/I-3 同一类病灶；BF#3b 钉住）。
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || Math.abs(nowMs) > MAX_TIME_MS) return [];
 
   const fresh: string[] = [];
   for (const deck of coord.snapshot().decks) {

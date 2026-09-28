@@ -142,8 +142,17 @@ describe('markPurified —— 净化落账', () => {
     expect(await markPurified(coord, ['d2'], NOW + 1000)).toEqual([]);
     expect(await markPurified(coord, ['deck-ghost'], NOW)).toEqual([]);
     expect(await markPurified(coord, [], NOW)).toEqual([]);
-    expect(await markPurified(coord, ['d1'], Number.NaN)).toEqual([]);
     expect(coord.snapshot().decks.map((d) => d.purifiedAt)).toEqual(before);
+  });
+
+  it('BF#3b 脏时刻对**未净化**的领域也不写（旧断言拿已净化的领域去测 ⇒ 空断言，评审 I-3③）', async () => {
+    const coord = await makeCoord(save([deck('fresh', '新领域')], [], 30));
+    expect(coord.snapshot().decks[0].purifiedAt).toBeUndefined();
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 1e300]) {
+      expect(await markPurified(coord, ['fresh'], bad)).toEqual([]);
+      expect(coord.snapshot().decks[0].purifiedAt).toBeUndefined(); // 真要判的就是这一行
+    }
+    expect(await markPurified(coord, ['fresh'], NOW)).toEqual(['fresh']); // 合法时刻照常写
   });
 });
 

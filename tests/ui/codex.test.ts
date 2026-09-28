@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Card, Deck } from '@core/types';
 import type { ArcAct } from '../../src/ui/codex';
+import { nextBeat } from '../../src/ui/beats';
 import { mountCodex, purifiedEntries } from '../../src/ui/codex';
 import { all, click, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, ui } from './support';
 
@@ -126,6 +127,67 @@ describe('mountCodex —— 行记（三幕）', () => {
     expect(all(root, '[data-act]').map((r) => r.getAttribute('data-unlocked'))).toEqual(['true', 'true', 'true']);
     // 夹具三幕各 1 句 ⇒ 3 句全在屏上（真数据 assets/narrative/arc.json 是 2/3/2 句）
     expect(all(root, '[data-ui="act-line"]').length).toBe(3);
+  });
+});
+
+describe('mountCodex —— 历史战报（T8 评审 I-1 的补齐）', () => {
+  it('CX#7 按 beatIndex 确定性回放已抽过的句子（回放 ≠ 再抽：不推进游标、不耗随机源）', () => {
+    const root = makeRoot();
+    const pool = ['甲句', '乙句', '丙句'];
+    // 手算前 3 抽的期望（与 beats.test 同源：nextBeat 对同一 (池, 游标) 恒得同一句）
+    const expected = [0, 1, 2].map((i) => nextBeat(pool, i).text);
+    const ctrl = makeCtrl(makeSnap({ save: saveWith([], [], 0) }));
+    // saveWith 的 story.beatIndex 固定为 0，这里手工改成 3（已抽过 3 句）
+    const base = saveWith([], [], 0);
+    const save = { ...base, settings: { ...base.settings, story: { ...base.settings.story, beatIndex: 3 } } };
+    ctrl.push(makeSnap({ save }));
+    mountCodex(root, ctrl, { acts: ACTS, beats: pool });
+
+    expect(all(root, '[data-beat]').map((li) => li.textContent)).toEqual(expected);
+    expect(ui(root, 'beat-history').hidden).toBe(false);
+    expect(ui(root, 'beat-history-empty').hidden).toBe(true);
+  });
+
+  it('CX#7b 还没抽过（beatIndex=0）或没有池 ⇒ 空态提示，不显示空列表', () => {
+    const root = makeRoot();
+    mountCodex(root, makeCtrl(makeSnap({ save: saveWith([], [], 0) })), { acts: ACTS, beats: ['甲句'] });
+    expect(ui(root, 'beat-history').hidden).toBe(true);
+    expect(ui(root, 'beat-history-empty').hidden).toBe(false);
+    expect(all(root, '[data-beat]')).toHaveLength(0);
+
+    const root2 = makeRoot();
+    const base = saveWith([], [], 0);
+    const save = { ...base, settings: { ...base.settings, story: { ...base.settings.story, beatIndex: 5 } } };
+    mountCodex(root2, makeCtrl(makeSnap({ save })), { acts: ACTS, beats: [] });
+    expect(all(root2, '[data-beat]')).toHaveLength(0);
+    expect(ui(root2, 'beat-history-empty').hidden).toBe(false);
+  });
+
+  it('CX#7c 只保留最近 N 条（越早的被截掉，顺序仍是旧→新）', () => {
+    const root = makeRoot();
+    const pool = Array.from({ length: 10 }, (_, i) => `句${i}`);
+    const base = saveWith([], [], 0);
+    const save = { ...base, settings: { ...base.settings, story: { ...base.settings.story, beatIndex: 6 } } };
+    mountCodex(root, makeCtrl(makeSnap({ save })), { acts: ACTS, beats: pool, beatHistoryLimit: 2 });
+
+    const expected = [4, 5].map((i) => nextBeat(pool, i).text);
+    expect(all(root, '[data-beat]').map((li) => li.textContent)).toEqual(expected);
+  });
+
+  it('CX#7d 快照推进（又抽了一句）⇒ 历史跟着长一条', () => {
+    const root = makeRoot();
+    const pool = ['甲句', '乙句', '丙句'];
+    const base = saveWith([], [], 0);
+    const withCursor = (n: number) => ({
+      ...base,
+      settings: { ...base.settings, story: { ...base.settings.story, beatIndex: n } },
+    });
+    const ctrl = makeCtrl(makeSnap({ save: withCursor(1) }));
+    mountCodex(root, ctrl, { acts: ACTS, beats: pool });
+    expect(all(root, '[data-beat]')).toHaveLength(1);
+
+    ctrl.push(makeSnap({ save: withCursor(2) }));
+    expect(all(root, '[data-beat]').map((li) => li.textContent)).toEqual([0, 1].map((i) => nextBeat(pool, i).text));
   });
 });
 

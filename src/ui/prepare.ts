@@ -318,11 +318,16 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
       const res = await deps.setBossName(deckId, raw);
       // 非法输入不写脏值：setBossName 回落默认并回 ok:false，这里如实告诉玩家一句。
       if (!res.ok && res.reason) toast(res.reason);
+    } catch (e) {
+      // 只读闩锁下写口会真 reject（SaveReadOnlyError）——必须收成一句提示，
+      // 否则玩家点了「就用这个名字」后什么都没有发生（T8 评审判 I-2）。
+      toast(`称号没能写进存档：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       namingDeckId = null;
       pending = false;
       if (!destroyed) render(ctrl.snapshot());
     }
+    // 称号写失败不该拦住开局：卷灵称号只是叙事皮（存档里仍是默认模板），战斗照打。
     await startBoss(deckId);
   }
 

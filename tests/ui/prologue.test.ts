@@ -165,15 +165,17 @@ describe('assets/narrative/prologue.json —— 与 LORE §5.1 逐字一致', ()
     expect(lore).toContain('《知识侠客》'); // 第 8 屏：标题屏
   });
 
-  it('PJ#4 插画占位是存在的 64×64 灰阶 PNG（T9 原地换正稿）', () => {
+  // 【T9 起】这里是"插画路径有效且尺寸对"的契约：占位件曾是灰阶 PNG（color type 0），
+  // T9 原地换成了水墨彩图（color type 2/6），故那条"灰阶"断言随占位件一起退役——
+  // 色型/调色板/尺寸的正式契约在 tests/assets/assets.contract.test.ts（T9 的 PNG 级判据）。
+  it('PJ#4 每屏插画路径有效且是 64×64 的 PNG（T9 已换成正式彩图）', () => {
     for (const s of SCENES) {
       const file = join(REPO_ROOT, s.art);
-      expect(existsSync(file), `缺占位插画：${s.art}`).toBe(true);
+      expect(existsSync(file), `缺插画：${s.art}`).toBe(true);
       const buf = readFileSync(file);
       expect(buf.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a'); // PNG 签名
       expect(buf.readUInt32BE(16)).toBe(64);
       expect(buf.readUInt32BE(20)).toBe(64);
-      expect(buf[25]).toBe(0); // color type 0 = 灰度
     }
   });
 });

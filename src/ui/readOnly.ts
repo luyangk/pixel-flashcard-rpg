@@ -54,7 +54,12 @@ export function mountReadOnlyBar(root: HTMLElement, ctrl: GameController, deps: 
   if (!root || !ctrl) throw new Error('mount-read-only-bar: root/controller required');
   const now = deps.now ?? (() => 0);
   const tzOffsetMin = typeof deps.tzOffsetMin === 'number' && Number.isFinite(deps.tzOffsetMin) ? deps.tzOffsetMin : 0;
-  const canDump = typeof deps.rawDump === 'function' && typeof deps.saveTextFile === 'function';
+  // 坏档文件名要用时钟算日期（D29）：宿主没接时钟就不给导出按钮——
+  // 否则会静默产出 `zx-xia-corrupt-1970-01-01.json` 这种错得很安静的文件名（评审 m-5）。
+  const canDump =
+    typeof deps.rawDump === 'function' &&
+    typeof deps.saveTextFile === 'function' &&
+    typeof deps.now === 'function';
 
   const textEl = h('span', { 'data-ui': 'readonly-text', class: 'readonly-text' }, READ_ONLY_TEXT);
   const dumpBtn = h('button', { 'data-ui': 'readonly-dump', class: 'readonly-dump', type: 'button' }, '导出坏档原文') as HTMLButtonElement;

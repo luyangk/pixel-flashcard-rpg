@@ -330,7 +330,7 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     // ① 异常被折成快照位而非逃逸：屏照常推进到 result，notice 有可上屏提示
     expect(snap.screen).toBe('result');
     expect(snap.readOnly).toBe(true);
-    expect(snap.notice).toBe('存档无法读取，本次进度不会保存。');
+    expect(snap.notice).toBe('存档无法读取，本次进度不会保存'); // 与 ui/readOnly.READ_ONLY_TEXT 逐字同源（评审 m-8）
     // ② catch 分支确实执行过（writes 恰 1，见下），且业务数据零变化（夹具的存档未被改）。
     expect(snap.lastResult?.won).toBe(true); // 结算摘要仍产出（内存态可玩）
     expect(coord.snapshot().settings.progress.exp).toBe(0);
@@ -410,6 +410,18 @@ describe('gameController —— 卷灵净化 / 经验切档 / 三幕里程碑（
       await ctrl.intent({ type: 'finish' });
     }
     expect(coord.snapshot().decks.filter((d) => d.purifiedAt !== undefined)).toHaveLength(3);
+  });
+
+  it('GC#T8-1b boss 败局不净化（把 `won &&` 去掉的实现必红——评审 I-3①）', async () => {
+    const { ctrl, coord } = await bossReadyController();
+    await ctrl.intent({ type: 'startFight', size: 1, deckIds: ['d1'], difficulty: 'boss' });
+    // 一路答错：池尽即败（未杀敌）
+    while (ctrl.snapshot().screen === 'fight') {
+      await ctrl.intent({ type: 'answer', grade: GRADES.again });
+    }
+    expect(ctrl.snapshot().lastResult?.won).toBe(false);
+    expect(coord.snapshot().decks[0].purifiedAt).toBeUndefined();
+    expect(coord.snapshot().settings.story.arcSeen).toBe(0);
   });
 
   it('GC#T8-2 重战已净化的领域：purifiedAt 保持首次时刻（练习关不刷新时间戳）', async () => {

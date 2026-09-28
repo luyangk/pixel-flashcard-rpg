@@ -55,7 +55,9 @@ export interface GameControllerDeps {
 }
 
 const DEFAULT_NOTICE = {
-  readOnly: '存档无法读取，本次进度不会保存。',
+  // 与 ui/readOnly.READ_ONLY_TEXT 逐字同源（D29 verbatim；带不带句号算两个文案，
+  // 评审 m-8 指出的分歧）——两处同义文案必须逐字一致，改一处要一起改。
+  readOnly: '存档无法读取，本次进度不会保存',
   saveFailed: '这次没能写进存档，稍后会自动重试。',
 } as const;
 
@@ -152,15 +154,17 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     // T8：卷灵净化 + 暗线里程碑（只在 boss 档取胜时）。顺序与语义：
     // ① markPurified 把本局参战领域写 purifiedAt（已净化的不重写，重战当练习关）；
     // ② 净化数跨过 3/6/9 时把 story.arcSeen 推进到对应幕（只前进），codex 的行记区据此
-    //    决定哪一幕可回看。两步都在同一个 guardedWrite 里：只读态下一起被折成快照位，
-    //    不会出现"净化写上了、里程碑没写"的半截状态被当成正常。
+    //    决定哪一幕可回看。两步共用同一个 guardedWrite：只读态下**整块**被折成快照位
+    //    （不是原子性——它们是两次独立 mutate，persist 明确不承诺回滚；真正的保证是
+    //    readOnly 属载入期终态闩锁，见 persist 的 C-1 注释）。
     if (won && kind === 'boss') {
+      // **只净化这一局所属的那个领域**（评审 m-2）：卷灵战按 PRD 是单领域，
+      // 但 startFight 并不校验这一点——若有人塞进一个多领域 boss intent，按"池里所有
+      // deckId 一并净化"就会一次点亮多个领域（连带推里程碑），那是凭空多发的奖励。
+      // 保守取池中**首个** deckId：宁可少净化一个，不凭空净化一批。
       const deckIds: string[] = [];
-      for (const c of view.pool) {
-        if (typeof c?.deckId === 'string' && c.deckId.length > 0 && !deckIds.includes(c.deckId)) {
-          deckIds.push(c.deckId);
-        }
-      }
+      const firstDeckId = view.pool.find((c) => typeof c?.deckId === 'string' && c.deckId.length > 0)?.deckId;
+      if (firstDeckId !== undefined) deckIds.push(firstDeckId);
       await guardedWrite(async () => {
         const fresh = await markPurified(coord, deckIds, now());
         if (fresh.length === 0) return;

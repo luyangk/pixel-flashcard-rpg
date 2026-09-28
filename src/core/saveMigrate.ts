@@ -39,10 +39,13 @@
  * schemaVersion 仍恰为 1，顶层键集不变。
  *
  * Plan 4 · T6 扩展（R-P4-preflight-c 三段式）：Settings 新增 **必填**位
- * `story:{prologueSeen:boolean, beatIndex:number}`（序章是否看过 + 战报碎片游标）。
+ * `story:{prologueSeen:boolean, beatIndex:number, arcSeen:number}`（序章是否看过 + 战报碎片游标 +
+ * 已解锁的暗线幕数）。
  * 与 battle/progress 完全同构：validateSave 在场逐项严检（prologueSeen 必须布尔、
  * beatIndex 必须非负整数）、缺席整包拒并指路 migrateSave；migrateSave 只为缺 story 的
- * 旧形状档补 {prologueSeen:false, beatIndex:0}。必填而非可选的理由见 types.StorySettings：
+ * 旧形状档补 {prologueSeen:false, beatIndex:0, arcSeen:0}；T8 起还会为"story 在场但缺
+ * arcSeen"的 T6/T7 形状档补上 arcSeen（见 injectStoryDefaults 的第 2 条，C-1 修复点）。
+ * 必填而非可选的理由见 types.StorySettings：
  * "字段不存在"与"序章没看过"对宿主是两回事，只有迁移补齐后才敢演出。
  */
 
@@ -447,7 +450,8 @@ export function validateSave(raw: unknown): ValidateResult {
  *
  * 范围克制（R-T6-d 延伸）：迁移只做"缺省补值"这一件事，现有四档——settings.battle
  * → {defaultPoolSize:15}、settings.progress → {exp:0}、settings.story →
- * {prologueSeen:false,beatIndex:0}、settings.leaderboard → []；
+ * {prologueSeen:false,beatIndex:0,arcSeen:0}（story 在场但缺 arcSeen 时只补该键）、
+ * settings.leaderboard → []；
  * "上次备份时刻"（meta.lastExportedAt）**不补**（缺席 = 从未导出，补默认有害），
  * schemaVersion 保持恰 1，不发明新顶层字段。
  * 失败形态与校验器一致：抛 Error，message 即含 JSON 路径的可读 reason。
@@ -492,17 +496,32 @@ function injectProgressDefaults(raw: unknown): unknown {
 }
 
 /**
- * settings.story 缺省时补 `{prologueSeen:false, beatIndex:0, arcSeen:0}`（Plan 4 · T6/T8）——与
- * injectProgressDefaults 完全同构：只在 settings 为对象且 story 缺席时浅拷贝注入；
- * 在场（哪怕 prologueSeen=false）一律原样透传给 validateSave 逐项拒绝（域检查归校验器）。
+ * settings.story 的默认值注入（Plan 4 · T6 建、T8 扩 arcSeen）。
+ *
+ * **两种缺法都要补**——这是 T8 评审判 C-1 的修复点：
+ * 1. `story` **整块缺席**（T6 之前的形状）⇒ 整块补 `{...DEFAULT_STORY}`；
+ * 2. `story` **在场但没有 arcSeen**（T6/T7 时代的真实形状：`{prologueSeen, beatIndex}`）
+ *    ⇒ 只在这一个键上浅拷贝补 0。
+ *
+ * 第 2 条为什么是**必须**的：那种档 schemaVersion 仍是 1（同一 Plan 4 内的形状演进），
+ * 因此它会真的出现在用户的设备与导出备份里。只补整块缺席的实现会让它
+ * 「validateSave 拒 + migrateSave 也拒」——而 persist 对 migrate 失败的处理是
+ * **种子档接管 + 只读闩锁**（见 persist 的 C-1 注释），即"升级一次就把用户的副本锁死"，
+ * 正是 D29 要防的场景；`importAndSave`（只校验、不迁移）也会把 T7 时代的备份判成坏档。
+ *
+ * 域检查仍归校验器：本函数只在**键缺席**时补默认，键在场（哪怕是 `null`/`-1`/字符串）
+ * 一律原样透传给 validateSave 逐项拒绝——绝不做"消毒改写"。
  * 注入值展开成新对象而不是塞 DEFAULT_STORY 本体：迁移档与种子档绝不共享同一份可变引用。
  */
 function injectStoryDefaults(raw: unknown): unknown {
   if (!isPlainObject(raw)) return raw;
   const settings = raw.settings;
   if (!isPlainObject(settings)) return raw;
-  if ('story' in settings && settings.story !== undefined) return raw;
-  return { ...raw, settings: { ...settings, story: { ...DEFAULT_STORY } } };
+  const story = settings.story;
+  if (story === undefined) return { ...raw, settings: { ...settings, story: { ...DEFAULT_STORY } } };
+  if (!isPlainObject(story)) return raw; // 畸形 story（数组/标量）原样交给校验器
+  if ('arcSeen' in story) return raw; // 键在场：域检查归 validateSave
+  return { ...raw, settings: { ...settings, story: { ...story, arcSeen: DEFAULT_STORY.arcSeen } } };
 }
 
 /**
@@ -543,9 +562,23 @@ export function serializeSave(f: SaveFile): string {
 export type ImportResult = { ok: true } | { ok: false; reason: string };
 
 /**
- * 解析 → 校验 → 落盘。任何一步失败都**不触 store.save**：
+ * 解析 → **剔除信封/他机字段** → **迁移** → 落盘。任何一步失败都**不触 store.save**：
  * 旧档在失败路径下保持完好（Review Focus #2 的原子性承诺）。
  * 永不 reject——所有异常（含裸 JSON.parse SyntaxError、配额满）都收敛为 ok:false + reason。
+ *
+ * ## 三步的顺序是刻意的（R-T11-p4-a，兑现 Plan 4 Global Constraints 的
+ *    「importAndSave 先剔字段再校验」FFW 带入项）
+ * 1. **先剔字段**（在**原始**对象上做）：`exportedAt` 是导出信封自带的、从不属于 SaveFile；
+ *    `meta.lastExportedAt` 是他机/他时刻的备份史（R-T7-p3-a：留着会让 7 天提醒闸门
+ *    拿着别人的时刻静默失效）。先剔再迁移 ⇒ 迁移器看到的形状与最终落库形状一致。
+ * 2. **再迁移**（`migrateSave`）：它对旧形状档（缺 battle/progress/story/leaderboard、
+ *    以及 T6/T7 那种"story 在场但缺 arcSeen"）补默认，然后整包校验。
+ *    **这一步不能省**：只校验不迁移的实现会把用户 T7 时代导出的备份判成坏档
+ *    （reason 还是费解的"arcSeen 实际为 undefined"），T8 评审把这条与 C-1 一起点出来。
+ * 3. **最后落盘**：`store.save` 抛错（配额满）同样收敛为 ok:false。
+ *
+ * 幂等性：已是合法新形状的档在迁移器里走"同引用透传"分支，落库内容与旧实现逐字相同
+ * （既有用例"落盘值等于剔除 exportedAt 后的存档本体"继续成立）。
  */
 export async function importAndSave(text: string, store: GameStorage): Promise<ImportResult> {
   let parsed: unknown;
@@ -554,20 +587,31 @@ export async function importAndSave(text: string, store: GameStorage): Promise<I
   } catch (e) {
     return { ok: false, reason: `不是合法的 JSON 文本：${e instanceof Error ? e.message : String(e)}` };
   }
-  const validated = validateSave(parsed);
-  if (!validated.ok) return { ok: false, reason: validated.reason };
-  // 落盘前剔除两个"信封 / 他机"字段，保持存储形状纯净：
-  // - exportedAt：导出信封自带的"何时导出"，从不属于 SaveFile；
-  // - meta.lastExportedAt（R-T7-p3-a）：本机备份史。导入档来自他机/他时刻，那台机器的
-  //   "上次备份"对本机不成立——留着会让 7 天提醒闸门拿着别人的时刻静默失效。剔除后
-  //   落库形状回到"从未导出"，闸门 fail-open（宁可多提醒一次），与 T7 定下的方向一致。
-  // 浅拷贝即可：validateSave 已确认树形完好（meta 必为对象），且 GameStorage.save
-  // 内部做深拷贝快照。
-  const { exportedAt: _envelope, meta, ...rest } = validated.save as SaveFile & { exportedAt?: unknown };
-  const { lastExportedAt: _foreignExportStamp, ...cleanMeta } = meta;
-  const save = { ...rest, meta: cleanMeta } as SaveFile;
+  if (!isPlainObject(parsed)) {
+    return { ok: false, reason: `存档应为一个 JSON 对象，实际为 ${describeValue(parsed)}` };
+  }
+
+  // ① 先剔字段（meta 不是对象时原样留着，交给迁移器的校验面去报路径）
+  const { exportedAt: _envelope, meta: rawMeta, ...rest } = parsed as Record<string, unknown> & {
+    exportedAt?: unknown;
+  };
+  let stripped: Record<string, unknown> = rest;
+  if (isPlainObject(rawMeta)) {
+    const { lastExportedAt: _foreignExportStamp, ...cleanMeta } = rawMeta;
+    stripped = { ...rest, meta: cleanMeta };
+  }
+
+  // ② 再迁移（补旧形状缺省 + 整包校验）
+  let migrated: SaveFile;
   try {
-    await store.save(save as SaveFile);
+    migrated = migrateSave(stripped);
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+
+  // ③ 最后落盘
+  try {
+    await store.save(migrated);
   } catch (e) {
     return { ok: false, reason: `写入存储失败：${e instanceof Error ? e.message : String(e)}` };
   }
