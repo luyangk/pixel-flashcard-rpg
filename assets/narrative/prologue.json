@@ -1,0 +1,54 @@
+{
+  "source": "docs/LORE.md §5.1 序章（每屏旁白为逐字引文，勿改字；插画为灰阶占位，T9 换正稿）",
+  "scenes": [
+    {
+      "id": "cloud-age",
+      "label": "云端盛世",
+      "text": "知识不再入脑，云端即是记忆。",
+      "art": "assets/sprites/prologue-01-cloud-age.png"
+    },
+    {
+      "id": "data-flood",
+      "label": "数据溢出",
+      "text": "荒原之上，混沌睁开第一只眼。",
+      "art": "assets/sprites/prologue-02-data-flood.png"
+    },
+    {
+      "id": "great-forgetting",
+      "label": "大遗忘",
+      "text": "那日之后，没背进脑子的东西，都没了。",
+      "art": "assets/sprites/prologue-03-great-forgetting.png"
+    },
+    {
+      "id": "cloud-down",
+      "label": "云端失效",
+      "text": "云端靠不住了。",
+      "art": "assets/sprites/prologue-04-cloud-down.png"
+    },
+    {
+      "id": "old-art",
+      "label": "古法",
+      "text": "尚有古法：以脑为库，以记为剑。",
+      "art": "assets/sprites/prologue-05-old-art.png"
+    },
+    {
+      "id": "teaching",
+      "label": "授艺",
+      "text": "背下来的，才是你的。",
+      "art": "assets/sprites/prologue-06-teaching.png"
+    },
+    {
+      "id": "departure",
+      "label": "出发",
+      "text": "去吧。夺回人间的知识。",
+      "art": "assets/sprites/prologue-07-departure.png"
+    },
+    {
+      "id": "title",
+      "label": "标题画面",
+      "text": "知识侠客",
+      "art": "assets/sprites/prologue-08-title.png",
+      "title": true
+    }
+  ]
+}

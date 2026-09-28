@@ -72,6 +72,7 @@ function makeSave(cards: Card[], over: Partial<SaveFile['settings']> = {}): Save
       sm2Params: PARAMS,
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      story: { prologueSeen: false, beatIndex: 0 },
       ...over,
     },
     meta: { savedAt: NOW, plays: 0 },

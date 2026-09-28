@@ -54,7 +54,7 @@
 
 import type { Card, SaveFile, Settings } from '@core/types';
 import type { GameStorage } from '@platform/storage';
-import { MAX_TIME_MS, migrateSave, validateSave } from '@core/saveMigrate';
+import { DEFAULT_STORY, MAX_TIME_MS, migrateSave, validateSave } from '@core/saveMigrate';
 import type { SettleResult } from './growth';
 
 // ---------------------------------------------------------------------------
@@ -181,6 +181,10 @@ const DEFAULT_SETTINGS: Settings = {
   sm2Params: DEFAULT_SM2_PARAMS,
   battle: { defaultPoolSize: 15 },
   progress: { exp: 0 },
+  // T6（R-P4-preflight-c 三段式）：叙事进度是**必填**位，种子档必须自带一份默认——
+  // 缺它不只是 tsc 红，flush 的 snapshot 自检（validateSave）会整包拒，新装玩家第一次
+  // 落盘就静默失败。展开 DEFAULT_STORY 而非塞本体：种子档与迁移档不共享可变引用。
+  story: { ...DEFAULT_STORY },
   // T7：新档直接带空榜（与 migrateSave 为旧档补的缺省同形），
   // 免得"种子档"与"迁移档"两种形状长期分叉。数组本体在 seedSave 里每次新建。
   leaderboard: [],
@@ -202,6 +206,7 @@ function seedSave(nowMs: number): SaveFile {
       sm2Params: { ...DEFAULT_SETTINGS.sm2Params },
       battle: { ...DEFAULT_SETTINGS.battle },
       progress: { ...DEFAULT_SETTINGS.progress },
+      story: { ...DEFAULT_STORY }, // 同上：story 本体不可跨种子档共享
       leaderboard: [], // 每份种子档各持一个空数组，绝不跨实例共享可变引用
     },
     // meta 不含 lastExportedAt：缺席正是"从未导出"（R-T5-p3-a），种子档不得假装已备份。

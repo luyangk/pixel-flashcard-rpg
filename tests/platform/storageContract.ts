@@ -41,6 +41,7 @@ export function makeSave(savedAt: number, marker = 'base'): SaveFile {
     sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 },
     battle: { defaultPoolSize: 15 },
     progress: { exp: 0 },
+    story: { prologueSeen: false, beatIndex: 0 },
   };
   return { schemaVersion: 1, decks: [deck], cards: [card], settings, meta: { savedAt, plays: 0 } };
 }

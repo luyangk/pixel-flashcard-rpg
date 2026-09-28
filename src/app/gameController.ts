@@ -26,6 +26,7 @@ import type { Coordinator } from './persist';
 import { playerStatsFor, levelFromExp, settleFight } from './growth';
 import { recordRun } from './results';
 import { backupReminderDue } from './backup';
+import { markPrologueSeen } from './storyState';
 import type {
   ControllerSnapshot,
   ControllerScreen,
@@ -239,7 +240,14 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
       }
       case 'skipPrologue':
       case 'seenPrologue': {
-        // 管道先建（T6 接 prologue 屏与 settings.story 持久位）；此处直达菜单。
+        // T6（R-T6-p4-a）：两个 intent 语义合并——跳过与看完都等于"以后别再给我看序章"
+        // （LORE §5.1 可跳过），唯一副作用是 settings.story.prologueSeen=true；屏始终回 menu。
+        // "何时挂序章"归宿主（storyState.needsPrologue + mountPrologue），控制器不主动切
+        // 'prologue' 屏（初始屏仍 menu，保 GC#1 与 T7 菜单契约）。
+        // 只读态：guardedWrite 折成 notice + readOnly 位，不让异常逃到 UI 事件处理器。
+        await guardedWrite(async () => {
+          await markPrologueSeen(coord);
+        });
         screen = 'menu';
         break;
       }

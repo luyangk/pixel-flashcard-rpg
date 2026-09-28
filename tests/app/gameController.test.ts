@@ -44,6 +44,7 @@ function makeSave(cards: Card[]): SaveFile {
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 10 / 60, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      story: { prologueSeen: false, beatIndex: 0 },
       leaderboard: [],
     },
     meta: { savedAt: NOW, plays: 0 },
@@ -127,13 +128,23 @@ describe('gameController —— 快照链与意图', () => {
     expect(s.lastError?.message).toContain('还没有卡片');
   });
 
-  it('GC#4b 序章管道：skipPrologue / seenPrologue 均落到 menu（屏逻辑归 T6，类型位已建）', async () => {
+  it('GC#4b 序章：skipPrologue / seenPrologue 均落 menu，并把 story.prologueSeen 写实（T6 接线，R-T6-p4-a）', async () => {
     const clock = fakeClock(NOW);
-    const { ctrl } = await makeController([makeCard('c0')], clock);
+    const { ctrl, coord, store } = await makeController([makeCard('c0')], clock);
+    expect(coord.snapshot().settings.story.prologueSeen).toBe(false); // 新档：序章没看过
+
     await ctrl.intent({ type: 'skipPrologue' });
     expect(ctrl.snapshot().screen).toBe('menu');
+    // 判别力：T3 的"管道先建、直达 menu"空实现下这一位恒为 false ⇒ 必红
+    expect(coord.snapshot().settings.story.prologueSeen).toBe(true);
+
+    // 两 intent 语义合并（跳过 = 看完 = 以后别再给我看），重复派发不改变结论
     await ctrl.intent({ type: 'seenPrologue' });
-    expect(ctrl.snapshot().screen).toBe('menu'); // T6 前的 no-op 语义
+    expect(ctrl.snapshot().screen).toBe('menu');
+    expect(coord.snapshot().settings.story.prologueSeen).toBe(true);
+
+    await coord.flush();
+    expect((await store.load())?.settings.story).toEqual({ prologueSeen: true, beatIndex: 0 });
   });
 
   it('GC#5 deckIds 指向空集合 → insufficient-cards 文案报缺口', async () => {

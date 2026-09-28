@@ -58,6 +58,9 @@ function validSave(): SaveFile {
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      // Plan 4 · T6：settings.story 是**必填**位（与 battle/progress 同构的三段式），
+      // 夹具显式带上它——缺它 validateSave 会整包拒，而"当前形状的完整档"必须能过校验。
+      story: { prologueSeen: false, beatIndex: 0 },
       // Plan 3 · T7：排行榜持久位。夹具显式带上它，三个理由：
       // ①它虽是可选字段，但 migrateSave 会为缺席档补 []——夹具缺席会让"新档同引用透传"
       //   与 backup 侧 toStrictEqual 逐键无损断言把归一化误读成丢字段；
@@ -114,17 +117,20 @@ function legacyProgressSample(): Record<string, unknown> {
 }
 
 /**
- * 双旧形状档：battle / progress / leaderboard 三项皆缺（真实的 v2.1 前存档形态）。
+ * 全缺旧形状档：battle / progress / leaderboard / story 四项皆缺（真实的 v2.1 前存档形态）。
  *
  * leaderboard 也在删除之列（T7 fix round 1，评审 M1）：sample() 派生自 validSave，
  * 而 validSave 自 T7 起自带 `leaderboard: []`——不删的话"双缺旧档补空榜"那条断言
  * 恒真（空数组对空数组），覆盖不到真正的注入路径。真实的 T7 前旧档当然也没有榜单。
+ * story 同理（T6 起必须删）：它自 T6 起是必填位，"全缺旧档一次迁移补齐"这条链
+ * （跨模块串联用例会 deepEqual `validSave()`）只有把 story 也删掉才覆盖得到注入路径。
  */
 function legacyBothSample(): Record<string, unknown> {
   const raw = legacyProgressSample();
   const settings = raw.settings as Record<string, unknown>;
   delete settings.battle;
   delete settings.leaderboard;
+  delete settings.story;
   return raw;
 }
 
@@ -394,6 +400,44 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     expect(validateSave(raw2).ok).toBe(false);
     const okRaw = sample();
     (okRaw.settings as Record<string, Record<string, unknown>>).progress = { exp: 0 };
+    expect(validateSave(okRaw).ok).toBe(true);
+  });
+
+  // ---- story 域（Plan 4 · T6，R-P4-preflight-c 三段式之严检层）----
+
+  it('缺 settings.story（T6 前旧形状）→ validate 拒且 reason 含路径与 migrateSave 指路', () => {
+    const raw = sample();
+    delete (raw.settings as Record<string, unknown>).story;
+    const r = validateSave(raw);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('settings.story');
+      expect(r.reason).toContain('migrateSave');
+    }
+  });
+
+  it('story 域畸形：prologueSeen 非布尔 / beatIndex 为负、小数、字符串 → 拒且带路径', () => {
+    const bad = [
+      { prologueSeen: 'true', beatIndex: 0 },
+      { prologueSeen: 1, beatIndex: 0 },
+      { prologueSeen: false, beatIndex: -1 },
+      { prologueSeen: false, beatIndex: 2.5 },
+      { prologueSeen: false, beatIndex: '0' },
+    ];
+    for (const story of bad) {
+      const raw = sample();
+      (raw.settings as Record<string, unknown>).story = story;
+      const r = validateSave(raw);
+      expect(r.ok, JSON.stringify(story)).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.story.');
+    }
+    // story 整体非对象同样拒（域检查归校验器，不做消毒改写）
+    const raw2 = sample();
+    (raw2.settings as Record<string, unknown>).story = [false, 0];
+    expect(validateSave(raw2).ok).toBe(false);
+    // 合法边界：prologueSeen=true、beatIndex=0 与较大整数均过
+    const okRaw = sample();
+    (okRaw.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 12345 };
     expect(validateSave(okRaw).ok).toBe(true);
   });
 
@@ -739,6 +783,50 @@ describe('migrateSave', () => {
     expect(validateSave(save).ok).toBe(true);
     // 双缺旧档（battle/progress/leaderboard 皆无）一次迁移三项全补
     expect(migrateSave(legacyBothSample()).settings.leaderboard).toEqual([]);
+  });
+
+  // ---- story 扩域（Plan 4 · T6，R-P4-preflight-c 三段式之"migrate 补默认"层）----
+
+  it('旧档缺 story → validate 拒 → migrate 补 {prologueSeen:false,beatIndex:0} 后过', () => {
+    const raw = sample();
+    delete (raw.settings as Record<string, unknown>).story;
+    expect(validateSave(raw).ok).toBe(false); // 必填位：缺席整包拒
+    const save = migrateSave(raw);
+    expect(save.settings.story).toEqual({ prologueSeen: false, beatIndex: 0 });
+    expect(validateSave(save).ok).toBe(true);
+    // 全缺旧档（battle/progress/leaderboard/story 皆无）一次迁移四项全补
+    expect(migrateSave(legacyBothSample()).settings.story).toEqual({
+      prologueSeen: false,
+      beatIndex: 0,
+    });
+  });
+
+  it('已含 story 的新档：migrate 同引用透传、story 逐字不动（含非默认值）', () => {
+    const fresh = validSave();
+    fresh.settings.story = { prologueSeen: true, beatIndex: 42 };
+    const once = migrateSave(fresh);
+    expect(once).toBe(fresh); // 四档皆在场 ⇒ 零拷贝透传
+    expect(once.settings.story).toEqual({ prologueSeen: true, beatIndex: 42 });
+  });
+
+  it('迁移补的 story 与入参不共享引用（改一份不污染另一份）', () => {
+    const raw = sample();
+    delete (raw.settings as Record<string, unknown>).story;
+    const a = migrateSave(raw);
+    const b = migrateSave(raw);
+    expect(a.settings.story).not.toBe(b.settings.story);
+    a.settings.story.beatIndex = 7;
+    expect(b.settings.story.beatIndex).toBe(0);
+    expect(validateSave(b).ok).toBe(true);
+  });
+
+  it('非默认 story 经 serialize→parse→validate 逐字保真（三段式的往返钉）', () => {
+    const fresh = validSave();
+    fresh.settings.story = { prologueSeen: true, beatIndex: 9 };
+    const round = JSON.parse(serializeSave(fresh)) as Record<string, unknown>;
+    const r = validateSave(round);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.save.settings.story).toEqual({ prologueSeen: true, beatIndex: 9 });
   });
 
   it('migrate 不补 meta.lastExportedAt：缺席即"从未导出"，不发明假时刻', () => {

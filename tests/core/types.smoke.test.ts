@@ -44,6 +44,7 @@ function makeSaveFile(): SaveFile {
     sm2Params,
     battle: { defaultPoolSize: 15 },
     progress: { exp: 0 },
+    story: { prologueSeen: false, beatIndex: 0 },
   };
   return {
     schemaVersion: 1,

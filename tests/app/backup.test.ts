@@ -106,6 +106,7 @@ function makeSave(cards: Card[], over: Partial<SaveFile> = {}): SaveFile {
       sm2Params: PARAMS,
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      story: { prologueSeen: false, beatIndex: 0 },
       // T7 起 leaderboard 是当前形状的一部分（可选位，migrateSave 为缺席档补 []）：
       // 夹具带上它，才能让**过 migrateSave 的** toStrictEqual 逐键断言区分"归一化补默认"
       // 与"丢字段"——否则迁移注入的空榜会被读成往返丢键。

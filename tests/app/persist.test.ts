@@ -98,6 +98,7 @@ function makeSave(cards: Card[], over: Partial<SaveFile> = {}): SaveFile {
       sm2Params: PARAMS,
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      story: { prologueSeen: false, beatIndex: 0 },
     },
     meta: { savedAt: NOW, plays: 0 },
     ...over,
@@ -209,6 +210,10 @@ describe('createCoordinator 初始态 —— load 优先 / null 走种子档', (
     expect(snap.settings.sm2Params.firstInterval).toBeLessThan(1);
     expect(snap.settings.battle).toEqual({ defaultPoolSize: 15 });
     expect(snap.settings.progress).toEqual({ exp: 0 });
+    // T6 起 settings.story 是**必填**位：种子档少它不只是 tsc 红，flush 的 snapshot
+    // 自检（validateSave）会整包拒，新装玩家第一次落盘就静默失败——这条断言是防"后人
+    // 删掉种子档默认值"的钉子（与 battle/progress 同列）。
+    expect(snap.settings.story).toEqual({ prologueSeen: false, beatIndex: 0 });
     expect(snap.meta).toEqual({ savedAt: NOW, plays: 0 });
     expect(validateSave(snap).ok).toBe(true);
     clock.tick(1234);

@@ -78,8 +78,10 @@ export type ControllerSnapshot = Readonly<{
  * - answer：作答当前卡；若终局则内部完成 settleFight→recordRun→settleAndRecord 全链；
  * - finish：result→menu 的收口（清 fight/lastResult，回备战起点）；
  * - toMenu：任意时刻弃战回菜单（未终局的仗不落账）；
- * - skipPrologue / seenPrologue：**管道先建**（T6 接 prologue 屏逻辑），本任务
- *   skipPrologue 直达 menu、seenPrologue 为 no-op（prologueSeen 持久属 T6 的 settings.story 三段式）。
+ * - skipPrologue / seenPrologue：**T6 已接线**（R-T6-p4-a：两者语义合并 = "以后别再给我看
+ *   序章"）——写 settings.story.prologueSeen=true 后屏回 menu。何时*挂*序章归宿主：
+ *   storyState.needsPrologue(save) 为真时宿主调 mountPrologue，onDone 里派发这两个 intent
+ *   之一；控制器不主动切 'prologue' 屏（类型位保留，初始屏仍是 menu）。
  */
 export type GameIntent =
   | { type: 'startFight'; size: number; deckIds?: string[]; difficulty?: 'encounter' | 'boss' }

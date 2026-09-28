@@ -48,6 +48,7 @@ function makeSave(): SaveFile {
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 10 / 60, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      story: { prologueSeen: false, beatIndex: 0 },
       leaderboard: [],
     },
     meta: { savedAt: 0, plays: 0 },

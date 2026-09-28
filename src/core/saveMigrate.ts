@@ -37,9 +37,16 @@
  *   validateSave 在场严检（有限数且 ≥0，负值/NaN/超界整包拒），**migrateSave 不补默认**
  *   ——补一个假时刻会让 backupReminderDue 静默失效 7 天。写入路径：Coordinator.markExported。
  * schemaVersion 仍恰为 1，顶层键集不变。
+ *
+ * Plan 4 · T6 扩展（R-P4-preflight-c 三段式）：Settings 新增 **必填**位
+ * `story:{prologueSeen:boolean, beatIndex:number}`（序章是否看过 + 战报碎片游标）。
+ * 与 battle/progress 完全同构：validateSave 在场逐项严检（prologueSeen 必须布尔、
+ * beatIndex 必须非负整数）、缺席整包拒并指路 migrateSave；migrateSave 只为缺 story 的
+ * 旧形状档补 {prologueSeen:false, beatIndex:0}。必填而非可选的理由见 types.StorySettings：
+ * "字段不存在"与"序章没看过"对宿主是两回事，只有迁移补齐后才敢演出。
  */
 
-import type { SaveFile } from './types';
+import type { SaveFile, StorySettings } from './types';
 import type { GameStorage } from '@platform/storage';
 // 日键口径唯一权威在 reviewLedger（R-T6-c）：跨模块 import 复用而非复制——
 // 两者同属 core、无循环依赖，复制反会制造"两份定义各自漂移"的隐患。
@@ -86,6 +93,13 @@ export const DEFAULT_POOL_SIZE = 15;
 
 /** settings.progress.exp 默认值（Plan 3 · T3）：整数域裁决见 types.ts ProgressSettings 注释。 */
 export const DEFAULT_PROGRESS_EXP = 0;
+
+/**
+ * settings.story 默认值（Plan 4 · T6）：序章没看过、战报游标从 0 起。
+ * 冻结 + 注入处展开成新对象（`{...DEFAULT_STORY}`）：种子档与迁移档各自持有独立引用，
+ * 绝不让两份存档共享同一个可变 story 对象（T7 leaderboard 的同款教训）。
+ */
+export const DEFAULT_STORY: StorySettings = Object.freeze({ prologueSeen: false, beatIndex: 0 });
 
 /** 内部信号：校验失败的路径化原因。不外泄——validateSave 捕获后转成 reason。 */
 class ValidationSignal extends Error {}
@@ -315,6 +329,25 @@ function validateSettings(raw: unknown): void {
   if (!('progress' in o) || o.progress === undefined) {
     fail('settings.progress', '缺失（T3 前旧档形状），请经 migrateSave 迁移后再导入');
   }
+  // story 域（Plan 4 · T6）：与 battle/progress 同构的「在场严检 + 缺席整包拒」。
+  // prologueSeen 必须布尔（真值/假值字符串会让宿主把"看过"判反）；beatIndex 必须非负整数
+  // （它是 nextBeat 的累计抽取数，小数/负数无合法来源，出现即脏档）。
+  if ('story' in o && o.story !== undefined) {
+    const story = requireObject(o.story, 'settings.story');
+    assertShape(
+      typeof story.prologueSeen === 'boolean',
+      'settings.story.prologueSeen',
+      () => `应为布尔，实际为 ${describeValue(story.prologueSeen)}`,
+    );
+    assertShape(
+      Number.isInteger(story.beatIndex) && (story.beatIndex as number) >= 0,
+      'settings.story.beatIndex',
+      () => `应为非负整数，实际为 ${describeValue(story.beatIndex)}`,
+    );
+  }
+  if (!('story' in o) || o.story === undefined) {
+    fail('settings.story', '缺失（T6 前旧档形状），请经 migrateSave 迁移后再导入');
+  }
   // leaderboard 域（Plan 3 · T7）：**可选位**——在场才严检（逐行九字段，路径带下标，
   // 如 `settings.leaderboard[3].score`）；缺席不拒（与 battle/progress 的分工差异见
   // types.Settings 注释：拒绝缺席会让 T7 前写下的存档全部打不开）。
@@ -397,23 +430,26 @@ export function validateSave(raw: unknown): ValidateResult {
  * defaultPoolSize ∈ 10–25 整数（99/3.5/'x' 一律拒，reason 带路径）；缺失报
  * `settings.battle: 缺失…请经 migrateSave 迁移`。域畸形始终归 validateSave，
  * 本函数绝不做消毒改写。**幂等声明的适用边界**：仅当输入已是"battle / progress /
- * leaderboard 三者皆在场且整包合法的新档"时，本函数同引用透传、零 mutate
+ * story / leaderboard 四者皆在场且整包合法的新档"时，本函数同引用透传、零 mutate
  * （validateSave 同引用返回 + 现状核实其对未知多余键容忍，故无需拷贝重建）；
  * 任一项缺席的 legacy 档经注入后返回的是新建浅拷贝对象，不在此列。另注意：
  * **返回值与入参共享嵌套引用**（decks/cards 数组本体不复制），需独立副本请自行
  * structuredClone。
  *
- * 范围克制（R-T6-d 延伸）：迁移只做"缺省补值"这一件事，现有三档——settings.battle
- * → {defaultPoolSize:15}、settings.progress → {exp:0}、settings.leaderboard → []；
+ * 范围克制（R-T6-d 延伸）：迁移只做"缺省补值"这一件事，现有四档——settings.battle
+ * → {defaultPoolSize:15}、settings.progress → {exp:0}、settings.story →
+ * {prologueSeen:false,beatIndex:0}、settings.leaderboard → []；
  * "上次备份时刻"（meta.lastExportedAt）**不补**（缺席 = 从未导出，补默认有害），
  * schemaVersion 保持恰 1，不发明新顶层字段。
  * 失败形态与校验器一致：抛 Error，message 即含 JSON 路径的可读 reason。
  */
 export function migrateSave(raw: unknown): SaveFile {
-  // 旧形状档（无 battle / 无 progress）在 validateSettings 处即被拒，故先注入默认再整包校验：
+  // 旧形状档（无 battle / 无 progress / 无 story）在 validateSettings 处即被拒，故先注入默认再整包校验：
   // 这正是 brief Step 1 的「migrateSave 注入 {battle:{defaultPoolSize:15}} 后再 validate 过」
-  // （T3 起 progress 同待遇：注入 {progress:{exp:0}}；T7 起 leaderboard：注入 {leaderboard:[]}）。
-  const migrated = injectLeaderboardDefault(injectProgressDefaults(injectBattleDefault(raw)));
+  // （T3 起 progress 同待遇：注入 {progress:{exp:0}}；T6 起 story；T7 起 leaderboard：注入 {leaderboard:[]}）。
+  const migrated = injectLeaderboardDefault(
+    injectStoryDefaults(injectProgressDefaults(injectBattleDefault(raw))),
+  );
   const validated = validateSave(migrated);
   if (!validated.ok) throw new Error(`存档不合法，无法迁移：${validated.reason}`);
   return validated.save;
@@ -447,7 +483,21 @@ function injectProgressDefaults(raw: unknown): unknown {
 }
 
 /**
- * settings.leaderboard 缺省时补 `[]`（Plan 3 · T7）——与上两个注入器同构：
+ * settings.story 缺省时补 `{prologueSeen:false, beatIndex:0}`（Plan 4 · T6）——与
+ * injectProgressDefaults 完全同构：只在 settings 为对象且 story 缺席时浅拷贝注入；
+ * 在场（哪怕 prologueSeen=false）一律原样透传给 validateSave 逐项拒绝（域检查归校验器）。
+ * 注入值展开成新对象而不是塞 DEFAULT_STORY 本体：迁移档与种子档绝不共享同一份可变引用。
+ */
+function injectStoryDefaults(raw: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  const settings = raw.settings;
+  if (!isPlainObject(settings)) return raw;
+  if ('story' in settings && settings.story !== undefined) return raw;
+  return { ...raw, settings: { ...settings, story: { ...DEFAULT_STORY } } };
+}
+
+/**
+ * settings.leaderboard 缺省时补 `[]`（Plan 3 · T7）——与上三个注入器同构：
  * 只在 settings 为对象且 leaderboard 缺席时浅拷贝注入；在场（哪怕是空数组）一律原样
  * 透传给 validateSave 逐行拒绝。缺省值是 [] 而非拒绝，因为榜单是展示派生数据：
  * 缺席等价于"还没打过一局"，拒绝它会把 T7 前写下的存档全部锁死（RF#4 的反面）。

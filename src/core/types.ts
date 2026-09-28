@@ -74,12 +74,33 @@ export interface ProgressSettings {
   exp: number;
 }
 
+/**
+ * 叙事进度（Plan 4 · T6，R-P4-preflight-c 三段式：**types 必填** + validateSave 在场严检
+ * 且缺席整包拒 + migrateSave 为缺席档补 {prologueSeen:false, beatIndex:0}）。
+ *
+ * - prologueSeen：序章是否已演出过。跳过与看完**同待遇**（LORE §5.1「可跳过」），
+ *   写成 true 之后宿主不再挂序章（读侧见 app/storyState.needsPrologue）；
+ * - beatIndex：战报碎片抽取游标，语义是**累计抽取数**（不是池内下标）——由
+ *   ui/beats.nextBeat 返回的 next 回写，落盘后重开游戏不重头抽。非负整数域
+ *   （validateSave 拒 -1/2.5/'x'：小数游标无合法来源）。
+ *
+ * 与 leaderboard 的分工差异：它是可选派生位（缺席不拒），本字段是**必填**——
+ * 序章"没看过"与"字段不存在"对宿主是两回事（前者要演出，后者只能靠迁移补齐才敢演出），
+ * 故缺席走 validateSave 整包拒 + migrateSave 补默认（与 battle/progress 同构）。
+ */
+export interface StorySettings {
+  prologueSeen: boolean;
+  beatIndex: number;
+}
+
 /** 玩家设置。 */
 export interface Settings {
   bossThresholdTier: 15 | 30 | 50;
   sm2Params: Sm2Params;
   battle: BattleSettings;
   progress: ProgressSettings;
+  /** 叙事进度（Plan 4 · T6 必填位，见 StorySettings 注释）。 */
+  story: StorySettings;
   /**
    * 本地战绩榜（Plan 3 · T7，PRD §5 首版"本地榜"的落盘位）。
    *
