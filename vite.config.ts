@@ -24,6 +24,22 @@ import { defineConfig, type Plugin } from 'vite';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 
+/**
+ * 路径别名——**必须与 visconfig(tsconfig) 的 `compilerOptions.paths` 和
+ * `vitest.config.ts` 的 `resolve.alias` 三处一致**。
+ *
+ * 为什么不能只靠 tsconfig：TypeScript 的 paths 只影响**类型检查**；真正的模块解析由
+ * 打包器/测试运行时负责。T11 首版漏了这里的别名，症状极隐蔽——`vitest` 有自己的 alias
+ * 所以 789 条用例全绿、`vite build` 也能出包，唯独 **dev server 的 transform** 会
+ * 报 `Failed to resolve import "@core/rng"`（浏览器里直接是红屏）。T11 复审前由
+ * "起 dev server 抓一次模块"这条手工冒烟抓到，故一并加一条工具测试防回归
+ * （tests/tooling/aliasSync.test.ts 逐字比对三处声明）。
+ */
+const ALIAS = {
+  '@core/': fileURLToPath(new URL('./src/core/', import.meta.url)),
+  '@platform/': fileURLToPath(new URL('./src/platform/', import.meta.url)),
+};
+
 function copyAssets(): Plugin {
   return {
     name: 'zx-xia:copy-assets',
@@ -39,6 +55,7 @@ function copyAssets(): Plugin {
 
 export default defineConfig({
   plugins: [copyAssets()],
+  resolve: { alias: ALIAS },
   build: {
     // 打包产物避开 dist/assets（那里归游戏素材，见文件头"命名避让"）
     assetsDir: 'bundle',
