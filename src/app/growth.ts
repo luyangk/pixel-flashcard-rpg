@@ -130,8 +130,17 @@ function consumedAndRelease(state: BattleState, pool: readonly Card[]): { consum
   const released = pool.slice(0, releaseLen);
   const consumedIds = new Set<string>();
   if (Array.isArray(state?.log)) {
+    // T4 捎带修复（T3 I-1）：log 侧同样受池前缀下界约束——只收 pool[0..releaseLen)
+    // 内的 id，兑现本函数头注释「min(idx, 池长) 上界防伪造越账」的承诺。
+    // 正常流程 log 的 cardId 恒落在该前缀内，此 filter 对生产路径零行为变化；
+    // 脏 log（伪造/回放损坏）里的池外 id 一律不落账。
+    const inWindow = new Set<string>();
+    for (let i = 0; i < releaseLen; i++) {
+      const id = pool[i]?.id;
+      if (typeof id === 'string') inWindow.add(id);
+    }
     for (const ev of state.log) {
-      if (typeof ev?.cardId === 'string') consumedIds.add(ev.cardId);
+      if (typeof ev?.cardId === 'string' && inWindow.has(ev.cardId)) consumedIds.add(ev.cardId);
     }
   }
   for (let i = 0; i < releaseLen; i++) {
