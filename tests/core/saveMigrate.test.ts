@@ -811,6 +811,30 @@ describe('importAndSave', () => {
     expect(await store.load()).toEqual(incoming);
   });
 
+  /**
+   * R-T7-p3-a（Plan 3 · T8 强制义务）：导入档来自他机/他时刻，其 meta.lastExportedAt
+   * 记录的是**那台机器**的导出史——对本机不成立。故 importAndSave 在剥 exportedAt 信封的
+   * 同时一并剔除该字段，落库形状回到"从未导出"。
+   *
+   * fail-safe 方向：剔除 ⇒ 提醒闸门视作从未导出 ⇒ 宁可多提醒一次，也不会让别人的时刻
+   * 把本机的 7 天提醒静默关掉 7 天（这正是本义务的存在理由）。闸门侧闭环
+   * （backupReminderDue(lastExportedAt ?? null, now) === true）属 app 层，由
+   * tests/app/fullSession.smoke.test.ts SM#3 取证；此处只钉 core 侧事实：字段确已不在落库值里。
+   */
+  it('导入含 meta.lastExportedAt 的他机档 → 落库后该字段缺席，其余 meta 字段保真', async () => {
+    const store = await storeWithOld();
+    const incoming = validSave();
+    incoming.meta.plays = 42;
+    incoming.meta.lastExportedAt = T0 - 3 * 86_400_000; // 他机"3 天前备份过"
+    expect(await importAndSave(serializeSave(incoming), store)).toEqual({ ok: true });
+    const loaded = await store.load();
+    expect(loaded?.meta.plays).toBe(42);
+    expect(loaded?.meta.savedAt).toBe(incoming.meta.savedAt);
+    // 字段缺席（不是 undefined 占位）：JSON 往返后 meta 键集恰为 {savedAt, plays}
+    expect(loaded !== null && 'lastExportedAt' in loaded.meta).toBe(false);
+    expect(Object.keys(loaded!.meta).sort()).toEqual(['plays', 'savedAt']);
+  });
+
   it('合法文本 → ok:true 且落盘进度完整（plays/deckId 引用均保真）', async () => {
     const store = await storeWithOld();
     const incoming = validSave();

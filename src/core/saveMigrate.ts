@@ -13,6 +13,11 @@
  * importAndSave 串联 解析→校验→落盘，任一步失败都不触 store.save（Review Focus #2），
  * 保证失败路径下旧档完好。落盘快照深拷贝由 GameStorage 实现负责，调用方不再重复。
  *
+ * 【Plan 3 · T8 补丁（R-T7-p3-a）】落盘前在既有"剥 exportedAt 信封"处**一并剔除
+ * `meta.lastExportedAt`**：导入档的该字段记录的是他机/他时刻的导出史，对本机不成立，
+ * 留着会让 7 天备份提醒拿着别人的时刻静默失效。剔除 ⇒ 落库形状回到"从未导出"，
+ * 闸门 fail-open（宁可多提醒一次）。
+ *
  * 平台纯净：本文件不引用 DOM/Node API、不读时钟——serializeSave 的 exportedAt
  * 派生自 SaveFile.meta.savedAt。导出文件名拼装属 UI 关注点，留给平台层（R-T6-b）。
  *
@@ -485,9 +490,16 @@ export async function importAndSave(text: string, store: GameStorage): Promise<I
   }
   const validated = validateSave(parsed);
   if (!validated.ok) return { ok: false, reason: validated.reason };
-  // exportedAt 是导出信封字段，不属于 SaveFile——落盘前剔除，保持存储纯净。
-  // 浅拷贝即可：validateSave 已确认树形完好，且 GameStorage.save 内部做深拷贝快照。
-  const { exportedAt: _envelope, ...save } = validated.save as SaveFile & { exportedAt?: unknown };
+  // 落盘前剔除两个"信封 / 他机"字段，保持存储形状纯净：
+  // - exportedAt：导出信封自带的"何时导出"，从不属于 SaveFile；
+  // - meta.lastExportedAt（R-T7-p3-a）：本机备份史。导入档来自他机/他时刻，那台机器的
+  //   "上次备份"对本机不成立——留着会让 7 天提醒闸门拿着别人的时刻静默失效。剔除后
+  //   落库形状回到"从未导出"，闸门 fail-open（宁可多提醒一次），与 T7 定下的方向一致。
+  // 浅拷贝即可：validateSave 已确认树形完好（meta 必为对象），且 GameStorage.save
+  // 内部做深拷贝快照。
+  const { exportedAt: _envelope, meta, ...rest } = validated.save as SaveFile & { exportedAt?: unknown };
+  const { lastExportedAt: _foreignExportStamp, ...cleanMeta } = meta;
+  const save = { ...rest, meta: cleanMeta } as SaveFile;
   try {
     await store.save(save as SaveFile);
   } catch (e) {
