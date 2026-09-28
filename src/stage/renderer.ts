@@ -177,38 +177,10 @@ function enemyMaxHp(view: FightView): number {
   }
 }
 
-/** 帧号（tMs 驱动）：闪白的"亮两帧/灭两帧"节拍由此得出。 */
+/** 帧号（tMs 驱动，输入是**脉冲内已过的毫秒**而非绝对时间）：闪白节拍由此得出。 */
 function frameIndex(tMs: number): number {
   const t = typeof tMs === 'number' && Number.isFinite(tMs) && tMs > 0 ? tMs : 0;
   return Math.floor(t / FLASH_FRAME_MS);
-}
-
-/**
- * 取**本回合的动作事件**（damage | miss），跳过每回合固定追加在其后的
- * retaliate/end。日志末项永远是 retaliate 或 end（core/battle.ts 的追加顺序），
- * 所以"末项 === damage"永不成立——T4 首版据此判断导致怪物闪白死路径（评审 Critical）。
- * 从尾部向前扫到第一个 damage/miss 即为本回合动作；空日志返回 null。
- */
-export function turnAction(st: BattleState): 'damage' | 'miss' | null {
-  const log = st?.log;
-  if (!Array.isArray(log)) return null;
-  for (let i = log.length - 1; i >= 0; i--) {
-    const k = log[i]?.kind;
-    if (k === 'damage' || k === 'miss') return k;
-  }
-  return null;
-}
-
-/** 本回合是否发生过反击（供 hero 闪红判定；同样跳过尾随 end）。 */
-export function turnRetaliated(st: BattleState): boolean {
-  const log = st?.log;
-  if (!Array.isArray(log)) return false;
-  for (let i = log.length - 1; i >= 0; i--) {
-    const k = log[i]?.kind;
-    if (k === 'retaliate') return true;
-    if (k === 'damage' || k === 'miss') return false; // 扫到本回合动作即停：本轮无反击
-  }
-  return false;
 }
 
 /**

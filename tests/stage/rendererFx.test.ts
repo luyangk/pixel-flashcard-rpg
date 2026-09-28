@@ -21,8 +21,6 @@ import {
   advanceFx,
   drawFrame,
   fxFromAnchors,
-  turnAction,
-  turnRetaliated,
   FLASH_WINDOW_MS,
   FX_UNPRIMED,
   type StageSprites,
@@ -95,17 +93,20 @@ function afterTurn(grade: number): BattleState {
 }
 
 describe('T4 评审 Critical 回归 —— 事件溯源与脉冲式反馈', () => {
-  it('RF#1 真实日志末项是 retaliate，但 turnAction 取回本回合的 damage（旧实现的死路径）', () => {
+  it('RF#1 真实日志末项是 retaliate，而生产路径（advanceFx）仍把本回合认成"命中"', () => {
     const hit = afterTurn(GRADES.good);
-    expect(hit.log[hit.log.length - 1]?.kind).toBe('retaliate'); // 末项恒非动作事件
-    expect(turnAction(hit)).toBe('damage'); // ← 首版据此判闪白必为 false（永不闪）
-    expect(turnRetaliated(hit)).toBe(true);
+    // core 的追加序保证末项恒为 retaliate/end——首版据此判闪白 ⇒ 死路径（永不闪）。
+    expect(hit.log[hit.log.length - 1]?.kind).toBe('retaliate');
+    // 生产路径按**增量切片**判定：新增里出现 damage ⇒ 开怪物锚点。
+    const primed = advanceFx(FX_UNPRIMED, [], 0);
+    const after = advanceFx(primed, hit.log, 500);
+    expect(after.mobHitAt).toBe(500); // damage 被识别
+    expect(after.heroHitAt).toBe(500); // retaliate 也被识别
   });
 
   it('RF#2 miss 回合：turnAction 为 miss、怪物不闪（D28 可见语义）', () => {
     const miss = afterTurn(GRADES.again);
-    expect(turnAction(miss)).toBe('miss');
-    // 失手回合：即便给了 hero 脉冲，也不该有怪物的白闪叠加
+    // 失手回合：增量里无 damage ⇒ 不开怪物锚点（机器保证），即便给了 hero 脉冲也无白闪叠加
     const { ctx, calls } = stubCtx();
     drawFrame(ctx, miss, viewOf(miss), SPRITES, 0, { heroHitElapsedMs: 0 });
     const lighter = calls.filter((c) => c === 'drawImage:lighter');
