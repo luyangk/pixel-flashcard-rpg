@@ -58,7 +58,15 @@ export function mountPrologue(
   const list = Array.isArray(scenes) ? scenes : [];
 
   /* ------------------------------------------------------------ DOM 外壳 */
-  const artEl = h('img', { 'data-ui': 'prologue-art', class: 'prologue-art', alt: '' }) as HTMLImageElement;
+  // draggable='false' + pointer-events:none：真机上长按/拖动插画会吞掉包裹层的 click，
+  // 而"点哪都能推进"是这一屏唯一交互 —— 插画不该参与命中测试。
+  const artEl = h('img', {
+    'data-ui': 'prologue-art',
+    class: 'prologue-art',
+    alt: '',
+    draggable: 'false',
+    style: { 'pointer-events': 'none' },
+  }) as HTMLImageElement;
   const textEl = h('div', { 'data-ui': 'prologue-text', class: 'prologue-text' });
   const hintEl = h('div', { 'data-ui': 'prologue-hint', class: 'prologue-hint' }, HINT_MORE);
   const progressEl = h('div', { 'data-ui': 'prologue-progress', class: 'prologue-progress' });

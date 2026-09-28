@@ -10,11 +10,13 @@
  * - `cursor` 是**累计抽取数**（单调递增，落盘到 `settings.story.beatIndex`）。
  *   单个整数游标无法持久化整张抽序，故排期由 (池长, 轮次) 确定性派生：
  *   同 (pool, cursor) 恒得同一句 —— 这也是本套件能判别实现的前提。
+ *   脏游标 fail-closed（空句 + 原值退回），与写侧 `saveBeatCursor` 同口径。
  *
  * 判别力（T4/T5 教训②）：
  * - B#2 断言"抽满一轮后再抽仍得池内句子"：朴素 `pool[cursor]`（无重置）实现必红；
  * - B#6/B#7 断言每轮恰 1 条 arc、280 抽恰 10 条：把 arc 当普通条目同权乱排的
- *   实现会得 ~28 条 ⇒ 必红。
+ *   实现会得 ~28 条 ⇒ 必红；
+ * - B#10 断言脏游标不出句：把脏游标归一成 0 的 fail-open 实现必红。
  *
  * 本文件不碰 DOM（beats.ts 是纯函数）：per-file happy-dom 仅为与 T6 另一测试文件
  * 保持同一环境口径，不给全局 config 添分支。
@@ -101,6 +103,16 @@ describe('nextBeat —— 抽完重置', () => {
       expect(a).toEqual(b);
       expect(a.text).not.toBe('');
     }
+  });
+
+  it('B#10 脏游标 fail-closed：不出句、原值退回（与写侧 saveBeatCursor 同口径；"按 0 重来"必红）', () => {
+    const pool = mixedPool();
+    for (const dirty of [-5, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      // 旧实现把脏游标归一成 0 ⇒ 此处会拿到非空句子 + next=1，必红
+      expect(nextBeat(pool, dirty)).toEqual({ text: '', next: dirty });
+    }
+    // 0 是合法的"从未抽过"，不能跟着一起被拒（防"一律拒绝"的过度修复）
+    expect(nextBeat(pool, 0).text).not.toBe('');
   });
 
   it('B#5 字符串池与对象池等价：同一个池两种写法得同一抽序（brief 的 readonly string[] 签名仍成立）', () => {

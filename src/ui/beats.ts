@@ -18,8 +18,10 @@
  *
  * 游标语义：`next` 是**累计抽取数**（0 = 从未抽过），单调递增，**不是池内下标**。
  * 调用方把它写回 `settings.story.beatIndex`（app 侧写口见 src/app/storyState.ts）。
- * 负数/小数/NaN 游标按 0 处理（防御：UI 传进来的中间值不该让渲染炸掉；落盘位的严检在
- * validateSave，不在此处）。
+ * 脏游标（负数/小数/NaN/Infinity）**读侧与写侧同一口径：拒绝**——读侧不出句、把原值原样
+ * 退回，写侧（app/storyState.ts）不落盘。早先的"按 0 处理"是 fail-open：同一份脏数据在
+ * 读侧悄悄从第 0 句重来、在写侧却拒写，两端口径不对称（T6 评审 Minor #1）。
+ * 落盘位的严检仍在 validateSave，此处只是不作为。
  */
 import { mulberry32 } from '@core/rng';
 
@@ -32,7 +34,7 @@ export interface BeatTemplate {
 
 export type BeatEntry = string | BeatTemplate;
 
-/** 一次抽取的结果。`text` 为空串只有一种情形：池是空的（防御契约，见 nextBeat）。 */
+/** 一次抽取的结果。`text` 为空串表示"这一抽没内容"：池是空的，或游标是脏值（见 nextBeat）。 */
 export interface BeatDraw {
   readonly text: string;
   /** 下一位游标（累计抽取数）。 */
@@ -40,8 +42,10 @@ export interface BeatDraw {
 }
 
 /**
- * 暗线前奏相对普通碎片的权重。普通碎片 = 1；0.25 ⇒ 每条暗线平均约 4 轮露一次面
- * （3 条合起来 ≈ 0.75 条/轮 ⇒ 取整后 1 条/轮 ⇒ 实际 ≈ 1/3 轮每条）。
+ * 暗线前奏相对普通碎片的权重（普通碎片 = 1）。**它只用来解出"每轮混入几条"**：
+ * 3 条暗线 × 0.25 = 0.75 ⇒ round ⇒ 1 条/轮（`arcsPerCycle`）。
+ * 注意取整会盖过权重：每轮至少混 1 条且按轮次轮转，所以实际是**每条暗线约每 3 轮露一次面**
+ * （不是权重直观给出的 4 轮），两条同句之间的最大间隔 = 3 轮 − 1 抽。
  * 调这一个数就能调暗线的"神秘度"，文案池不必改。
  */
 export const ARC_WEIGHT = 0.25;
@@ -123,16 +127,21 @@ function scheduleFor(
   return slots as BeatTemplate[];
 }
 
-/** 非负整数化游标：负数/小数/NaN/Infinity 一律按 0 处理。 */
-function normalizeCursor(cursor: number): number {
-  return Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
+/**
+ * 游标闸门：只有非负整数才可读，脏值一律 `null`（调用方据此拒绝出句）。
+ * 与写侧 `saveBeatCursor` 的 fail-closed 对齐——脏数据不该在任一端被"顺手修正"。
+ */
+function normalizeCursor(cursor: number): number | null {
+  return Number.isInteger(cursor) && cursor >= 0 ? cursor : null;
 }
 
 /**
- * 抽下一条战报碎片。空池返回 `{text:'', next: 游标原值}`（不推进——没有内容可"抽过"）。
+ * 抽下一条战报碎片。两种情况返回 `{text:'', next: 游标原值}`（不推进——没有内容可"抽过"）：
+ * 空池、以及脏游标（见文件头"游标语义"）。两处都不抛异常：渲染层拿到空串即不画这一帧。
  */
 export function nextBeat(pool: readonly BeatEntry[], cursor: number): BeatDraw {
   const idx = normalizeCursor(cursor);
+  if (idx === null) return { text: '', next: cursor };
   const { normals, arcs } = splitPool(pool);
   if (normals.length === 0 && arcs.length === 0) return { text: '', next: idx };
 

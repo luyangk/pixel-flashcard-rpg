@@ -70,6 +70,10 @@ describe('mountPrologue —— 逐屏演出', () => {
     expect(skip.style.position).toBe('absolute');
     expect(skip.style.top).not.toBe('');
     expect(skip.style.right).not.toBe('');
+    // 插画不参与命中测试：真机长按/拖动会吞掉包裹层的 click（T6 评审 Minor #2）
+    const art = ui(root, 'prologue-art');
+    expect(art.getAttribute('draggable')).toBe('false');
+    expect(art.style.pointerEvents).toBe('none');
   });
 
   it('P#2 点击逐屏推进：8 屏顺序不乱；第 8 屏点完 onDone 恰一次且 DOM 清空', () => {
