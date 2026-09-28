@@ -42,7 +42,7 @@ function fake(id: string, front: string, tamperedBack: string): FakeCard {
 
 function snapWith(res: RunSummary | null, beatIndex = 0) {
   const base = makeSave();
-  const save = { ...base, settings: { ...base.settings, story: { prologueSeen: true, beatIndex } } };
+  const save = { ...base, settings: { ...base.settings, story: { prologueSeen: true, beatIndex, arcSeen: 0 } } };
   return makeSnap({ screen: 'result', save, lastResult: res });
 }
 

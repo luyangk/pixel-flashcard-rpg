@@ -87,10 +87,17 @@ export interface ProgressSettings {
  * 与 leaderboard 的分工差异：它是可选派生位（缺席不拒），本字段是**必填**——
  * 序章"没看过"与"字段不存在"对宿主是两回事（前者要演出，后者只能靠迁移补齐才敢演出），
  * 故缺席走 validateSave 整包拒 + migrateSave 补默认（与 battle/progress 同构）。
+ *
+ * 【Plan 4 · T8 扩位】`arcSeen`：已解锁的暗线幕数（0–3，LORE §5.3 的 3/6/9 净化里程碑）。
+ * 它是"里程碑**已经露过面**"的唯一记录——判据是净化数派生（purifiedCount ≥ 3/6/9），
+ * 但"每幕只演一次、不重复"必须有个游标，故在此落一个 0–3 的整数。
+ * 三段式与 story 整体同规格：types 必填 + validateSave 在场严检 + migrateSave 补 0。
  */
 export interface StorySettings {
   prologueSeen: boolean;
   beatIndex: number;
+  /** 已解锁的暗线幕数：0 = 一幕未现，3 = 三幕齐（LORE §5.3）。 */
+  arcSeen: number;
 }
 
 /** 玩家设置。 */

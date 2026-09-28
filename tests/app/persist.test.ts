@@ -98,7 +98,7 @@ function makeSave(cards: Card[], over: Partial<SaveFile> = {}): SaveFile {
       sm2Params: PARAMS,
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
-      story: { prologueSeen: false, beatIndex: 0 },
+      story: { prologueSeen: false, beatIndex: 0, arcSeen: 0 },
     },
     meta: { savedAt: NOW, plays: 0 },
     ...over,
@@ -213,7 +213,7 @@ describe('createCoordinator 初始态 —— load 优先 / null 走种子档', (
     // T6 起 settings.story 是**必填**位：种子档少它不只是 tsc 红，flush 的 snapshot
     // 自检（validateSave）会整包拒，新装玩家第一次落盘就静默失败——这条断言是防"后人
     // 删掉种子档默认值"的钉子（与 battle/progress 同列）。
-    expect(snap.settings.story).toEqual({ prologueSeen: false, beatIndex: 0 });
+    expect(snap.settings.story).toEqual({ prologueSeen: false, beatIndex: 0, arcSeen: 0 });
     expect(snap.meta).toEqual({ savedAt: NOW, plays: 0 });
     expect(validateSave(snap).ok).toBe(true);
     clock.tick(1234);
@@ -1463,5 +1463,45 @@ describe('C1 在途 mutate 的批次归属 —— 落盘批次在 await 前认�
     await drainMicrotasks();
     expect(coord.dirty()).toBe(false);
     expect((await raw.load())!.meta.plays).toBe(42);
+  });
+});
+
+/* ------------------------------------------------------------------ rawDump（T8 · D29） */
+
+describe('rawDump —— 坏档抢救出口（D29 三件套之一）', () => {
+  it('PD-T8#1 坏档（schemaVersion 2）→ 只读态，rawDump 给的是**存储里那份**，不是内存种子档', async () => {
+    const store = createMemoryStorage();
+    const bad = { schemaVersion: 2, decks: [], cards: [], settings: {}, meta: { savedAt: 1, plays: 0 } };
+    await store.save(bad as unknown as SaveFile);
+    const coord = await createCoordinator(store, { now: () => NOW });
+    expect(coord.readOnly()).toBe(true);
+
+    const text = await coord.rawDump();
+    expect(typeof text).toBe('string');
+    expect(JSON.parse(text as string)).toMatchObject({ schemaVersion: 2, meta: { savedAt: 1 } });
+    // 内存里此刻是种子档（schemaVersion 1）——把种子档当"你的原文"导出是个陷阱
+    expect(JSON.parse(text as string).schemaVersion).toBe(2);
+  });
+
+  it('PD-T8#2 空存储 → null（没东西可救，UI 走"读不出"分支）', async () => {
+    const store = createMemoryStorage();
+    const coord = await createCoordinator(store, { now: () => NOW });
+    expect(await coord.rawDump()).toBeNull();
+  });
+
+  it('PD-T8#3 正常档：rawDump 是已落盘那份，不含尚未 flush 的内存改动', async () => {
+    const store = createMemoryStorage();
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 50 });
+    await coord.mutate((s) => {
+      s.settings.progress.exp = 7;
+    });
+    expect(await coord.flush()).toBe(true);
+    await coord.mutate((s) => {
+      s.settings.progress.exp = 999; // 在途未落盘
+    });
+
+    const parsed = JSON.parse((await coord.rawDump()) as string);
+    expect(parsed.settings.progress.exp).toBe(7);
+    expect(coord.snapshot().settings.progress.exp).toBe(999); // 内存确实是 999，差别是真的
   });
 });

@@ -95,11 +95,12 @@ export const DEFAULT_POOL_SIZE = 15;
 export const DEFAULT_PROGRESS_EXP = 0;
 
 /**
- * settings.story 默认值（Plan 4 · T6）：序章没看过、战报游标从 0 起。
+ * settings.story 默认值（Plan 4 · T6；T8 扩 arcSeen）：序章没看过、战报游标从 0 起、
+ * 暗线一幕未现。
  * 冻结 + 注入处展开成新对象（`{...DEFAULT_STORY}`）：种子档与迁移档各自持有独立引用，
  * 绝不让两份存档共享同一个可变 story 对象（T7 leaderboard 的同款教训）。
  */
-export const DEFAULT_STORY: StorySettings = Object.freeze({ prologueSeen: false, beatIndex: 0 });
+export const DEFAULT_STORY: StorySettings = Object.freeze({ prologueSeen: false, beatIndex: 0, arcSeen: 0 });
 
 /** 内部信号：校验失败的路径化原因。不外泄——validateSave 捕获后转成 reason。 */
 class ValidationSignal extends Error {}
@@ -344,6 +345,14 @@ function validateSettings(raw: unknown): void {
       'settings.story.beatIndex',
       () => `应为非负整数，实际为 ${describeValue(story.beatIndex)}`,
     );
+    // arcSeen 域（Plan 4 · T8）：0–3 的整数（LORE §5.3 三幕）。上界必须严检——
+    // 它是"下一幕该不该演"的比较基准，脏上界（如 99）会让三幕永远不再出现；
+    // 下界 0 是合法的"一幕未现"。缺席同样整包拒（T8 前写下的档由 migrateSave 补 0）。
+    assertShape(
+      Number.isInteger(story.arcSeen) && (story.arcSeen as number) >= 0 && (story.arcSeen as number) <= 3,
+      'settings.story.arcSeen',
+      () => `应为 0–3 的整数，实际为 ${describeValue(story.arcSeen)}`,
+    );
   }
   if (!('story' in o) || o.story === undefined) {
     fail('settings.story', '缺失（T6 前旧档形状），请经 migrateSave 迁移后再导入');
@@ -483,7 +492,7 @@ function injectProgressDefaults(raw: unknown): unknown {
 }
 
 /**
- * settings.story 缺省时补 `{prologueSeen:false, beatIndex:0}`（Plan 4 · T6）——与
+ * settings.story 缺省时补 `{prologueSeen:false, beatIndex:0, arcSeen:0}`（Plan 4 · T6/T8）——与
  * injectProgressDefaults 完全同构：只在 settings 为对象且 story 缺席时浅拷贝注入；
  * 在场（哪怕 prologueSeen=false）一律原样透传给 validateSave 逐项拒绝（域检查归校验器）。
  * 注入值展开成新对象而不是塞 DEFAULT_STORY 本体：迁移档与种子档绝不共享同一份可变引用。

@@ -128,7 +128,22 @@ export interface Coordinator {
   /** flush 的详细结果面（boolean 面由 `=== true` 比较即可判别）。 */
   flushDetailed(): Promise<FlushResult>;
   /**
-   * 只读态判别位（Final Fix Wave · C-1）：true = 载入时存档无法迁移/无法读取，内存由
+   /**
+    * 坏档抢救出口（Plan 4 · T8，D29 三件套之一）：把**存储里当前那份值**序列化成文本，
+    * 供只读态一键导出（文件名 `zx-xia-corrupt-<YYYY-MM-DD>.json`）。
+    *
+    * 诚实说明（R-T8-p4-c）：本函数的产物是"当前存储值的等价 JSON 文本"，**不是字节级
+    * 原文快照**。我们的两个存储实现（idbStore/memoryStore）都存**结构化对象**（IDB 的
+    * object store / 内存对象，均经 structuredClone 隔离），压根不存在"尚未被解析的原文
+    * 字节"；要做字节级保真必须在 platform 层加 `loadRaw`（Plan 5 若需要，改一处即可）。
+    * 对 D29 的真实意图（"别让用户除了白屏什么都没有"）而言，这份文本足够他把内容捞回来。
+    *
+    * 失败一律回 null（读不出来就是读不出来）：只读态的成因正是"这份值过不了迁移/校验"，
+    * 所以**不做任何校验**，读到什么就导什么——脏值正是要抢救的东西。
+    */
+   rawDump(): Promise<string | null>;
+   /**
+    * 只读态判别位（Final Fix Wave · C-1）：true = 载入时存档无法迁移/无法读取，内存由
    * 种子档接管且**所有写入面被闩锁拒绝**（见文件头"只读闩锁契约"）。UI 据此提示
    * "存档无法读取，请勿继续写"并给用户手动导出/抢救的出口。正常存档恒 false。
    */
@@ -575,5 +590,16 @@ export async function createCoordinator(
     markExported,
     flushDetailed,
     readOnly: () => readOnly,
+    async rawDump(): Promise<string | null> {
+      try {
+        // 直读 store（不走内存 save）：内存里此刻是**种子档**，把它导出去等于给用户
+        // 一份假的"你的原始存档"——正是 C-1 要避免的陷阱。
+        const stored = await store.load();
+        if (stored === null || stored === undefined) return null;
+        return JSON.stringify(stored, null, 2);
+      } catch {
+        return null; // 连读都读不出来（装载就抛的存储）：给不出原文，UI 走"读不出"分支
+      }
+    },
   };
 }

@@ -211,7 +211,7 @@ describe('序章落盘 —— 经 ctrl intent 记 prologueSeen（判别力钉）
 
     await coord.flush();
     const loaded = await store.load();
-    expect(loaded?.settings.story).toEqual({ prologueSeen: true, beatIndex: 0 });
+    expect(loaded?.settings.story).toEqual({ prologueSeen: true, beatIndex: 0, arcSeen: 0 });
   });
 
   it('PL#2 八屏看完 → 同样落盘 prologueSeen=true（跳看与看完同待遇）', async () => {

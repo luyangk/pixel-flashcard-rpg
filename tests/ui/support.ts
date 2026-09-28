@@ -41,7 +41,7 @@ export function makeSave(over: Partial<SaveFile> = {}): SaveFile {
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 10 / 60, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
-      story: { prologueSeen: false, beatIndex: 0 },
+      story: { prologueSeen: false, beatIndex: 0, arcSeen: 0 },
       leaderboard: [],
     },
     meta: { savedAt: 0, plays: 0 },
@@ -140,9 +140,11 @@ export function makeScheduler(): {
   };
 }
 
-/** 让所有 microtask 结算（await 出来的 promise 链在断言前收敛）。 */
+/**
+ * 让所有 microtask 结算（await 出来的 promise 链在断言前收敛）。
+ * 轮数给足：有的链路是"点一次 → await 写口 → await intent → finally"三层 await，
+ * 少排一轮就会在断言时看到中间态（假红/假绿都出现过）。
+ */
 export async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
 }

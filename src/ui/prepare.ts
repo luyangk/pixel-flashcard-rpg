@@ -22,7 +22,15 @@
  */
 import type { Card, Deck } from '@core/types';
 import type { ControllerSnapshot, GameController, StartErrorCode } from '../app/controllerTypes';
+import {
+  bossFightParams,
+  bossGates,
+  bossNameOf,
+  defaultBossName,
+  type BossNameResult,
+} from '../app/bossFlow';
 import { h, setHidden } from './dom';
+import { showToast } from './toast';
 
 /** 合法池子三挡（PRD §3；与 settings.battle.defaultPoolSize 的合法域一致）。 */
 export const POOL_SIZES: readonly number[] = [10, 15, 25];
@@ -30,6 +38,13 @@ export const POOL_SIZES: readonly number[] = [10, 15, 25];
 export interface PrepareDeps {
   /** 屏内导航（错误引导用；缺省则不显示引导按钮）。 */
   readonly onNav?: (target: 'decks') => void;
+  /**
+   * 卷灵称号写口（宿主接 app/bossFlow.setBossName）。缺省时**不问称号**、直接开战——
+   * 这样没有写口的宿主（测试/降级装配）也不会卡在弹窗上。
+   */
+  readonly setBossName?: (deckId: string, raw: string) => Promise<BossNameResult>;
+  /** toast 存活毫秒（称号回执用；测试给 0 免定时器）。 */
+  readonly toastMs?: number;
 }
 
 export interface PrepareHandle {
@@ -80,6 +95,9 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
   let size = nearestPoolSize(initial.save?.settings?.battle?.defaultPoolSize);
   let pending = false;
   let destroyed = false;
+  let toastOff: (() => void) | null = null;
+  /** 正在等称号输入的领域 id（null = 没开弹窗）。 */
+  let namingDeckId: string | null = null;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const chipsEl = h('div', { 'data-ui': 'deck-chips', class: 'deck-chips' });
@@ -100,6 +118,30 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     sizeEl.appendChild(b);
   }
 
+  const bossRowEl = h('div', { 'data-ui': 'boss-row', class: 'boss-row' });
+  const bossNameInput = h('input', {
+    'data-ui': 'boss-name-input',
+    class: 'boss-name-input',
+    type: 'text',
+    placeholder: '',
+  }) as HTMLInputElement;
+  const bossNameDefaultBtn = h(
+    'button',
+    { 'data-ui': 'boss-name-default', class: 'boss-name-default', type: 'button' },
+    '用默认称号',
+  ) as HTMLButtonElement;
+  const bossNameConfirmBtn = h(
+    'button',
+    { 'data-ui': 'boss-name-confirm', class: 'boss-name-confirm', type: 'button' },
+    '就用这个名字',
+  ) as HTMLButtonElement;
+  const bossNameDialog = h('div', { 'data-ui': 'boss-name-dialog', class: 'boss-name-dialog', hidden: true }, [
+    h('h3', { 'data-ui': 'boss-name-title', class: 'boss-name-title' }, '给它起个称号'),
+    h('p', { class: 'boss-name-hint' }, '自建领域的卷灵第一次现身——它的称号由你定，最多 30 字。'),
+    bossNameInput,
+    bossNameDefaultBtn,
+    bossNameConfirmBtn,
+  ]);
   const totalEl = h('p', { 'data-ui': 'pool-total', class: 'pool-total' });
   const errorEl = h('p', { 'data-ui': 'start-error', class: 'start-error', hidden: true });
   const errorGoBtn = h(
@@ -115,6 +157,8 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     h('h3', { class: 'field-title' }, '池子大小'),
     sizeEl,
     totalEl,
+    bossRowEl,
+    bossNameDialog,
     errorEl,
     errorGoBtn,
     startBtn,
@@ -157,12 +201,55 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     totalEl.textContent = total === 0 ? '卡库还是空的。' : `卡库共 ${total} 张卡。`;
   }
 
+  /**
+   * 卷灵区：只列**已达标**的领域（门槛口径在 app/bossFlow：引导域特调 15，其余取设置档）。
+   * 文案带 `已复习 count/threshold`，让玩家知道"差多少"——这是 PRD「苦修」叙事的可见面。
+   */
+  function renderBossRow(save: ControllerSnapshot['save']): void {
+    const gates = bossGates(save);
+    const ready = gates.filter((g) => g.ready);
+    const fingerprint = ready
+      .map((g) => {
+        const deck = save.decks.find((d) => d.id === g.deckId);
+        return `${g.deckId}:${g.count}/${g.threshold}:${deck ? bossNameOf(deck) : ''}`;
+      })
+      .join('|');
+    if (bossRowEl.getAttribute('data-boss-row') === fingerprint) return;
+    bossRowEl.setAttribute('data-boss-row', fingerprint);
+    bossRowEl.replaceChildren();
+    if (ready.length === 0) return;
+    bossRowEl.appendChild(h('h3', { class: 'field-title' }, '卷灵现身'));
+    for (const gate of ready) {
+      const deck = save.decks.find((d) => d.id === gate.deckId);
+      const btn = h(
+        'button',
+        { 'data-boss': gate.deckId, class: 'boss-chip', type: 'button' },
+        `${bossNameOf(deck ?? { id: gate.deckId, name: gate.deckName, isPreset: false })}（${gate.count}/${gate.threshold}）`,
+      ) as HTMLButtonElement;
+      btn.addEventListener('click', () => onBossChip(gate.deckId));
+      bossRowEl.appendChild(btn);
+    }
+  }
+
   function render(snap: ControllerSnapshot): void {
     const save = snap.save;
     renderChips(Array.isArray(save?.decks) ? save.decks : [], cardCountByDeck(Array.isArray(save?.cards) ? save.cards : []));
+    renderBossRow(save);
 
     for (const [s, b] of sizeButtons) b.setAttribute('aria-pressed', String(s === size));
     startBtn.disabled = pending;
+
+    // 称号弹窗：只有 namingDeckId 在场时才显示（关闭由两条按钮路径负责）
+    const namingDeck = namingDeckId === null ? null : save.decks.find((d) => d.id === namingDeckId) ?? null;
+    if (namingDeckId !== null && namingDeck === null) namingDeckId = null; // 领域被导入替换掉了
+    setHidden(bossNameDialog, namingDeck === null);
+    if (namingDeck) {
+      bossNameInput.placeholder = defaultBossName(namingDeck.name);
+      setHidden(bossNameDefaultBtn, typeof deps.setBossName !== 'function');
+      setHidden(bossNameConfirmBtn, typeof deps.setBossName !== 'function');
+    }
+    bossNameDefaultBtn.disabled = pending;
+    bossNameConfirmBtn.disabled = pending;
 
     const err = snap.lastError;
     setHidden(errorEl, err === null);
@@ -178,6 +265,65 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     else selected.add(id);
     if (selected.size === 0) random = true; // 最后一个被取消 ⇒ 回到"随机"
     render(ctrl.snapshot());
+  }
+
+  function toast(text: string): void {
+    toastOff?.();
+    toastOff = showToast(screen, text, { ms: deps.toastMs });
+  }
+
+  /** 卷灵开战：单领域 + 池子取 min(卡数,25) + difficulty='boss'（口径只在 bossFlow 一处）。 */
+  async function startBoss(deckId: string): Promise<void> {
+    if (destroyed || pending) return;
+    pending = true;
+    render(ctrl.snapshot());
+    const params = bossFightParams(ctrl.snapshot().save, deckId);
+    try {
+      await ctrl.intent({ type: 'startFight', size: params.size, deckIds: params.deckIds, difficulty: 'boss' });
+    } catch {
+      // 只读态/意外拒绝：与普通开战同款，快照会带 notice，屏幕不冻住
+    } finally {
+      if (!destroyed) {
+        pending = false;
+        render(ctrl.snapshot());
+      }
+    }
+  }
+
+  /**
+   * 点「卷灵现身」：自建领域**首次**触发要先问称号（PRD：默认模板或自拟 ≤30 字）；
+   * 预置领域（称号手写）与已命名的自建领域直接开战。
+   */
+  function onBossChip(deckId: string): void {
+    if (destroyed || pending) return;
+    const deck = ctrl.snapshot().save.decks.find((d) => d.id === deckId);
+    const needName = !!deck && deck.isPreset === false && (deck.bossName === undefined || deck.bossName === '');
+    if (needName && typeof deps.setBossName === 'function') {
+      namingDeckId = deckId;
+      bossNameInput.value = '';
+      render(ctrl.snapshot());
+      return;
+    }
+    void startBoss(deckId);
+  }
+
+  async function confirmBossName(useDefault: boolean): Promise<void> {
+    const deckId = namingDeckId;
+    if (destroyed || pending || deckId === null || !deps.setBossName) return;
+    const deck = ctrl.snapshot().save.decks.find((d) => d.id === deckId);
+    const raw = useDefault ? defaultBossName(deck?.name ?? '') : bossNameInput.value;
+    pending = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.setBossName(deckId, raw);
+      // 非法输入不写脏值：setBossName 回落默认并回 ok:false，这里如实告诉玩家一句。
+      if (!res.ok && res.reason) toast(res.reason);
+    } finally {
+      namingDeckId = null;
+      pending = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+    await startBoss(deckId);
   }
 
   function onPickSize(s: number): void {
@@ -212,6 +358,8 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     render(ctrl.snapshot());
   });
   for (const [s, b] of sizeButtons) b.addEventListener('click', () => onPickSize(s));
+  bossNameDefaultBtn.addEventListener('click', () => void confirmBossName(true));
+  bossNameConfirmBtn.addEventListener('click', () => void confirmBossName(false));
   startBtn.addEventListener('click', () => void onStart());
   errorGoBtn.addEventListener('click', () => deps.onNav?.('decks'));
 
@@ -226,6 +374,10 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     if (destroyed) return;
     destroyed = true;
     unsubscribe();
+    if (toastOff) {
+      toastOff();
+      toastOff = null;
+    }
     screen.remove();
   }
 

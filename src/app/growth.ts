@@ -196,6 +196,11 @@ export function settleFight(
     return applyReview(c, deps.gradeOf(c), deps.nowMs, deps.tzOffsetMin, deps.params).card;
   });
 
-  const exp = won ? victoryExp(released, 'encounter') : 0;
+  // 难度档（R-T3-p4-b 的 T8 兑现）：boss 局的经验必须按 boss 口径发——榜单那边
+  // 早就记 kind='boss'（控制器按 view.difficulty 分流），经验这边若还硬编码 encounter，
+  // 同一局就会出现"记分算卷灵、发经验算遭遇"的两套账。档位是 view 的既有字段
+  // （battleFlow.toView 带出，缺省 undefined = 遭遇战），故不需要新增参数。
+  const difficulty = view?.difficulty === 'boss' ? 'boss' : 'encounter';
+  const exp = won ? victoryExp(released, difficulty) : 0;
   return { cards: next, exp, won };
 }

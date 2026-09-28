@@ -15,6 +15,10 @@
  *
  * 只读态（D29）：任一写入面抛 SaveReadOnlyError 都被捕获，转为快照 readOnly=true + notice；
  * 调用方（UI）据此常驻横幅。**游戏流程不中断**——玩家可以继续看题，只是不再落盘。
+ *
+ * 【T8 接线】boss 档取胜时额外两笔（同一 guardedWrite 内）：`bossFlow.markPurified`
+ * 写 `deck.purifiedAt`，跨过 3/6/9 净化数时 `markArcSeen` 推进 `settings.story.arcSeen`。
+ * 这是 T8 对"冻结文件"的唯一改动面（R-T8-p4-a 授权），除此之外骨架未动。
  */
 import { GRADES, type Grade } from '@core/sm2';
 import type { SaveFile } from '@core/types';
@@ -27,6 +31,7 @@ import { playerStatsFor, levelFromExp, settleFight } from './growth';
 import { recordRun } from './results';
 import { backupReminderDue } from './backup';
 import { markPrologueSeen } from './storyState';
+import { actsUnlockedBy, markArcSeen, markPurified, purifiedCount } from './bossFlow';
 import type {
   ControllerSnapshot,
   ControllerScreen,
@@ -143,6 +148,26 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         level: levelFromExp(coord.snapshot().settings.progress.exp),
       });
     });
+
+    // T8：卷灵净化 + 暗线里程碑（只在 boss 档取胜时）。顺序与语义：
+    // ① markPurified 把本局参战领域写 purifiedAt（已净化的不重写，重战当练习关）；
+    // ② 净化数跨过 3/6/9 时把 story.arcSeen 推进到对应幕（只前进），codex 的行记区据此
+    //    决定哪一幕可回看。两步都在同一个 guardedWrite 里：只读态下一起被折成快照位，
+    //    不会出现"净化写上了、里程碑没写"的半截状态被当成正常。
+    if (won && kind === 'boss') {
+      const deckIds: string[] = [];
+      for (const c of view.pool) {
+        if (typeof c?.deckId === 'string' && c.deckId.length > 0 && !deckIds.includes(c.deckId)) {
+          deckIds.push(c.deckId);
+        }
+      }
+      await guardedWrite(async () => {
+        const fresh = await markPurified(coord, deckIds, now());
+        if (fresh.length === 0) return;
+        const act = actsUnlockedBy(purifiedCount(coord.snapshot()));
+        if (act > 0) await markArcSeen(coord, act);
+      });
+    }
 
     const expAfter = coord.snapshot().settings.progress.exp;
     const levelAfter = levelFromExp(expAfter);

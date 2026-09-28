@@ -72,7 +72,7 @@ function makeSave(cards: Card[], over: Partial<SaveFile['settings']> = {}): Save
       sm2Params: PARAMS,
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
-      story: { prologueSeen: false, beatIndex: 0 },
+      story: { prologueSeen: false, beatIndex: 0, arcSeen: 0 },
       ...over,
     },
     meta: { savedAt: NOW, plays: 0 },
@@ -468,5 +468,48 @@ describe('releaseSubset / settleFight —— 已消耗回合才落账（N-2）',
       gradeOf: () => GRADES.good, tzOffsetMin: TZ, nowMs: NOW, params: PARAMS,
     });
     expect(r).toEqual({ cards: [], exp: 0, won: false });
+  });
+});
+
+/* ------------------------------------------------------------------ boss 档经验（T8 兑现） */
+
+describe('settleFight —— boss 档经验切档（R-T3-p4-b 的 T8 兑现点）', () => {
+  // 高等级 stats：atk=30 ⇒ 遭遇战（HP 14）与 Boss（HP 30）都在第一击结束，释放子集同为 1 张。
+  // 这样两档的经验差**只**来自难度系数，断言才判别得了"发经验时到底用了哪个档"。
+  const STRONG = deriveStats(10, 0, 0);
+
+  it('GS#T8-1 同池同释放子集：boss 给 45、遭遇战给 21（硬编码 encounter 的实现必红）', () => {
+    const cards = [makeCard('c1'), makeCard('c2')];
+    const deps = { gradeOf: () => GRADES.good, nowMs: NOW, tzOffsetMin: TZ, params: PARAMS };
+
+    const enc = ok(startFight({ decks: [], cards }, { size: 2, rng: HALF, nowMs: NOW, stats: STRONG }));
+    const encWon = play(enc, 1);
+    expect(encWon.state.phase).toBe('won');
+    expect(releaseSubset(encWon.pool, encWon.state)).toHaveLength(1);
+    expect(settleFight(cards, encWon, deps).exp).toBe(victoryExp([cards[0]], 'encounter'));
+    expect(settleFight(cards, encWon, deps).exp).toBe(21);
+
+    const boss = ok(
+      startFight({ decks: [], cards }, { size: 2, rng: HALF, nowMs: NOW, stats: STRONG, difficulty: 'boss' }),
+    );
+    expect(boss.difficulty).toBe('boss');
+    const bossWon = play(boss, 1);
+    expect(bossWon.state.phase).toBe('won');
+    expect(releaseSubset(bossWon.pool, bossWon.state)).toHaveLength(1);
+    expect(settleFight(cards, bossWon, deps).exp).toBe(victoryExp([cards[0]], 'boss'));
+    expect(settleFight(cards, bossWon, deps).exp).toBe(45);
+  });
+
+  it('GS#T8-2 败局两档都是 0 经验（档位不影响"没赢就没经验"）', () => {
+    const cards = [makeCard('c1')];
+    const deps = { gradeOf: () => GRADES.good, nowMs: NOW, tzOffsetMin: TZ, params: PARAMS };
+    const boss = ok(
+      startFight({ decks: [], cards }, { size: 1, rng: HALF, nowMs: NOW, difficulty: 'boss' }),
+    );
+    // 直接逐回合作答（play 的 grade 形参由默认值窄化成 3，传 again=0 会被 TS 拒）
+    let lost = boss;
+    while (lost.state.phase === 'answering') lost = answerCurrent(lost, GRADES.again, { rng: HALF });
+    expect(lost.state.phase).toBe('lost');
+    expect(settleFight(cards, lost, deps).exp).toBe(0);
   });
 });

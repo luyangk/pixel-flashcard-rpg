@@ -12,7 +12,21 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GameIntent, StartError } from '../../src/app/controllerTypes';
 import { mountPrepare, nearestPoolSize, POOL_SIZES } from '../../src/ui/prepare';
-import { all, click, flushMicrotasks, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, ui } from './support';
+import type { SaveFile } from '@core/types';
+import { defaultBossName } from '../../src/app/bossFlow';
+import {
+  all,
+  click,
+  flushMicrotasks,
+  makeCard,
+  makeCtrl,
+  makeDeck,
+  makeRoot,
+  makeSave,
+  makeSnap,
+  makeSrs,
+  ui,
+} from './support';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -220,5 +234,124 @@ describe('mountPrepare —— 防双开与拆除', () => {
     // 拆除后再推快照：不得抛错、不得重建 DOM
     ctrl.push(makeSnap({ screen: 'prepare', save: saveWithDecks() }));
     expect(all(root, '[data-deck-id]')).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ 卷灵现身（T8） */
+
+describe('mountPrepare —— 卷灵现身与称号（T8）', () => {
+  /** 15 个有效复习日 = 引导域/低档阈值的达标线（Boss 计数口径 = Σ effectiveReviewDays）。 */
+  const DAYS = Array.from({ length: 15 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);
+
+  function cardWithDays(id: string, deckId: string, days = 15) {
+    return makeCard(id, {
+      deckId,
+      srs: makeSrs({ stability: 'review', effectiveReviewDays: DAYS.slice(0, days) }),
+    });
+  }
+
+  function saveWith(over: Partial<SaveFile> = {}): SaveFile {
+    const base = makeSave({
+      decks: [makeDeck('d1', '唐诗'), makeDeck('d2', '英语词根')],
+      cards: [cardWithDays('c1', 'd1'), cardWithDays('c2', 'd2', 14)],
+    });
+    return { ...base, ...over, settings: { ...base.settings, bossThresholdTier: 15, ...(over.settings ?? {}) } };
+  }
+
+  it('PR#9 达标领域出现「卷灵现身」chip（带 已复习/阈值）；点击 → boss 档单领域开战', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWith() }));
+    mountPrepare(root, ctrl, {});
+
+    const chipEl = root.querySelector('[data-boss="d1"]') as HTMLElement;
+    expect(chipEl).not.toBeNull();
+    expect(chipEl.textContent).toContain('唐诗·卷灵');
+    expect(chipEl.textContent).toContain('15/15');
+    expect(root.querySelector('[data-boss="d2"]')).toBeNull(); // 14/15 未达标
+
+    click(chipEl);
+    const intent = ctrl.intents[0] as Extract<GameIntent, { type: 'startFight' }>;
+    expect(intent).toMatchObject({ type: 'startFight', size: 1, deckIds: ['d1'], difficulty: 'boss' });
+  });
+
+  it('PR#9b 未达标领域不出现 chip（按 count≥threshold 判，不看卡数）', () => {
+    const root = makeRoot();
+    const save = saveWith({ settings: { ...makeSave().settings, bossThresholdTier: 30 } });
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save }));
+    mountPrepare(root, ctrl, {});
+    expect(root.querySelector('[data-boss]')).toBeNull();
+  });
+
+  it('PR#10 自建领域首次现身：先问称号，确认后写入并开战', async () => {
+    const root = makeRoot();
+    const named: Array<[string, string]> = [];
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWith() }));
+    mountPrepare(root, ctrl, {
+      toastMs: 0,
+      setBossName: (deckId, raw) => {
+        named.push([deckId, raw]);
+        return Promise.resolve({ ok: true, name: raw.trim() });
+      },
+    });
+
+    click(root.querySelector('[data-boss="d1"]') as HTMLElement);
+    expect(ui(root, 'boss-name-dialog').hidden).toBe(false);
+    expect((ui(root, 'boss-name-input') as HTMLInputElement).placeholder).toBe(defaultBossName('唐诗'));
+    expect(ctrl.intents).toHaveLength(0); // 称号没定之前不开战
+
+    (ui(root, 'boss-name-input') as HTMLInputElement).value = '荒原卷灵';
+    click(ui(root, 'boss-name-confirm'));
+    await flushMicrotasks();
+
+    expect(named).toEqual([['d1', '荒原卷灵']]);
+    expect(ui(root, 'boss-name-dialog').hidden).toBe(true);
+    expect(ctrl.intents[0]).toMatchObject({ type: 'startFight', deckIds: ['d1'], difficulty: 'boss' });
+  });
+
+  it('PR#10b「用默认称号」传默认模板（{卡组名}·卷灵）', async () => {
+    const root = makeRoot();
+    const named: string[] = [];
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWith() }));
+    mountPrepare(root, ctrl, {
+      setBossName: (_deckId, raw) => {
+        named.push(raw);
+        return Promise.resolve({ ok: true, name: raw });
+      },
+    });
+
+    click(root.querySelector('[data-boss="d1"]') as HTMLElement);
+    click(ui(root, 'boss-name-default'));
+    await flushMicrotasks();
+    expect(named).toEqual(['唐诗·卷灵']);
+    expect(ctrl.intents).toHaveLength(1);
+  });
+
+  it('PR#10c 预置领域（isPreset=true，称号手写）不问称号直接开战', () => {
+    const root = makeRoot();
+    const save = saveWith({ decks: [makeDeck('d1', '唐诗', { isPreset: true })] });
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save }));
+    mountPrepare(root, ctrl, { setBossName: () => Promise.resolve({ ok: true, name: 'x' }) });
+
+    click(root.querySelector('[data-boss="d1"]') as HTMLElement);
+    expect(ui(root, 'boss-name-dialog').hidden).toBe(true);
+    expect(ctrl.intents).toHaveLength(1);
+  });
+
+  it('PR#10d 称号非法（写口回 ok:false）→ 提示一句但仍开战（不让玩家卡在弹窗上）', async () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWith() }));
+    mountPrepare(root, ctrl, {
+      toastMs: 0,
+      setBossName: () => Promise.resolve({ ok: false, name: '唐诗·卷灵', reason: '称号最多 30 个字，先用默认的。' }),
+    });
+
+    click(root.querySelector('[data-boss="d1"]') as HTMLElement);
+    (ui(root, 'boss-name-input') as HTMLInputElement).value = '字'.repeat(40);
+    click(ui(root, 'boss-name-confirm'));
+    await flushMicrotasks();
+
+    expect(document.querySelector('[data-ui="toast"]')?.textContent).toBe('称号最多 30 个字，先用默认的。');
+    expect(ctrl.intents).toHaveLength(1);
+    expect(ui(root, 'boss-name-dialog').hidden).toBe(true);
   });
 });

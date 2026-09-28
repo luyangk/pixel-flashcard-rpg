@@ -44,7 +44,7 @@ function makeSave(cards: Card[]): SaveFile {
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 10 / 60, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
-      story: { prologueSeen: false, beatIndex: 0 },
+      story: { prologueSeen: false, beatIndex: 0, arcSeen: 0 },
       leaderboard: [],
     },
     meta: { savedAt: NOW, plays: 0 },
@@ -144,7 +144,7 @@ describe('gameController —— 快照链与意图', () => {
     expect(coord.snapshot().settings.story.prologueSeen).toBe(true);
 
     await coord.flush();
-    expect((await store.load())?.settings.story).toEqual({ prologueSeen: true, beatIndex: 0 });
+    expect((await store.load())?.settings.story).toEqual({ prologueSeen: true, beatIndex: 0, arcSeen: 0 });
   });
 
   it('GC#5 deckIds 指向空集合 → insufficient-cards 文案报缺口', async () => {
@@ -358,5 +358,81 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     }
     expect(ctrl.snapshot().readOnly).toBe(false);
     expect(JSON.stringify(await store.load())).not.toBe(before); // 有写入发生
+  });
+});
+
+/* ------------------------------------------------------------------ 卷灵战（T8） */
+
+describe('gameController —— 卷灵净化 / 经验切档 / 三幕里程碑（T8）', () => {
+  /** 三个领域各 1 张卡、各 15 个有效复习日：tier=15 ⇒ 三个卷灵全部达标。 */
+  async function bossReadyController() {
+    const clock = fakeClock(NOW);
+    const store = createMemoryStorage();
+    const coord = await createCoordinator(store, { now: clock.now });
+    const ids = ['d1', 'd2', 'd3'];
+    const days: string[] = [];
+    for (let i = 0; i < 15; i++) days.push(`2026-09-${String(i + 1).padStart(2, '0')}`);
+    await coord.mutate((save) => {
+      save.decks = ids.map((id) => ({ id, name: `领域${id}`, isPreset: false }));
+      save.cards = ids.map((id) => {
+        const c = makeCard(`card-${id}`, 'review');
+        c.deckId = id;
+        c.srs.effectiveReviewDays = [...days];
+        c.srs.due = 0;
+        return c;
+      });
+      save.settings.bossThresholdTier = 15;
+      save.settings.progress.exp = 5000; // 高等级 ⇒ atk 远高于单卡 Boss 的 HP（ceil(1×10×1.5)=15）
+    });
+    await coord.flush();
+    const ctrl = await createGameController({ coord, rng: mulberry32(7), now: clock.now, tzOffsetMin: TZ });
+    return { ctrl, coord, clock };
+  }
+
+  it('GC#T8-1 boss 胜利 → 净化落账 + 经验按 boss 档（45 而非 21）+ 第 3 个领域净化后解锁第一幕', async () => {
+    const { ctrl, coord, clock } = await bossReadyController();
+
+    for (let i = 0; i < 3; i++) {
+      const id = `d${i + 1}`;
+      await ctrl.intent({ type: 'startFight', size: 1, deckIds: [id], difficulty: 'boss' });
+      expect(ctrl.snapshot().fight?.difficulty).toBe('boss');
+      await ctrl.intent({ type: 'answer', grade: GRADES.good });
+
+      const s = ctrl.snapshot();
+      expect(s.screen).toBe('result');
+      expect(s.lastResult?.won).toBe(true);
+      // R-T3-p4-b 的兑现：boss 档经验 = round(30×1.5 + 5×0 张 mastered) = 45
+      // （硬编码 encounter 的实现这里会得 21 ⇒ 必红）
+      expect(s.lastResult?.expGained).toBe(45);
+      expect(s.save.decks.find((d) => d.id === id)?.purifiedAt).toBe(clock.now());
+      // 里程碑只在净化数跨过 3 时才出现（不是每个 Boss 都推一幕）
+      expect(coord.snapshot().settings.story.arcSeen).toBe(i === 2 ? 1 : 0);
+      await ctrl.intent({ type: 'finish' });
+    }
+    expect(coord.snapshot().decks.filter((d) => d.purifiedAt !== undefined)).toHaveLength(3);
+  });
+
+  it('GC#T8-2 重战已净化的领域：purifiedAt 保持首次时刻（练习关不刷新时间戳）', async () => {
+    const { ctrl, coord, clock } = await bossReadyController();
+    await ctrl.intent({ type: 'startFight', size: 1, deckIds: ['d1'], difficulty: 'boss' });
+    await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    const first = coord.snapshot().decks[0].purifiedAt;
+    expect(first).toBe(clock.now());
+
+    clock.tick(60_000);
+    await ctrl.intent({ type: 'finish' });
+    await ctrl.intent({ type: 'startFight', size: 1, deckIds: ['d1'], difficulty: 'boss' });
+    await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    expect(coord.snapshot().decks[0].purifiedAt).toBe(first);
+    expect(coord.snapshot().settings.story.arcSeen).toBe(0);
+  });
+
+  it('GC#T8-3 遭遇战胜利不净化（难度档是唯一判据，不是"赢了就净化"）', async () => {
+    const { ctrl, coord } = await bossReadyController();
+    await ctrl.intent({ type: 'startFight', size: 1, deckIds: ['d1'] });
+    await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    expect(ctrl.snapshot().lastResult?.won).toBe(true);
+    expect(ctrl.snapshot().lastResult?.expGained).toBe(21); // 遭遇战口径
+    expect(coord.snapshot().decks[0].purifiedAt).toBeUndefined();
   });
 });

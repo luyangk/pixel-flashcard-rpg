@@ -60,7 +60,7 @@ function validSave(): SaveFile {
       progress: { exp: 0 },
       // Plan 4 · T6：settings.story 是**必填**位（与 battle/progress 同构的三段式），
       // 夹具显式带上它——缺它 validateSave 会整包拒，而"当前形状的完整档"必须能过校验。
-      story: { prologueSeen: false, beatIndex: 0 },
+      story: { prologueSeen: false, beatIndex: 0, arcSeen: 0 },
       // Plan 3 · T7：排行榜持久位。夹具显式带上它，三个理由：
       // ①它虽是可选字段，但 migrateSave 会为缺席档补 []——夹具缺席会让"新档同引用透传"
       //   与 backup 侧 toStrictEqual 逐键无损断言把归一化误读成丢字段；
@@ -420,9 +420,9 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     const bad = [
       { prologueSeen: 'true', beatIndex: 0 },
       { prologueSeen: 1, beatIndex: 0 },
-      { prologueSeen: false, beatIndex: -1 },
-      { prologueSeen: false, beatIndex: 2.5 },
-      { prologueSeen: false, beatIndex: '0' },
+      { prologueSeen: false, beatIndex: -1, arcSeen: 0 },
+      { prologueSeen: false, beatIndex: 2.5, arcSeen: 0 },
+      { prologueSeen: false, beatIndex: '0', arcSeen: 0 },
     ];
     for (const story of bad) {
       const raw = sample();
@@ -437,7 +437,7 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     expect(validateSave(raw2).ok).toBe(false);
     // 合法边界：prologueSeen=true、beatIndex=0 与较大整数均过
     const okRaw = sample();
-    (okRaw.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 12345 };
+    (okRaw.settings as Record<string, unknown>).story = { prologueSeen: true, beatIndex: 12345, arcSeen: 0 };
     expect(validateSave(okRaw).ok).toBe(true);
   });
 
@@ -787,26 +787,27 @@ describe('migrateSave', () => {
 
   // ---- story 扩域（Plan 4 · T6，R-P4-preflight-c 三段式之"migrate 补默认"层）----
 
-  it('旧档缺 story → validate 拒 → migrate 补 {prologueSeen:false,beatIndex:0} 后过', () => {
+  it('旧档缺 story → validate 拒 → migrate 补 {prologueSeen:false,beatIndex:0,arcSeen:0} 后过', () => {
     const raw = sample();
     delete (raw.settings as Record<string, unknown>).story;
     expect(validateSave(raw).ok).toBe(false); // 必填位：缺席整包拒
     const save = migrateSave(raw);
-    expect(save.settings.story).toEqual({ prologueSeen: false, beatIndex: 0 });
+    expect(save.settings.story).toEqual({ prologueSeen: false, beatIndex: 0, arcSeen: 0 });
     expect(validateSave(save).ok).toBe(true);
     // 全缺旧档（battle/progress/leaderboard/story 皆无）一次迁移四项全补
     expect(migrateSave(legacyBothSample()).settings.story).toEqual({
       prologueSeen: false,
       beatIndex: 0,
+      arcSeen: 0,
     });
   });
 
   it('已含 story 的新档：migrate 同引用透传、story 逐字不动（含非默认值）', () => {
     const fresh = validSave();
-    fresh.settings.story = { prologueSeen: true, beatIndex: 42 };
+    fresh.settings.story = { prologueSeen: true, beatIndex: 42, arcSeen: 0 };
     const once = migrateSave(fresh);
     expect(once).toBe(fresh); // 四档皆在场 ⇒ 零拷贝透传
-    expect(once.settings.story).toEqual({ prologueSeen: true, beatIndex: 42 });
+    expect(once.settings.story).toEqual({ prologueSeen: true, beatIndex: 42, arcSeen: 0 });
   });
 
   it('迁移补的 story 与入参不共享引用（改一份不污染另一份）', () => {
@@ -822,11 +823,11 @@ describe('migrateSave', () => {
 
   it('非默认 story 经 serialize→parse→validate 逐字保真（三段式的往返钉）', () => {
     const fresh = validSave();
-    fresh.settings.story = { prologueSeen: true, beatIndex: 9 };
+    fresh.settings.story = { prologueSeen: true, beatIndex: 9, arcSeen: 0 };
     const round = JSON.parse(serializeSave(fresh)) as Record<string, unknown>;
     const r = validateSave(round);
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.save.settings.story).toEqual({ prologueSeen: true, beatIndex: 9 });
+    if (r.ok) expect(r.save.settings.story).toEqual({ prologueSeen: true, beatIndex: 9, arcSeen: 0 });
   });
 
   it('migrate 不补 meta.lastExportedAt：缺席即"从未导出"，不发明假时刻', () => {
