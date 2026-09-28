@@ -1,0 +1,639 @@
+/*
+ * styles.css —— Plan 4 · T11：全局样式（水墨低饱和为底 + 赛博霓虹只给怪物/强调）。
+ *
+ * 三条来自 PRD/LORE 的硬约束落在这里：
+ * 1. **像素感**：`image-rendering: pixelated` 保住 Canvas 与精灵的硬边；
+ *    中文位图字体不可行（PRD D 决策），故用系统字体 + `-webkit-font-smoothing: none`
+ *    近似"无抗锯齿"的观感。
+ * 2. **竖屏单手**：主操作热区在屏幕**下半**——战斗屏把自己排成"上方舞台 + 下方卡面与四档"，
+ *    卡组/设置等长列表页则保证底部按钮始终可达（`padding-bottom` 留出手势区）。
+ * 3. **水墨底 + 霓虹只给怪物**：背景/文字走墨色与宣纸灰（低饱和），
+ *    只有卷灵/怪物与关键强调用青、品红（高饱和）。
+ *
+ * 不使用任何外部字体或图片：离线可用（PWA 归 Plan 5），且不引入网络依赖。
+ */
+
+:root {
+  --ink-900: #0b0e14;
+  --ink-800: #10141c;
+  --ink-700: #161b26;
+  --ink-600: #1e2532;
+  --paper: #d8d3c6;
+  --paper-dim: #9a958a;
+  --wash: #6f7c86;
+  --neon-cyan: #46e0ff;
+  --neon-magenta: #ff4fa3;
+  --blood: #a3273a;
+  --ok: #7fd6a6;
+  --radius: 10px;
+  --gap: 0.6rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--ink-900);
+  color: var(--paper);
+  font-family: system-ui, -apple-system, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+  overscroll-behavior: none;
+}
+
+#app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  /* 底部留出手机手势区/浏览器工具栏的高度 */
+  padding: max(0.5rem, env(safe-area-inset-top)) 0.75rem calc(1.25rem + env(safe-area-inset-bottom));
+}
+
+img,
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--ink-700);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.9rem;
+  min-height: 2.75rem; /* 触屏最小热区 */
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button[aria-pressed='true'] {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  box-shadow: inset 0 0 0 1px rgba(70, 224, 255, 0.35);
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--ink-800);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+  min-height: 2.5rem;
+  width: 100%;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 0.4rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+h1 {
+  font-size: 1.6rem;
+  text-align: center;
+  padding: 0.6rem 0;
+}
+
+.field-title {
+  font-size: 0.95rem;
+  color: var(--paper-dim);
+  margin-top: 0.9rem;
+}
+
+.field-hint,
+.pool-total,
+.card-empty,
+.codex-empty,
+.no-result,
+.rank-empty {
+  color: var(--paper-dim);
+  font-size: 0.85rem;
+  margin: 0.3rem 0;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------ 只读保护条 */
+.readonly-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: linear-gradient(180deg, rgba(163, 39, 58, 0.95), rgba(163, 39, 58, 0.75));
+  border: 1px solid var(--blood);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.6rem;
+  font-size: 0.85rem;
+  margin-bottom: var(--gap);
+}
+
+.readonly-dump {
+  flex: 0 0 auto;
+  min-height: 2.2rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+/* ------------------------------------------------------------ 通用屏与横幅 */
+.readonly-text {
+  flex: 1 1 auto;
+}
+
+.banner {
+  margin-bottom: var(--gap);
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--blood);
+  border-radius: var(--radius);
+  background: rgba(163, 39, 58, 0.25);
+  font-size: 0.85rem;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 50;
+  max-width: 90vw;
+  padding: 0.6rem 0.9rem;
+  background: var(--ink-600);
+  border: 1px solid var(--wash);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+/* ------------------------------------------------------------ 菜单 */
+.menu-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  flex: 1 1 auto;
+}
+
+.menu-title {
+  font-size: 2rem;
+  letter-spacing: 0.3em;
+  color: var(--paper);
+  text-shadow: 0 0 12px rgba(70, 224, 255, 0.25);
+}
+
+.menu-nav {
+  display: grid;
+  gap: var(--gap);
+}
+
+.menu-entry {
+  font-size: 1.05rem;
+  padding: 0.9rem;
+}
+
+.board {
+  margin-top: auto;
+}
+
+.board-title {
+  font-size: 0.95rem;
+  color: var(--paper-dim);
+}
+
+.leaderboard {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.9rem;
+}
+
+.rank-row {
+  padding: 0.25rem 0;
+  border-bottom: 1px dashed var(--ink-600);
+}
+
+.backup-reminder {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 0.6rem;
+  border: 1px solid var(--wash);
+  border-radius: var(--radius);
+  background: var(--ink-700);
+  font-size: 0.85rem;
+}
+
+.backup-text {
+  flex: 1 1 auto;
+}
+
+/* ------------------------------------------------------------ 备战 */
+.prepare-screen,
+.settings-screen,
+.codex-screen,
+.decks-screen,
+.result-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  flex: 1 1 auto;
+}
+
+.deck-chips,
+.tier-row,
+.pool-row,
+.boss-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip,
+.size-btn,
+.tier-btn,
+.pool-btn {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.9rem;
+}
+
+/* 卷灵 chip：唯一允许霓虹的地方之一（怪物侧强调） */
+.boss-chip {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+  box-shadow: 0 0 10px rgba(255, 79, 163, 0.25);
+  min-height: 2.6rem;
+}
+
+.start-btn {
+  margin-top: auto;
+  font-size: 1.15rem;
+  padding: 1rem;
+  border-color: var(--neon-cyan);
+  background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
+}
+
+.start-error {
+  color: var(--neon-magenta);
+  font-size: 0.9rem;
+}
+
+.boss-name-dialog {
+  border: 1px solid var(--neon-magenta);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  background: var(--ink-700);
+}
+
+/* ------------------------------------------------------------ 战斗屏 */
+.battle-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  flex: 1 1 auto;
+}
+
+.hp {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+  color: var(--paper-dim);
+}
+
+.stage-host {
+  flex: 1 1 auto;
+  min-height: 40vh;
+}
+
+.fx {
+  min-height: 1.2rem;
+  font-size: 0.9rem;
+}
+
+.fx-retaliate {
+  color: var(--blood);
+}
+
+.miss-hint {
+  color: var(--wash);
+  font-size: 0.9rem;
+}
+
+.card {
+  margin-top: auto; /* 卡面与四档压在屏幕下半（单手可达） */
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.card-front {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  padding: 0.7rem;
+  background: var(--ink-700);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  min-height: 4rem;
+}
+
+.card-back {
+  color: var(--ok);
+  padding: 0 0.7rem;
+}
+
+.grades {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.4rem;
+}
+
+.grade-btn {
+  font-size: 1rem;
+  padding: 0.85rem 0.5rem;
+}
+
+/* ------------------------------------------------------------ 结算屏 */
+.outcome {
+  font-size: 2.4rem;
+  text-align: center;
+  letter-spacing: 0.3em;
+}
+
+.outcome[data-won='true'] {
+  color: var(--neon-cyan);
+  text-shadow: 0 0 16px rgba(70, 224, 255, 0.4);
+}
+
+.outcome[data-won='false'] {
+  color: var(--blood);
+  text-shadow: 0 0 16px rgba(163, 39, 58, 0.5);
+}
+
+.exp,
+.level,
+.stats {
+  text-align: center;
+  font-size: 0.95rem;
+  color: var(--paper-dim);
+}
+
+.beat {
+  text-align: center;
+  font-size: 0.95rem;
+  color: var(--paper);
+  padding: 0.6rem;
+  border-top: 1px dashed var(--ink-600);
+  border-bottom: 1px dashed var(--ink-600);
+}
+
+.fake-memory {
+  border: 1px solid var(--neon-magenta);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  background: linear-gradient(180deg, rgba(255, 79, 163, 0.08), rgba(11, 14, 20, 0.9));
+}
+
+.fake-title {
+  color: var(--neon-magenta);
+  font-size: 0.95rem;
+}
+
+.fake-card {
+  position: relative;
+  padding: 0.7rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.fake-front {
+  font-size: 1rem;
+}
+
+.fake-back {
+  margin-top: 0.4rem;
+  color: var(--neon-magenta);
+  filter: blur(0.3px);
+}
+
+.fake-cross {
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cross-mark {
+  font-size: 1.6rem;
+  color: var(--blood);
+}
+
+.fake-reveal-text {
+  color: var(--paper);
+  font-size: 0.95rem;
+}
+
+.fake-progress,
+.fake-skip {
+  font-size: 0.85rem;
+}
+
+.result-actions {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap);
+}
+
+/* ------------------------------------------------------------ 卡组 / 藏书阁 / 设置 */
+.decks-header,
+.codex-header,
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
+
+.screen-title {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 1.1rem;
+}
+
+.card-count,
+.codex-count {
+  font-size: 0.8rem;
+  color: var(--paper-dim);
+}
+
+.card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.card-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.4rem;
+  align-items: baseline;
+  padding: 0.45rem 0.5rem;
+  background: var(--ink-800);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+}
+
+.card-deck {
+  color: var(--wash);
+  font-size: 0.78rem;
+}
+
+.add-form,
+.new-deck-form,
+.transfer,
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.codex-entry {
+  list-style: none;
+  padding: var(--gap);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
+}
+
+.entry-name {
+  font-size: 1.05rem;
+  color: var(--neon-cyan);
+}
+
+.entry-meta {
+  font-size: 0.8rem;
+  color: var(--paper-dim);
+}
+
+.entry-egg {
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.journal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.act-row {
+  padding: var(--gap);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.act-row[data-unlocked='false'] {
+  opacity: 0.6;
+}
+
+.act-title {
+  font-size: 0.95rem;
+  color: var(--paper-dim);
+}
+
+.act-row[data-unlocked='true'] .act-title {
+  color: var(--neon-cyan);
+}
+
+.act-art {
+  display: block;
+  margin: 0.4rem auto;
+  width: 64px;
+  height: 64px;
+}
+
+.act-line {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0.2rem 0;
+}
+
+.param-row {
+  display: grid;
+  grid-template-columns: 1fr 7rem;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+/* ------------------------------------------------------------ 序章 */
+.prologue-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  padding: 1.2rem;
+  background: var(--ink-900);
+  cursor: pointer;
+}
+
+.prologue-art {
+  width: 64px;
+  height: 64px;
+  transform: scale(3);
+  transform-origin: center;
+  margin-bottom: 1.2rem;
+}
+
+.prologue-text {
+  font-size: 1.15rem;
+  line-height: 1.9;
+  text-align: center;
+  min-height: 4rem;
+  letter-spacing: 0.06em;
+}
+
+.prologue-hint,
+.prologue-progress {
+  font-size: 0.8rem;
+  color: var(--paper-dim);
+}
+
+.prologue-skip {
+  min-height: 2.2rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+}

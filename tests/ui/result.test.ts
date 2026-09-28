@@ -120,6 +120,21 @@ describe('mountResult —— 战报碎片', () => {
     expect(drawn).toEqual([1]);
   });
 
+  it('RS#3d 显式 null 游标仍被 nextBeat 拒（`?? 0` 会把它当成"从第 0 句重来"）', () => {
+    const root = makeRoot();
+    const base = makeSave();
+    const save = {
+      ...base,
+      settings: { ...base.settings, story: { prologueSeen: true, beatIndex: null as unknown as number, arcSeen: 0 } },
+    };
+    const drawn: number[] = [];
+    const ctrl = makeCtrl(makeSnap({ screen: 'result', save, lastResult: summary() }));
+    mountResult(root, ctrl, { beats: ['甲句', '乙句'], onBeatDrawn: (c) => drawn.push(c) });
+
+    expect(ui(root, 'beat').hidden).toBe(true); // 脏游标 ⇒ 不出句
+    expect(drawn).toEqual([]); // 也不推进游标
+  });
+
   it('RS#3b 空池不抽、不显示碎片（也不回传游标）', () => {
     const root = makeRoot();
     const drawn: number[] = [];

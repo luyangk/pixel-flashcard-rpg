@@ -226,10 +226,14 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
     // 只胜局抽碎片（LORE §5.2；败局的叙事面是假记忆演出）
     if (!beatDrawn && res !== null && res.won && beats.length > 0) {
       beatDrawn = true; // 先置位：onBeatDrawn 抛错/重入都不该让下一次 render 再抽一句
-      // 游标兜底读法（与菜单同口径）：story 是必填位、validateSave 已保证在场，
-      // 但渲染层不该因为一次脏快照而炸掉整屏。
-      const cursor = snap.save?.settings?.story?.beatIndex ?? 0;
-      const draw = nextBeat(beats, cursor);
+      // 游标兜底读法：story 是必填位、validateSave 已保证在场，但渲染层不该因为一次脏快照
+      // 而炸掉整屏。**只把 undefined 当 0**（"字段不在"），显式 null/负数/小数照旧交给
+      // nextBeat 的 fail-closed 闸门拒（beats.ts 的"脏游标两端同口径"是 T6 评审专门修过的，
+      // 这里不能用一个 `??` 把它悄悄改成"当 0 重来"）。
+      const raw = snap.save?.settings?.story?.beatIndex as number | null | undefined;
+      const cursor = raw === undefined ? 0 : raw;
+      // 断言：null 在这里是**故意**穿到 nextBeat 的（类型上收窄成 number，运行时仍按脏值处理）
+      const draw = nextBeat(beats, cursor as number);
       beatEl.textContent = draw.text;
       setHidden(beatEl, draw.text === '');
       if (draw.text !== '') deps.onBeatDrawn?.(draw.next);

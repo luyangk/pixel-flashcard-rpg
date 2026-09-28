@@ -1,0 +1,63 @@
+{
+  "note": "预置内容种子（PRD §6.5：4 个预置领域，文案全手写）。首次启动（decks 与 cards 皆空）时由 app/presetContent.installPresetContent 灌入存档；此后永不再灌。id 一经发布不得更改（卡 id 会进 SRS 与榜首）。生活常识是引导领域（id 固定 preset-life，Boss 阈值特调 15，见 app/bossFlow.GUIDE_DECK_ID）。source.type 由代码统一写为 'preset'，故此处不含溯源字段。",
+  "decks": [
+    {
+      "id": "preset-life",
+      "name": "生活常识",
+      "bossName": "常识·卷灵",
+      "cards": [
+        { "id": "life-01", "front": "打雷时为什么先看到闪电、后听到雷声？", "back": "光的速度远快于声音", "tags": ["物理"] },
+        { "id": "life-02", "front": "高压锅为什么能更快把食物煮熟？", "back": "锅内气压升高，水的沸点随之升高", "tags": ["物理"] },
+        { "id": "life-03", "front": "冬天摸铁比摸木头凉，是因为铁的温度更低吗？", "back": "不是——铁导热更快，把手上的热更快带走", "tags": ["物理"] },
+        { "id": "life-04", "front": "海水为什么不能直接喝？", "back": "含盐量高于体液，越喝越缺水", "tags": ["生理"] },
+        { "id": "life-05", "front": "微波炉加热食物用的是什么原理？", "back": "让食物里的水分子高速振动生热", "tags": ["物理"] },
+        { "id": "life-06", "front": "血液为什么是红色的？", "back": "红细胞里的血红蛋白含铁，结合氧后呈红色", "tags": ["生理"] },
+        { "id": "life-07", "front": "冰箱的冷藏室和冷冻室，哪个温度更低？", "back": "冷冻室，通常约零下十八度", "tags": ["生活"] },
+        { "id": "life-08", "front": "高原上米饭为什么不容易煮熟？", "back": "气压低，水的沸点低于一百度", "tags": ["物理"] },
+        { "id": "life-09", "front": "一天里影子最短大约在什么时候？", "back": "正午前后，太阳高度角最大", "tags": ["天文"] },
+        { "id": "life-10", "front": "手机显示电量百分之零后，为什么还能撑一会儿？", "back": "电池留了保护余量，避免过放损坏", "tags": ["电子"] }
+      ]
+    },
+    {
+      "id": "preset-tang",
+      "name": "唐诗",
+      "bossName": "诗酒·卷灵",
+      "cards": [
+        { "id": "tang-01", "front": "「举头望明月」的下一句", "back": "低头思故乡（李白《静夜思》）", "tags": ["李白"] },
+        { "id": "tang-02", "front": "「国破山河在」出自谁的诗？", "back": "杜甫《春望》", "tags": ["杜甫"] },
+        { "id": "tang-03", "front": "「大漠孤烟直」的下一句", "back": "长河落日圆（王维《使至塞上》）", "tags": ["王维"] },
+        { "id": "tang-04", "front": "「春眠不觉晓」的作者是谁？", "back": "孟浩然（《春晓》）", "tags": ["孟浩然"] },
+        { "id": "tang-05", "front": "「海上生明月」的下一句", "back": "天涯共此时（张九龄《望月怀远》）", "tags": ["张九龄"] },
+        { "id": "tang-06", "front": "「停车坐爱枫林晚」里的「坐」是什么意思？", "back": "因为", "tags": ["字义"] },
+        { "id": "tang-07", "front": "「会当凌绝顶」的下一句", "back": "一览众山小（杜甫《望岳》）", "tags": ["杜甫"] },
+        { "id": "tang-08", "front": "被称为「诗鬼」的唐代诗人是谁？", "back": "李贺", "tags": ["人物"] }
+      ]
+    },
+    {
+      "id": "preset-root",
+      "name": "英语词根",
+      "bossName": "词根·卷灵",
+      "cards": [
+        { "id": "root-01", "front": "spect 这个词根表示什么？", "back": "看（inspect 往里看，respect 回头看）", "tags": ["词根"] },
+        { "id": "root-02", "front": "port 这个词根表示什么？", "back": "搬运（transport 运输，import 输入）", "tags": ["词根"] },
+        { "id": "root-03", "front": "dict 这个词根表示什么？", "back": "说（predict 预言，dictate 口述）", "tags": ["词根"] },
+        { "id": "root-04", "front": "tract 这个词根表示什么？", "back": "拉、拖（attract 吸引，extract 抽出）", "tags": ["词根"] },
+        { "id": "root-05", "front": "vis 这个词根表示什么？", "back": "看（visible 看得见的，vision 视力）", "tags": ["词根"] },
+        { "id": "root-06", "front": "incredible 里的 cred 表示什么？", "back": "相信（credit 信用，credible 可信的）", "tags": ["词根"] }
+      ]
+    },
+    {
+      "id": "preset-idiom",
+      "name": "成语典故",
+      "bossName": "典故·卷灵",
+      "cards": [
+        { "id": "idiom-01", "front": "「胸有成竹」最初说的是画什么？", "back": "画竹子——落笔前心中已有完整竹形", "tags": ["典故"] },
+        { "id": "idiom-02", "front": "「洛阳纸贵」形容的是什么？", "back": "文章风行一时，人人传抄，纸都涨价", "tags": ["典故"] },
+        { "id": "idiom-03", "front": "「破釜沉舟」出自哪一场战役？", "back": "巨鹿之战（项羽）", "tags": ["典故"] },
+        { "id": "idiom-04", "front": "「望梅止渴」的典故与谁有关？", "back": "曹操——用梅林鼓舞行军的士兵", "tags": ["典故"] },
+        { "id": "idiom-05", "front": "「程门立雪」讲的是求学时的什么态度？", "back": "尊师重道、宁可久候也不打扰", "tags": ["典故"] },
+        { "id": "idiom-06", "front": "「一鼓作气」出自哪一场战争？", "back": "长勺之战（曹刿论战）", "tags": ["典故"] }
+      ]
+    }
+  ]
+}

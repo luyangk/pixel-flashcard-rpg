@@ -263,8 +263,10 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     try {
       const res = await deps.addDeck({ name: deckNameInput.value, id: newId() });
       if (res.ok) {
+        // 成功分支的渲染也包在 try 里，故只做不可能抛的事：畸形 ok 结果不该被说成"失败"
         deckNameInput.value = '';
-        toast(`领域「${res.value.name}」已建好。`);
+        const name = typeof res.value?.name === 'string' && res.value.name.length > 0 ? res.value.name : '新领域';
+        toast(`领域「${name}」已建好。`);
       } else {
         toast(res.reason);
       }
