@@ -25,7 +25,7 @@ import type { Card } from '@core/types';
 import type { Rng } from '@core/rng';
 import type { Grade } from '@core/sm2';
 import { buildPool } from '@core/deckBuild';
-import { deriveStats, enemyHpForPool, type PlayerStats } from '@core/stats';
+import { deriveStats, enemyHpForPool, enemyPowerFor, type PlayerStats } from '@core/stats';
 import { createBattle, answer, type BattleState } from '@core/battle';
 import type { SessionCards } from './sessionTypes';
 
@@ -35,11 +35,16 @@ export interface FightView {
   readonly pool: readonly Card[];
   /** 当前待答卡；终局（won/lost）或 idx 越出池尾时为 null。 */
   readonly current: Card | null;
+  /**
+   * 本局难度档（T3 起随视图带出，T8 结算/榜单消费）：缺省字段保持可选——
+   * 既有 FightView 夹具与 answerCurrent 返回值不因它而必须改动（追加非破坏）。
+   */
+  readonly difficulty?: 'encounter' | 'boss';
 }
 
 /** 失败面：error 码 + 可直接上屏的大白话文案。 */
 export interface FightError {
-  readonly error: 'no-cards' | 'insufficient-cards';
+  readonly error: 'invalid-size' | 'no-cards' | 'insufficient-cards';
   readonly message: string;
 }
 
@@ -51,6 +56,11 @@ export interface StartFightOptions {
   readonly rng: Rng;
   /** 到期判定时钟（毫秒），由调用方从 platform/clock 取；core 层不自读时间。 */
   readonly nowMs: number;
+  /**
+   * 难度档（T3 管道、T8 消费）：默认 encounter；boss 时敌人 HP 与反击强度
+   * 同源切档（enemyHpForPool(len,'boss') + enemyPowerFor('boss')）。
+   */
+  readonly difficulty?: 'encounter' | 'boss';
   /**
    * 玩家六维快照（T3 注入位）：装配层传 growth.playerStatsFor(save)。
    * 缺省 / 非法（非对象、含 NaN 字段）一律回落 deriveStats(1,0,0)——
@@ -65,9 +75,13 @@ function isPositiveInt(v: unknown): v is number {
 }
 
 /** 由池对象数组重建视图：current 的唯一计算点，保证与 state.idx 永不脱钩。 */
-function toView(state: BattleState, pool: readonly Card[]): FightView {
+function toView(
+  state: BattleState,
+  pool: readonly Card[],
+  difficulty: 'encounter' | 'boss' = 'encounter',
+): FightView {
   const current = state.phase === 'answering' ? (pool[state.idx] ?? null) : null;
-  return { state, pool, current };
+  return { state, pool, current, difficulty };
 }
 
 /**
@@ -80,9 +94,16 @@ export function startFight(
 ): FightView | FightError {
   const library = Array.isArray(cards?.cards) ? cards.cards : [];
 
-  // 空库 / 非法 size：一律给同一句引导——这两类玩家的下一步动作相同（去做卡）。
-  // 「还差 N 张」对空库没有意义（N 依赖一个不该被信任的请求值），故不在此分支报数。
-  if (!isPositiveInt(opts?.size) || library.length === 0) {
+  // T3 授权改动（R-P4-preflight-a / 终审 triage「非法 size 文案分流」）：
+  // 请求参数坏（size 非整数∈[1,60]）与库存为空是两类用户、两句大白话——旧版合并成
+  // no-cards 让设置页脏值也被误报"没卡片"。上限 60 与 UI 三挡（10/15/25）留裕。
+  if (!isPositiveInt(opts?.size) || opts.size > 60) {
+    return {
+      error: 'invalid-size',
+      message: '这场的人数设置不对，回到备战页重新选一个吧。',
+    };
+  }
+  if (library.length === 0) {
     return {
       error: 'no-cards',
       message: '还没有卡片。先做几张卡再来打这一仗。',
@@ -108,13 +129,18 @@ export function startFight(
   // 敌人 HP 必须跟着实际池长走，否则 8 张卡打 15 张的血量必输。
   // 阈值裁决（brief 未言明处）：仅"筛后 0 张"视为不可战；≥1 张即可开打，
   // 哪怕只有 1 张——单卡池打完即终局，数据流自洽（见 tests/app AC#4）。
-  const enemyHp = enemyHpForPool(pool.length, 'encounter');
+  const difficulty = opts.difficulty === 'boss' ? 'boss' : 'encounter';
+  const enemyHp = enemyHpForPool(pool.length, difficulty);
 
   // stats 注入位（T3）：合法 PlayerStats 直用；缺省/脏值回落 T2 中间态同值，
   // SF#5 锚点（atk=12/maxHp=100）由这条回落路径守护。
   const stats = isUsableStats(opts.stats) ? opts.stats : deriveStats(1, 0, 0);
 
-  return toView(createBattle(pool, enemyHp, stats, opts.rng), pool);
+  return toView(
+    createBattle(pool, enemyHp, stats, opts.rng, enemyPowerFor(difficulty)),
+    pool,
+    difficulty,
+  );
 }
 
 /**
@@ -161,5 +187,5 @@ export function answerCurrent(
   // 视图恒由 (next, pool) 重建：正确性不依赖 battle.answer 的返回引用同一性。
   // （实测口径见 tests/core/battle.test.ts CB#11/CB#12：违规+mismatch 时同引用；
   // 终局幂等短路依赖其 phase 检查调用序——非 answering 态先返回自身，主体不可达。）
-  return toView(next, view.pool);
+  return toView(next, view.pool, view.difficulty); // 难度跨回合保持（T3：boss 局全程同档）
 }

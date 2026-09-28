@@ -92,15 +92,18 @@ describe('startFight —— RF#3 空库/不足守卫（error 是值不是 throw�
     expect(view.state.maxPlayerHp).toBe(100);
   });
 
-  it('SF#6 脏输入消毒：非法 size / 缺 cards / rng 非函数一律回落 error 值，永不 throw', () => {
-    const bad: unknown[] = [0, -3, 2.5, NaN, Infinity, undefined];
+  it('SF#6 脏输入消毒：非法 size → invalid-size / 缺 cards → no-cards / rng 非函数不 throw', () => {
+    // 来历：T3 授权改动（终审 triage「非法 size 文案分流」）——旧版把"请求参数坏"与
+    // "库存为空"合并成 no-cards，让设置页脏值也误报"没卡片"。现按错误码分流，
+    // 两类用户的下一步动作不同（改设置 vs 去做卡），文案随之分叉。
+    const bad: unknown[] = [0, -3, 2.5, NaN, Infinity, undefined, 61];
     for (const size of bad) {
       const res = startFight(session(lib(20)), { size: size as number, rng: HALF, nowMs: 0 }) as {
-        error: 'no-cards' | 'insufficient-cards';
+        error: 'invalid-size' | 'no-cards' | 'insufficient-cards';
         message: string;
       };
-      expect(res.error).toBe('no-cards');
-      expect(res.message).toContain('还没有卡片');
+      expect(res.error).toBe('invalid-size');
+      expect(res.message).toContain('设置');
     }
     // cards 非数组：SessionCards.cards 声明为 Card[]，运行时脏存档仍不得抛
     const dirty = startFight({ decks: [], cards: null as unknown as Card[] }, { size: 15, rng: HALF, nowMs: 0 }) as {
@@ -110,6 +113,28 @@ describe('startFight —— RF#3 空库/不足守卫（error 是值不是 throw�
     // rng 非函数：buildPool 内部已回落 () => 0，startFight 不因 rng 形状而 throw
     const noRng = ok(startFight(session(lib(4)), { size: 4, rng: null as unknown as Rng, nowMs: 0 }));
     expect(noRng.pool).toHaveLength(4);
+  });
+
+  it('SF#6b size 合法域边界：1 与 60 放行（>60 归 invalid-size 但不动合法域）', () => {
+    const one = ok(startFight(session(lib(20)), { size: 1, rng: HALF, nowMs: 0 }));
+    expect(one.pool).toHaveLength(1);
+    const sixty = ok(startFight(session(lib(80)), { size: 60, rng: HALF, nowMs: 0 }));
+    expect(sixty.pool).toHaveLength(60);
+  });
+
+  it('SF#9 difficulty 管道：boss 档同时切 HP 与反击强度（T8 消费的前置接线）', () => {
+    const cards = session(lib(20));
+    const enc = ok(startFight(cards, { size: 15, rng: HALF, nowMs: 0 }));
+    const boss = ok(startFight(cards, { size: 15, rng: HALF, nowMs: 0, difficulty: 'boss' }));
+    // HP：encounter ceil(15×10×0.7)=105 vs boss ceil(15×10×1.5)=225
+    expect(enc.state.enemyHp).toBe(105);
+    expect(boss.state.enemyHp).toBe(225);
+    // 反击强度：power 7 vs 11（POWER_FACTOR 封顶，R-T1-p4-b）
+    expect(enc.state.enemyPower).toBe(7);
+    expect(boss.state.enemyPower).toBe(11);
+    // 缺省即 encounter：不传 difficulty 与显式传同值
+    const dflt = ok(startFight(cards, { size: 15, rng: HALF, nowMs: 0, difficulty: undefined }));
+    expect(dflt.state.enemyPower).toBe(7);
   });
 
   it('SF#7 确定性：同 seed 同库 → 同一卡池与同一初始 state', () => {
