@@ -306,14 +306,17 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     h('div', { class: 'llm-actions' }, [llmSaveBtn, llmTestBtn, llmClearBtn]),
   ]);
 
+  // 分组顺序：可逆的设置在先，「存档（重置）」**放最后**——不可逆的动作不该出现在
+  // 拇指一进来就够到的位置，也不该在"想调个阈值"时被误触。（SAVE_HINT 里的方位词
+  // "上面的重看序章"就指着这个顺序，改顺序要一起改文案。）
   const screen = h('div', { 'data-ui': 'settings-screen', class: 'settings-screen' }, [
     headerEl,
-    saveEl,
     tierEl,
     poolEl,
     paramEl,
     storyEl,
     llmEl,
+    saveEl,
   ]);
   root.appendChild(screen);
 
