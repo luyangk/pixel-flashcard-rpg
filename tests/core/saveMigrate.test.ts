@@ -15,6 +15,7 @@ import type { GameStorage } from '@platform/storage';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { MAX_EFFECTIVE_DAYS } from '@core/reviewLedger';
 import { importAndSave, migrateSave, serializeSave, validateSave } from '@core/saveMigrate';
+import { scoreRun, type RunRecord } from '@core/leaderboard';
 
 const T0 = 1761955200000; // 2025-11-01T00:00Z 附近的中性时间戳，纯数据不作时钟
 
@@ -57,9 +58,40 @@ function validSave(): SaveFile {
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 1, secondInterval: 6 },
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      // Plan 3 · T7：排行榜持久位。夹具显式带上它，三个理由：
+      // ①它虽是可选字段，但 migrateSave 会为缺席档补 []——夹具缺席会让"新档同引用透传"
+      //   与 backup 侧 toStrictEqual 逐键无损断言把归一化误读成丢字段；
+      // ②它是当前形状的一部分，夹具应代表"当前形状的完整档"；
+      // ③meta.lastExportedAt 刻意**不**在此列：缺席 = 从未导出，是合法且语义化的缺省。
+      leaderboard: [],
     },
     meta: { savedAt: T0, plays: 7 },
   };
+}
+
+/** 一条合法榜单行（九字段；score 用 scoreRun 复算，避免手填失真）。 */
+function runRow(over: Partial<RunRecord> = {}): RunRecord {
+  const row: RunRecord = {
+    id: 'run-1',
+    at: T0,
+    result: 'won',
+    kind: 'encounter',
+    domain: 'd1',
+    cards: 10,
+    misses: 2,
+    level: 3,
+    score: 0,
+    ...over,
+  };
+  if (over.score === undefined) row.score = scoreRun(row);
+  return row;
+}
+
+/** 取合法样本并把 settings.leaderboard 换成指定值（畸形/边界用例的唯一取证手段）。 */
+function withLeaderboard(records: unknown): Record<string, unknown> {
+  const raw = sample();
+  (raw.settings as Record<string, unknown>).leaderboard = records;
+  return raw;
 }
 
 /** 取合法样本的浅克隆，供逐字段 mutate 出畸形变体。 */
@@ -364,6 +396,99 @@ describe('validateSave —— 结构与类型逐项检查（reason 必须给 JSO
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('meta.savedAt');
   });
+
+  // ---- settings.leaderboard 域（Plan 3 · T7，R-P3-a 三段式之"在场严检"层）----
+
+  it('leaderboard 缺席合法（可选位）：旧档不因缺榜单被拒；空数组同样合法', () => {
+    const raw = sample();
+    delete (raw.settings as Record<string, unknown>).leaderboard;
+    expect(validateSave(raw).ok).toBe(true);
+    expect(validateSave(withLeaderboard([])).ok).toBe(true);
+  });
+
+  it('合法榜单行通过：九字段逐项（id/at/result/kind/domain/cards/misses/level/score）', () => {
+    const row = runRow();
+    expect(Object.keys(row)).toHaveLength(9); // 九字段口径的活证据：新增字段必须同步校验
+    expect(validateSave(withLeaderboard([row, runRow({ id: 'run-2', result: 'lost', score: 0 })])).ok).toBe(true);
+  });
+
+  it('leaderboard 非数组（对象/字符串/数字）→ 拒且路径 settings.leaderboard', () => {
+    for (const bad of [{}, 'top', 42]) {
+      const r = validateSave(withLeaderboard(bad));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.leaderboard');
+    }
+  });
+
+  it('leaderboard[0].score=-1 → 拒且 reason 恰含该 JSON 路径（brief 钉死用例）', () => {
+    const r = validateSave(withLeaderboard([runRow({ score: -1 })]));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('settings.leaderboard[0].score');
+    // 小数同样拒（分数是整数域：scoreRun 输出恒非负整数）
+    const frac = validateSave(withLeaderboard([runRow({ score: 40.5 })]));
+    expect(frac.ok).toBe(false);
+    if (!frac.ok) expect(frac.reason).toContain('settings.leaderboard[0].score');
+  });
+
+  it('cards/misses/level 负数或小数 → 各自带路径拒绝', () => {
+    for (const [field, bad] of [['cards', -1], ['misses', 1.5], ['level', -3]] as const) {
+      const r = validateSave(withLeaderboard([runRow({ [field]: bad })]));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain(`settings.leaderboard[0].${field}`);
+    }
+  });
+
+  it('result/kind 枚举外值 → 路径 .result / .kind', () => {
+    const r1 = validateSave(withLeaderboard([runRow({ result: 'draw' as never })]));
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toContain('settings.leaderboard[0].result');
+    const r2 = validateSave(withLeaderboard([runRow({ kind: 'raid' as never })]));
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toContain('settings.leaderboard[0].kind');
+  });
+
+  it('id/domain 空串或非字符串 → 路径 .id / .domain', () => {
+    const r1 = validateSave(withLeaderboard([runRow({ id: '' })]));
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toContain('settings.leaderboard[0].id');
+    const r2 = validateSave(withLeaderboard([runRow({ domain: 7 as never })]));
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toContain('settings.leaderboard[0].domain');
+  });
+
+  it('at 非时间戳（字符串/NaN/超界）→ 路径 .at；元素非对象同样给下标路径', () => {
+    for (const bad of ['today', Number.NaN, 1e18]) {
+      const r = validateSave(withLeaderboard([runRow({ at: bad as never })]));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('settings.leaderboard[0].at');
+    }
+    const r2 = validateSave(withLeaderboard([null, runRow()]));
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toContain('settings.leaderboard[0]');
+  });
+
+  // ---- meta.lastExportedAt 域（Plan 3 · T7，R-T5-p3-a 三段式之"在场严检"层）----
+
+  it('lastExportedAt 缺席合法（= 从未导出）；0 与普通时间戳合法', () => {
+    const absent = sample();
+    delete (absent.meta as Record<string, unknown>).lastExportedAt;
+    expect(validateSave(absent).ok).toBe(true);
+    for (const good of [0, T0]) {
+      const raw = sample();
+      (raw.meta as Record<string, unknown>).lastExportedAt = good;
+      expect(validateSave(raw).ok).toBe(true);
+    }
+  });
+
+  it('lastExportedAt 非法（-1/-Infinity/NaN/Infinity/"now"/超界）→ 拒且路径 meta.lastExportedAt', () => {
+    for (const bad of [-1, Number.NEGATIVE_INFINITY, Number.NaN, Number.POSITIVE_INFINITY, 'now', 1e300]) {
+      const raw = sample();
+      (raw.meta as Record<string, unknown>).lastExportedAt = bad;
+      const r = validateSave(raw);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('meta.lastExportedAt');
+    }
+  });
 });
 
 describe('validateSave —— deckId 引用闭合', () => {
@@ -591,6 +716,47 @@ describe('migrateSave', () => {
     expect(loaded).toEqual(validSave()); // deepEqual 完整新形状（含 battle + progress 默认）
     expect(loaded?.settings.battle).toEqual({ defaultPoolSize: 15 });
     expect(loaded?.settings.progress).toEqual({ exp: 0 });
+  });
+
+  // ---- leaderboard / lastExportedAt 扩域（Plan 3 · T7，R-P3-a 三段式之"migrate 补默认"层）----
+
+  it('旧档缺 leaderboard → migrate 补 []；validate 前后皆过（可选位归一化，不是整包拒绝点）', () => {
+    // 与 battle/progress 的分工差异：缺它**不拒**——只有 T7 前写下的档缺这个字段，
+    // 做成拒绝点会把那些存档全部锁死（RF#4 的反面）。
+    const raw = sample();
+    delete (raw.settings as Record<string, unknown>).leaderboard;
+    expect(validateSave(raw).ok).toBe(true);
+    const save = migrateSave(raw);
+    expect(save.settings.leaderboard).toEqual([]);
+    expect(validateSave(save).ok).toBe(true);
+    // 双缺旧档（battle/progress/leaderboard 皆无）一次迁移三项全补
+    expect(migrateSave(legacyBothSample()).settings.leaderboard).toEqual([]);
+  });
+
+  it('migrate 不补 meta.lastExportedAt：缺席即"从未导出"，不发明假时刻', () => {
+    const save = migrateSave(legacyBothSample());
+    expect('lastExportedAt' in save.meta).toBe(false);
+    expect(save.meta).toEqual({ savedAt: T0, plays: 7 });
+  });
+
+  it('已含榜单的新档：migrate 同引用透传、榜单逐字不动（不重排/不消毒）', () => {
+    const fresh = validSave();
+    fresh.settings.leaderboard = [runRow({ id: 'kept' })];
+    const once = migrateSave(fresh);
+    expect(once).toBe(fresh);
+    expect(once.settings.leaderboard).toStrictEqual(fresh.settings.leaderboard);
+  });
+
+  it('榜单行域外（score=-1）→ migrate 拒绝而非消毒改写（域检查归 validateSave）', () => {
+    expect(() => migrateSave(withLeaderboard([runRow({ score: -1 })]))).toThrow(
+      /settings\.leaderboard\[0\]\.score/,
+    );
+  });
+
+  it('lastExportedAt 在场但非法 → migrate 拒绝（不静默丢弃/改写用户的"已备份"时刻）', () => {
+    const raw = sample();
+    (raw.meta as Record<string, unknown>).lastExportedAt = -1;
+    expect(() => migrateSave(raw)).toThrow(/meta\.lastExportedAt/);
   });
 });
 

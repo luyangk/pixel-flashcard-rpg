@@ -105,6 +105,10 @@ function makeSave(cards: Card[], over: Partial<SaveFile> = {}): SaveFile {
       sm2Params: PARAMS,
       battle: { defaultPoolSize: 15 },
       progress: { exp: 0 },
+      // T7 起 leaderboard 是当前形状的一部分（可选位，migrateSave 为缺席档补 []）：
+      // 夹具带上它，才能让 BK#2/BK#25/BK#26 的 toStrictEqual 逐键断言区分
+      // "归一化补默认"与"丢字段"——否则迁移注入的空榜会被读成往返丢键。
+      leaderboard: [],
     },
     meta: { savedAt: NOW, plays: 0 },
     ...over,
@@ -219,14 +223,13 @@ function stagedStore(inner: GameStorage): {
 }
 
 /**
- * 备份时刻的持久位（T7 按三段式在 meta 落地，R-T5-p3-a；本任务只读不写生产字段）。
- * 用例以该结构代表"导出成功后 coordinator 记录 lastExportedAt"这一步：
- * 缺席即"从未导出"（null），故读取侧对非数值一律回落 null。
+ * 备份时刻的持久位读取（T7 已按三段式在 meta 落地，R-T5-p3-a；写入路径见 BK#25 的
+ * Coordinator.markExported）。缺席即"从未导出"（null），故非数值一律回落 null。
+ * T7 前此处借 `SaveFile['meta'] & { lastExportedAt?: number }` 的手工扩展类型表达
+ * "未来会有的字段"——持久位落地后直接用真实字段，类型断言随之删除。
  */
-type MetaWithBackup = SaveFile['meta'] & { lastExportedAt?: number };
-
 function readLastExportedAt(save: SaveFile): number | null {
-  const v = (save.meta as MetaWithBackup).lastExportedAt;
+  const v = save.meta.lastExportedAt;
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
@@ -486,12 +489,12 @@ describe('装配集成 —— 导出即持久快照 / 导出时刻使 due 翻 fa
     expect(backupReminderDue(nowMs, nowMs)).toBe(false); // 刚导出：不打扰
     expect(backupReminderDue(nowMs, nowMs + 7 * DAY)).toBe(true); // 满 7 天：再提醒
 
-    // 导出成功后记录导出时刻（持久位归属见 report；此处沿用 brief 建议的 meta 扩展位）
-    await coord.mutate((s) => {
-      (s.meta as MetaWithBackup).lastExportedAt = nowMs;
-    });
-    expect(await coord.flush()).toBe(true);
-    expect(coord.dirty()).toBe(false);
+    // 导出成功后记录导出时刻：T7 起走真实写入路径 Coordinator.markExported（R-T5-p3-a），
+    // 不再由测试手工塞 meta——持久位若没人喂，7 天闸门就是死代码，这条用例正是它的喂入方取证。
+    await coord.markExported(nowMs);
+    expect(coord.dirty()).toBe(false); // markExported 自带 flush()&&!dirty() 收口
+    const persisted = await raw.load();
+    expect(readLastExportedAt(persisted!)).toBe(nowMs);
 
     // 重建 coordinator（模拟下次启动）：该时刻经 validateSave + store 往返存活
     const revived = await createCoordinator(raw, { now: clock.now });

@@ -23,6 +23,10 @@
  * 落库义务（R-T3-p3-b / M-2）：settleAndRecord 是战斗结算 → progress.exp 的
  * 唯一编排点——settleFight 的 {cards,exp,won} 经此写回 cards / settings.progress.exp /
  * meta.plays，杜绝"等级永远 L1"。
+ *
+ * Plan 3 · T7 增补：①种子档带上空榜 settings.leaderboard（与 migrateSave 为旧档补的
+ * 缺省同形）；②`markExported(nowMs)` 是 meta.lastExportedAt（7 天备份提醒的唯一喂入位）
+ * 的生产写入路径，自带 flushToClean 收口——"导出已记时"返回即已在存储里。
  */
 
 import type { Card, SaveFile, Settings } from '@core/types';
@@ -39,6 +43,12 @@ export const DEFAULT_DEBOUNCE_MS = 500;
 
 /** maxBatchMs 默认值（brief verbatim：5000）——攒批的时间上限，到点强制落盘。 */
 export const DEFAULT_MAX_BATCH_MS = 5000;
+
+/**
+ * flushToClean 的步数上限（R-T4-p3-d 收口用）：正常路径一轮即净，上限只为防
+ * "持续有并发 mutate"时把调用方无限挂住。不导出：它不是可调参数，只是自旋护栏。
+ */
+const MAX_FLUSH_ROUNDS = 5;
 
 /** brief Produces 声明的最小接口；实现返回的对象是其超集（结构兼容，CT#3 钉住）。 */
 export interface Coordinator {
@@ -59,6 +69,16 @@ export interface Coordinator {
   settleAndRecord(result: SettleResult): Promise<void>;
   /** 外部失控改过 snapshot() 后的显式标脏（正常路径不需要，SN#3b 测试用）。 */
   markDirty(): void;
+  /**
+   * 记下"备份导出成功"的时刻（Plan 3 · T7，R-T5-p3-a）：写 `meta.lastExportedAt`
+   * 并收口到"已持久"（flush() && !dirty() 语义，见 R-T4-p3-d）。
+   *
+   * 这是 7 天提醒闸门 backupReminderDue 的**唯一生产写入位**——没有它，闸门只能靠
+   * 调用方手工改 meta，7 天提醒就是一段死代码。非法时刻（非有限 / 负值）**不写**：
+   * fail-closed 不把脏值放进权威位（脏值会让落盘自检整包失败，连累所有其它改动），
+   * 而闸门对缺席/坏值本就 fail-open（宁可多提醒一次），两者方向一致。
+   */
+  markExported(nowMs: number): Promise<void>;
   /** flush 的详细结果面（boolean 面由 `=== true` 比较即可判别）。 */
   flushDetailed(): Promise<FlushResult>;
 }
@@ -92,6 +112,9 @@ const DEFAULT_SETTINGS: Settings = {
   sm2Params: DEFAULT_SM2_PARAMS,
   battle: { defaultPoolSize: 15 },
   progress: { exp: 0 },
+  // T7：新档直接带空榜（与 migrateSave 为旧档补的缺省同形），
+  // 免得"种子档"与"迁移档"两种形状长期分叉。数组本体在 seedSave 里每次新建。
+  leaderboard: [],
 };
 
 /**
@@ -110,7 +133,9 @@ function seedSave(nowMs: number): SaveFile {
       sm2Params: { ...DEFAULT_SETTINGS.sm2Params },
       battle: { ...DEFAULT_SETTINGS.battle },
       progress: { ...DEFAULT_SETTINGS.progress },
+      leaderboard: [], // 每份种子档各持一个空数组，绝不跨实例共享可变引用
     },
+    // meta 不含 lastExportedAt：缺席正是"从未导出"（R-T5-p3-a），种子档不得假装已备份。
     meta: { savedAt: nowMs, plays: 0 },
   };
 }
@@ -395,6 +420,34 @@ export async function createCoordinator(
     });
   }
 
+  /**
+   * "我的改动此刻已持久"的收口（R-T4-p3-d 的兑现处）：flush() 的 true 只承诺
+   * "被认领的那批已写"，在途 mutate 的那批还没写——故必须循环到 dirty() 归假。
+   * 步数上限只为防"持续有并发 mutate 时不返回"；正常路径一轮即净。
+   * 返回 false 表示仍有未落盘改动（写失败或并发不断），错误面由 flush 返回值承载。
+   */
+  async function flushToClean(): Promise<boolean> {
+    for (let i = 0; i < MAX_FLUSH_ROUNDS; i++) {
+      if (!(await flushDetailed()).ok) return false;
+      if (!dirty) return true;
+    }
+    return !dirty;
+  }
+
+  /**
+   * 备份导出时刻的持久位（R-T5-p3-a）：唯一生产写入者是这里。
+   * 消毒 fail-closed：非有限 / 负值直接返回、**不标脏**——写进权威位会让下一次落盘
+   * 自检整包失败（validateSave 严检 meta.lastExportedAt），把无关改动一起拖住；
+   * 而闸门对"缺席"本就 fail-open（提醒照响），代价只是多提醒一次。
+   */
+  async function markExported(nowMs: number): Promise<void> {
+    if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || nowMs < 0) return;
+    await mutate((s) => {
+      s.meta.lastExportedAt = nowMs;
+    });
+    await flushToClean();
+  }
+
   return {
     mutate,
     flush,
@@ -406,6 +459,7 @@ export async function createCoordinator(
       dirty = true;
       armWindow();
     },
+    markExported,
     flushDetailed,
   };
 }

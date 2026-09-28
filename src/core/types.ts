@@ -5,6 +5,8 @@
  * （浏览器 / Node 全局对象），以保持 core 层的零平台依赖。
  */
 
+import type { RunRecord } from './leaderboard';
+
 /** 卡片稳定度阶段（驱动伤害倍率映射与 Boss 计数口径）。 */
 export type Stability = 'new' | 'learning' | 'review' | 'mastered';
 
@@ -78,6 +80,29 @@ export interface Settings {
   sm2Params: Sm2Params;
   battle: BattleSettings;
   progress: ProgressSettings;
+  /**
+   * 本地战绩榜（Plan 3 · T7，PRD §5 首版"本地榜"的落盘位）。
+   *
+   * 三段式（R-P3-a 的 T7 变体）：**types 可选** + validateSave 在场严检（元素九字段）+
+   * migrateSave 为缺席档补 []。与 battle/progress 的分工差异在于"缺席是否整包拒"：
+   * 榜单只是展示派生数据，缺席不威胁存档可用性，故 validateSave **不拒缺席**——
+   * 这是刻意的：把可选位做成拒绝点会让 T7 前写下的存档全部打不开（RF#4 的反面）。
+   * 权威形状定义在 core/leaderboard.RunRecord（本文件只引用，不复制字段）。
+   */
+  leaderboard?: RunRecord[];
+}
+
+/** 存档容器元信息。 */
+export interface SaveMeta {
+  savedAt: number;
+  plays: number;
+  /**
+   * 最近一次**成功导出备份**的时刻（Plan 3 · T7，R-T5-p3-a；7 天提醒闸门 backupReminderDue
+   * 的唯一数据源）。三段式：types 可选 + validateSave 严检（有限数且 ≥0）+ **migrateSave
+   * 不补默认**——缺席是语义化的"从未导出"，补一个假时刻会让闸门静默失效 7 天。
+   * 写入路径：Coordinator.markExported(nowMs)（装配层）。
+   */
+  lastExportedAt?: number;
 }
 
 /** 本地存档容器（本计划新增；导入时须整体通过 validateSave）。 */
@@ -86,5 +111,5 @@ export interface SaveFile {
   decks: Deck[];
   cards: Card[];
   settings: Settings;
-  meta: { savedAt: number; plays: number };
+  meta: SaveMeta;
 }

@@ -288,3 +288,39 @@ describe('pickFakes —— 依序尝试两规则，够不着 count 就少产', (
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// T7 捎带：T6 评审 M1/M2（R-T6-p3-a 派发）
+// ---------------------------------------------------------------------------
+
+describe('T6 评审 M1/M2 捎带 —— 越契约 rng 与空值映射', () => {
+  it('FM#27 [M1] 越契约 rng≡1：幅度 clamp 到 1..9，输出仍 ≠ 原值（回绕不得静默还原真答案）', () => {
+    // rng 契约是 [0,1)，但越契约值（=1）曾让 mag = 1+floor(9) = 10——模 10 回绕后
+    // 恰等于原值，"不含真答案"的硬契约被静默破坏。clamp 后 mag 顶格 9。
+    const card = makeCard('m1', SAMPLE_DIST);
+    const fake = tamperNumber(card, fixedRng(1).rng);
+    expect(fake).not.toBeNull();
+    expect(fake!.tamperedBack).not.toBe(card.back);
+    expect(fake!.tamperedBack).toBe('光年是距离单位，0秒≈30万公里'); // 1+9 ≡ 0 (mod 10)
+    expect(tamperNumber(makeCard('m2', '第9章讲了 30 个概念'), fixedRng(1).rng)!.tamperedBack).not.toBe(
+      '第9章讲了 30 个概念',
+    );
+    // 反向越契约（负数）同样不得产出原值——下界一并 clamp 的活证据
+    expect(tamperNumber(card, fixedRng(-0.5).rng)!.tamperedBack).not.toBe(card.back);
+  });
+
+  it('FM#28 [M2] 词表映到空串 → 跳过该命中项（否则产出被挖空的句子）', () => {
+    const card = makeCard('m3', '只谈距离与单位');
+    // 唯一命中项映到空串：不得产出一条"把真答案挖掉"的伪篡改
+    expect(tamperWord(card, new Map([['单位', '']]), fixedRng(0).rng)).toBeNull();
+    // 混合表：空串项被跳过，有效项照常命中（收紧不误伤真·替换）
+    const mixed = new Map([
+      ['单位', ''],
+      ['距离', '时间'],
+    ]);
+    const fake = tamperWord(card, mixed, fixedRng(0).rng);
+    expect(fake).not.toBeNull();
+    expect(fake!.tamperedBack).toBe('只谈时间与单位');
+    expect(fake!.tamperedBack).not.toBe(card.back);
+  });
+});

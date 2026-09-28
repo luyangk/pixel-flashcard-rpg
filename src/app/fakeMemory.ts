@@ -11,7 +11,7 @@
  *
  * 四条硬契约：
  * - **不含真答案**：tamperedBack 恒 ≠ 原 back。两处细节保证它：数字位移在 10^位数
- *   上取模（位移量 1..9 永不等于 0），词替换拒绝恒等/空串映射。
+ *   上取模（位移量 clamp 到 1..9 后永不同余于 0），词替换拒绝恒等映射/空串键/映到空串。
  * - **front 保真**：只篡改答案面，问题面逐字照搬——玩家先认出这张卡，再被答案惊到。
  * - **分寸**（LORE §5.5「一眼像错的，细想有点慌」）：位移只有 ±1..9，且**保持位数外观**；
  *   给出的是"6秒≈30万公里"这类近乎可信的错，而不是"6000秒"这类一眼荒谬或
@@ -21,8 +21,9 @@
  * ## tamperNumber 的数值口径（brief 只写"±1~9 扰动、保持位数外观"，此处钉死）
  * 1. 匹配 `back` 中第一个 `/\d+/`（最长连续数字串）。**负号不在 `\d` 内**，故符号位
  *    原样保留、只扰动绝对值——不会产出 `--7` 这类畸形。
- * 2. 位移量 `mag = 1 + floor(uniform(rng, 0, 9))` ∈ 1..9；方向 `rng() < 0.5 ? -1 : +1`。
- *    调用顺序即"先幅度后方向"，是确定性序列的一部分。
+ * 2. 位移量 `mag = clamp(1 + floor(uniform(rng, 0, 9)), 1, 9)` ∈ 1..9；方向 `rng() < 0.5 ? -1 : +1`。
+ *    调用顺序即"先幅度后方向"，是确定性序列的一部分。clamp 是 T7 捎带 M1：rng 越契约
+ *    返 1 时 mag 曾为 10，与 10^width 同余 ⇒ 回绕成原值（静默破坏硬契约）。
  * 3. 结果在 `10^width` 上取模回绕（width = 数字串长度）。这既是"保持位数外观"的
  *    定义（"9"+9 → "8" 而非两位的 "18"），也天然保证结果 ≠ 原值（1..9 位移在 mod 10^k
  *    下不可能是 0）。原串带前导零时按宽度补零回写（"007" → "006"）。
@@ -35,8 +36,9 @@
  * ## tamperWord 的口径
  * 表内**字面**查找（indexOf，非正则——键含 `+`/`(` 等元字符也按原样匹配），
  * 命中项按 Map 插入序收集，再由注入 rng 经 `pickWeighted` 等权选一个，替换其**首个**
- * 出现处。跳过空串键（`indexOf('')` 恒命中，会产出整段挪位的伪篡改）与恒等映射
- * （from === to，会产出"假记忆 === 真答案"）。无有效命中 → null。
+ * 出现处。跳过三类无效项：空串键（`indexOf('')` 恒命中，会产出整段挪位的伪篡改）、
+ * 恒等映射（from === to，会产出"假记忆 === 真答案"）与**映到空串**（T7 捎带 M2：
+ * 会把真答案的词挖掉，产出被掏空的句子）。无有效命中 → null。
  *
  * 文案纪律：本模块产出的是**卡面篡改内容**（演出素材），不是叙事文本也不是功能文本，
  * 故不新造文案，只做真答案的规则变换（LORE §5.5 允许的两条来源之一）。
@@ -84,7 +86,13 @@ export function tamperNumber(card: Card, rng: Rng): FakeCard | null {
   const orig = BigInt(hit[0]);
   const span = 10n ** BigInt(width);
 
-  const magnitude = BigInt(MIN_SHIFT + Math.floor(uniform(rng, 0, MAX_SHIFT - MIN_SHIFT + 1)));
+  // 幅度 clamp 到 1..9（T7 捎带 M1，R-T6-p3-a）：rng 的契约域是 [0,1)，但越契约的
+  // rng≡1 会让 uniform(rng,0,9)=9 ⇒ mag=10——10 与 10^width 同余，回绕后 tamperedBack
+  // **恰好等于原 back**，"不含真答案"的硬契约被静默破坏（观众会看到真答案被当假记忆念一遍）。
+  // 下界一并 clamp 同因：负位移同样可能同余回原值。clamp 后位移恒 ∈ 1..9，
+  // 与模 10^k 的"必不为 0"关系不变，故"结果 ≠ 原值"重获代数保证。
+  const rawMagnitude = MIN_SHIFT + Math.floor(uniform(rng, 0, MAX_SHIFT - MIN_SHIFT + 1));
+  const magnitude = BigInt(Math.min(MAX_SHIFT, Math.max(MIN_SHIFT, rawMagnitude)));
   const sign = rng() < 0.5 ? -1n : 1n;
 
   const shifted = (orig + sign * magnitude) % span;
@@ -114,7 +122,10 @@ export function tamperWord(
 ): FakeCard | null {
   const hits: WordHit[] = [];
   for (const [from, to] of table) {
-    if (from.length === 0 || from === to) continue; // 空串键/恒等映射不算篡改
+    // 空串键/恒等映射不算篡改；**映到空串的映射同样跳过**（T7 捎带 M2，R-T6-p3-a）：
+    // 替换成空串会把真答案里的词**挖掉**（"只谈距离与单位" → "只谈距离与"），
+    // 产出的是被掏空的句子而不是"似是而非的错误内容"，同样违背硬契约。
+    if (from.length === 0 || from === to || to.length === 0) continue;
     const at = card.back.indexOf(from);
     if (at >= 0) hits.push({ from, to, at });
   }

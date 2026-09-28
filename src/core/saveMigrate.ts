@@ -23,6 +23,15 @@
  * 与 battle 完全同构的两层分工——validateSave 对 progress「在场严检 + 缺席整包拒」
  * （reason 带路径并指路 migrateSave），migrateSave 只为缺 progress 的旧形状档补
  * {exp:0}；schemaVersion 仍恰为 1，不发明新顶层字段。
+ *
+ * Plan 3 · T7 扩展（R-P3-a 的变体 + R-T5-p3-a）两处，均为"在场严检、缺席语义化"：
+ * - Settings.leaderboard?: RunRecord[]（战绩榜落盘位）：缺席**不拒**（可选派生数据，
+ *   拒绝会让 T7 前存档全部打不开），migrateSave 补 []；在场逐行九字段严检（类级联
+ *   引用 core/leaderboard.RunRecord，权威形状不在此复制）。
+ * - meta.lastExportedAt?: number（7 天备份提醒的唯一喂入位）：缺席 = 从未导出，
+ *   validateSave 在场严检（有限数且 ≥0，负值/NaN/超界整包拒），**migrateSave 不补默认**
+ *   ——补一个假时刻会让 backupReminderDue 静默失效 7 天。写入路径：Coordinator.markExported。
+ * schemaVersion 仍恰为 1，顶层键集不变。
  */
 
 import type { SaveFile } from './types';
@@ -59,6 +68,11 @@ function assertShape(pred: boolean, path: string, detail: () => string): asserts
 const STABILITIES = ['new', 'learning', 'review', 'mastered'] as const;
 const SOURCE_TYPES = ['preset', 'hotspot', 'domain', 'manual', 'llm'] as const;
 const TIERS = [15, 30, 50] as const;
+/** 战绩榜行的枚举域（core/leaderboard.RunRecord）。域外值视为"非 won/非 boss"的语义在
+ *  leaderboard 内部是保守回落，但在**落盘形状**上必须整包拒——脏枚举一旦进档就会让
+ *  rankRuns 静默丢行。 */
+const RUN_RESULTS = ['won', 'lost'] as const;
+const RUN_KINDS = ['encounter', 'boss'] as const;
 
 /** settings.battle.defaultPoolSize 合法域与默认值（Task 8，brief verbatim：默认 15、范围 10–25）。 */
 const POOL_SIZE_MIN = 10;
@@ -155,6 +169,17 @@ function requireTimestamp(v: unknown, path: string): number {
   return v as number;
 }
 
+/**
+ * 非负时间戳域（Plan 3 · T7）：meta.lastExportedAt 的"有限数且 ≥0"严检。
+ * 负值虽在 Date 可表示范围内，但对"上次导出时刻"毫无意义——放行只会让
+ * `now - last >= 7d` 恒真、提醒永不关闭。故此处比 requireTimestamp 更紧一档。
+ */
+function requireNonNegTimestamp(v: unknown, path: string): number {
+  assertShape(typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_TIME_MS, path,
+    () => `应为非负有限时间戳（0 ≤ v ≤ ${MAX_TIME_MS}），实际为 ${describeValue(v)}`);
+  return v as number;
+}
+
 /** 真实历法日键：形状过 DAY_KEY_RE 且回读 UTC 分量一致（拒 9999-99-99、2025-02-30、闰年外 02-29）。 */
 function isRealDayKey(s: string): boolean {
   if (!DAY_KEY_RE.test(s)) return false;
@@ -214,6 +239,28 @@ function validateCard(raw: unknown, i: number): void {
   if ('source' in o && o.source !== undefined) validateSource(o.source, `${p}.source`);
 }
 
+/**
+ * 战绩榜行（Plan 3 · T7）：core/leaderboard.RunRecord 的**九字段**逐项严检
+ * （id/at/result/kind/domain/cards/misses/level/score）。
+ *
+ * 与 leaderboard 内部的"消毒容忍"分工不同：rankRuns/scoreRun 对脏行是剔除/回落，
+ * 而**落盘形状**必须整包拒——脏行一旦进档，榜单页就会拿到无法解释的行，
+ * 且"榜上有几条"与"存储里有几条"会永久不一致。score 采非负整数域
+ * （scoreRun 输出恒为整数，下限 0 由公式保证；-1/小数无合法来源）。
+ */
+function validateRunRecord(raw: unknown, path: string): void {
+  const o = requireObject(raw, path);
+  requireString(o.id, `${path}.id`);
+  requireTimestamp(o.at, `${path}.at`);
+  requireEnum(o.result, `${path}.result`, RUN_RESULTS);
+  requireEnum(o.kind, `${path}.kind`, RUN_KINDS);
+  requireString(o.domain, `${path}.domain`);
+  requireNonNegInt(o.cards, `${path}.cards`);
+  requireNonNegInt(o.misses, `${path}.misses`);
+  requireNonNegInt(o.level, `${path}.level`);
+  requireNonNegInt(o.score, `${path}.score`);
+}
+
 function validateSettings(raw: unknown): void {
   const o = requireObject(raw, 'settings');
   const tier = o.bossThresholdTier;
@@ -256,12 +303,28 @@ function validateSettings(raw: unknown): void {
   if (!('progress' in o) || o.progress === undefined) {
     fail('settings.progress', '缺失（T3 前旧档形状），请经 migrateSave 迁移后再导入');
   }
+  // leaderboard 域（Plan 3 · T7）：**可选位**——在场才严检（逐行九字段，路径带下标，
+  // 如 `settings.leaderboard[3].score`）；缺席不拒（与 battle/progress 的分工差异见
+  // types.Settings 注释：拒绝缺席会让 T7 前写下的存档全部打不开）。
+  // 长度不设上限：榜单是展示派生数据，recordRun 写入侧恒截 50；导入一份 500 行的榜
+  // 至多是"显示得长一点"，不威胁存档可用性（宁松勿误拒，域畸形仍逐行走上面拒绝）。
+  if ('leaderboard' in o && o.leaderboard !== undefined) {
+    const rows = requireArray(o.leaderboard, 'settings.leaderboard');
+    for (let i = 0; i < rows.length; i++) validateRunRecord(rows[i], `settings.leaderboard[${i}]`);
+  }
 }
 
 function validateMeta(raw: unknown): void {
   const o = requireObject(raw, 'meta');
   requireTimestamp(o.savedAt, 'meta.savedAt');
   requireNonNegInt(o.plays, 'meta.plays');
+  // lastExportedAt（Plan 3 · T7，R-T5-p3-a）：可选持久位，**缺席是语义化的"从未导出"**，
+  // 故与 leaderboard 同构地"在场严检、缺席放行"；migrateSave 不补默认（补假时刻会让
+  // 7 天提醒闸门静默失效）。在场值经 requireNonNegTimestamp：NaN/Infinity/负值/超界一律
+  // 整包拒——闸门的输入若成垃圾，提醒会以"永不响"或"天天响"的形式坏掉。
+  if ('lastExportedAt' in o && o.lastExportedAt !== undefined) {
+    requireNonNegTimestamp(o.lastExportedAt, 'meta.lastExportedAt');
+  }
 }
 
 /**
@@ -321,21 +384,24 @@ export function validateSave(raw: unknown): ValidateResult {
  * validateSettings 对 battle「在场严检 + 缺席整包拒」：存在则必须是对象且
  * defaultPoolSize ∈ 10–25 整数（99/3.5/'x' 一律拒，reason 带路径）；缺失报
  * `settings.battle: 缺失…请经 migrateSave 迁移`。域畸形始终归 validateSave，
- * 本函数绝不做消毒改写。**幂等声明的适用边界**：仅当输入已是"battle 在场且
- * 整包合法的新档"时，本函数同引用透传、零 mutate（validateSave 同引用返回 +
- * 现状核实其对未知多余键容忍，故无需拷贝重建）；legacy 档经注入后返回的是
- * 新建浅拷贝对象，不在此列。另注意：**返回值与入参共享嵌套引用**（decks/cards
- * 数组本体不复制），需独立副本请自行 structuredClone。
+ * 本函数绝不做消毒改写。**幂等声明的适用边界**：仅当输入已是"battle / progress /
+ * leaderboard 三者皆在场且整包合法的新档"时，本函数同引用透传、零 mutate
+ * （validateSave 同引用返回 + 现状核实其对未知多余键容忍，故无需拷贝重建）；
+ * 任一项缺席的 legacy 档经注入后返回的是新建浅拷贝对象，不在此列。另注意：
+ * **返回值与入参共享嵌套引用**（decks/cards 数组本体不复制），需独立副本请自行
+ * structuredClone。
  *
- * 范围克制（R-T6-d 延伸）：本任务只做 settings.battle 缺省补值这一档迁移；
- * "上次备份时刻信封"仍留平台层，schemaVersion 保持恰 1，不发明新顶层字段。
+ * 范围克制（R-T6-d 延伸）：迁移只做"缺省补值"这一件事，现有三档——settings.battle
+ * → {defaultPoolSize:15}、settings.progress → {exp:0}、settings.leaderboard → []；
+ * "上次备份时刻"（meta.lastExportedAt）**不补**（缺席 = 从未导出，补默认有害），
+ * schemaVersion 保持恰 1，不发明新顶层字段。
  * 失败形态与校验器一致：抛 Error，message 即含 JSON 路径的可读 reason。
  */
 export function migrateSave(raw: unknown): SaveFile {
   // 旧形状档（无 battle / 无 progress）在 validateSettings 处即被拒，故先注入默认再整包校验：
   // 这正是 brief Step 1 的「migrateSave 注入 {battle:{defaultPoolSize:15}} 后再 validate 过」
-  // （T3 起 progress 同待遇：注入 {progress:{exp:0}}）。
-  const migrated = injectProgressDefaults(injectBattleDefault(raw));
+  // （T3 起 progress 同待遇：注入 {progress:{exp:0}}；T7 起 leaderboard：注入 {leaderboard:[]}）。
+  const migrated = injectLeaderboardDefault(injectProgressDefaults(injectBattleDefault(raw)));
   const validated = validateSave(migrated);
   if (!validated.ok) throw new Error(`存档不合法，无法迁移：${validated.reason}`);
   return validated.save;
@@ -366,6 +432,23 @@ function injectProgressDefaults(raw: unknown): unknown {
   if (!isPlainObject(settings)) return raw;
   if ('progress' in settings && settings.progress !== undefined) return raw;
   return { ...raw, settings: { ...settings, progress: { exp: DEFAULT_PROGRESS_EXP } } };
+}
+
+/**
+ * settings.leaderboard 缺省时补 `[]`（Plan 3 · T7）——与上两个注入器同构：
+ * 只在 settings 为对象且 leaderboard 缺席时浅拷贝注入；在场（哪怕是空数组）一律原样
+ * 透传给 validateSave 逐行拒绝。缺省值是 [] 而非拒绝，因为榜单是展示派生数据：
+ * 缺席等价于"还没打过一局"，拒绝它会把 T7 前写下的存档全部锁死（RF#4 的反面）。
+ *
+ * **meta.lastExportedAt 刻意不在此列**：它的缺席语义是"从未导出"，补一个时刻
+ * 会让 7 天提醒闸门静默失效——默认值在这里是有害的，故本函数只做 leaderboard。
+ */
+function injectLeaderboardDefault(raw: unknown): unknown {
+  if (!isPlainObject(raw)) return raw;
+  const settings = raw.settings;
+  if (!isPlainObject(settings)) return raw;
+  if ('leaderboard' in settings && settings.leaderboard !== undefined) return raw;
+  return { ...raw, settings: { ...settings, leaderboard: [] } };
 }
 
 // ---------------------------------------------------------------------------
