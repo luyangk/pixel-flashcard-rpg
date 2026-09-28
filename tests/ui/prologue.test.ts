@@ -180,6 +180,29 @@ describe('assets/narrative/prologue.json —— 与 LORE §5.1 逐字一致', ()
   });
 });
 
+/* ------------------------------------------------------------------ 版式契约（用户实测 bug 的回归钉） */
+
+describe('序章版式 —— 插画不得压住旁白', () => {
+  it('PJ#5 .prologue-art 用显式整数倍尺寸，不用 transform: scale（缩放不占布局 ⇒ 会盖住文字）', () => {
+    const css = readFileSync(join(REPO_ROOT, 'src/ui/styles.css'), 'utf8');
+    // 先剥 CSS 注释：注释里正解释着"不要用 transform"，不剥会假红（踩过一次）
+    const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const block = /\.prologue-art\s*\{([\s\S]*?)\}/.exec(code)?.[1] ?? '';
+    expect(block.length).toBeGreaterThan(0);
+    // ① 绝不允许 transform 缩放（用户实测：64px 盒子 + scale(3) 会视觉上盖住旁白）
+    expect(block).not.toContain('transform');
+    expect(block).not.toContain('scale(');
+    // ② 尺寸必须是素材尺寸（64）的整数倍：3× = 192px（保持像素硬边）
+    const w = /width:\s*(\d+)px/.exec(block)?.[1];
+    expect(w).toBeDefined();
+    expect(Number(w) % 64).toBe(0);
+    const h = /height:\s*(\d+)px/.exec(block)?.[1];
+    expect(Number(h)).toBe(Number(w)); // 正方形
+    // ③ 有媒体查询给小屏兜底（矮屏上按 2× 显示）
+    expect(css).toContain('@media (max-height: 560px)');
+  });
+});
+
 /* ------------------------------------------------------------------ 落盘链路（真实控制器） */
 
 describe('序章落盘 —— 经 ctrl intent 记 prologueSeen（判别力钉）', () => {

@@ -46,6 +46,13 @@ export interface LlmSettingsDeps {
   readonly test: (cfg: LlmConfig) => Promise<ChatResult>;
   /** 预设（DeepSeek / 通义 / 自定义；**恒不含 Key**）。 */
   readonly presets: ReadonlyArray<{ readonly id: string; readonly label: string; readonly config: LlmConfig }>;
+  /**
+   * 「拉取模型列表」（宿主接 `platform/llmHttp.listModels`）：直接问服务商要它当前可用的
+   * 模型名，省得玩家去翻文档、也避免"预设里的名字过时"这类坑（用户实测撞过一次）。
+   */
+  readonly listModels?: (cfg: LlmConfig) => Promise<
+    { readonly ok: true; readonly models: readonly string[] } | { readonly ok: false; readonly reason: string }
+  >;
 }
 
 export interface SettingsDeps {
@@ -85,6 +92,14 @@ const TIER_HINT = '阈值越低，卷灵越早现身；引导领域「生活常�
  */
 const LLM_KEY_HINT = 'Key 只存在这台设备的浏览器里（本地明文），不进备份文件；换设备要重新填一次。';
 const LLM_INPUT_HINT = '保存时 Key 留空 = 不改动已存的 Key；想清掉请点「清除 Key」。';
+/**
+ * 模型名的提示。用户实测的 400 就是模型名与网关目录不一致导致的——把口径写在输入框旁边，
+ * 并明确"不是我们写死的、以你的服务商目录为准"，否则玩家会以为是本应用坏了。
+ */
+const LLM_MODEL_HINT =
+  '模型名必须与你在服务商那里开通的一致：DeepSeek 现在是 deepseek-flash 或 deepseek-v4-pro' +
+  '（旧的 deepseek-chat 已停用，填它会得到 400）；通义是 qwen-plus / qwen-max 等；' +
+  '中转/自建网关请照它自己的目录填。拿不准就点「拉取模型列表」，它会问你自己的账号要。';
 
 /**
  * 在 root 里挂设置屏。所有写入都是"点一下/保存一次"的显式动作，屏幕自己不攒状态
@@ -103,6 +118,8 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   const canLlm = !!llmDeps && typeof llmDeps.load === 'function' && typeof llmDeps.save === 'function';
   /** 「测试连接」在途标记（与 busy 分开：一次网络请求不该把阈值/池子按钮一起冻住）。 */
   let llmBusy = false;
+  /** 模型列表请求在途（与 llmBusy 分开：它不影响保存/测试的可用性） */
+  let modelsBusy = false;
   /** 当前**已存**的配置（Key 只在这份内存副本里过手，绝不写进任何 DOM 属性/文本）。 */
   let storedLlm: LlmConfig = { baseUrl: '', apiKey: '', model: '' };
 
@@ -212,6 +229,13 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   });
 
   const llmPresetsEl = h('div', { 'data-ui': 'llm-presets', class: 'llm-presets' }, llmPresetButtons);
+  const llmModelsListEl = h('div', { 'data-ui': 'llm-models-list', class: 'llm-models-list' });
+  const llmModelsStatusEl = h('p', { 'data-ui': 'llm-models-status', class: 'field-hint', hidden: true });
+  const llmModelsBtn = h(
+    'button',
+    { 'data-ui': 'llm-models-fetch', class: 'llm-models-fetch', type: 'button' },
+    '拉取模型列表',
+  ) as HTMLButtonElement;
   const llmEl = h('section', { 'data-ui': 'llm-group', class: 'settings-group', hidden: !canLlm }, [
     h('h3', { class: 'field-title' }, 'AI（可选）'),
     h('p', { class: 'field-hint' }, LLM_KEY_HINT),
@@ -219,6 +243,10 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     llmPresetsEl,
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, 'Base URL'), llmBaseInput]),
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '模型'), llmModelInput]),
+    h('p', { 'data-ui': 'llm-model-hint', class: 'field-hint' }, LLM_MODEL_HINT),
+    h('div', { class: 'llm-models' }, [llmModelsBtn]),
+    llmModelsStatusEl,
+    llmModelsListEl,
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, 'API Key'), llmKeyInput]),
     h('div', { class: 'llm-actions' }, [llmSaveBtn, llmTestBtn, llmClearBtn]),
   ]);
@@ -349,6 +377,43 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     }
   }
 
+  async function onFetchModels(): Promise<void> {
+    if (destroyed || modelsBusy || !llmDeps || typeof llmDeps.listModels !== 'function') return;
+    modelsBusy = true;
+    llmModelsListEl.replaceChildren();
+    llmModelsStatusEl.textContent = '正在问服务商要模型列表…';
+    setHidden(llmModelsStatusEl, false);
+    render(ctrl.snapshot());
+    try {
+      const res = await llmDeps.listModels(inputLlmConfig());
+      if (destroyed) return;
+      if (!res || res.ok !== true) {
+        llmModelsStatusEl.textContent =
+          res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : '没能取到模型列表。';
+        return;
+      }
+      if (res.models.length === 0) {
+        llmModelsStatusEl.textContent = '服务商没有返回任何模型。';
+        return;
+      }
+      llmModelsStatusEl.textContent = `这个账号可用 ${res.models.length} 个模型，点一个填入：`;
+      for (const id of res.models) {
+        const b = h('button', { 'data-llm-model-option': id, class: 'llm-model-option', type: 'button' }, id) as HTMLButtonElement;
+        b.addEventListener('click', () => {
+          // 只填输入框，不落盘：与"预设"同口径（要不要用还得玩家自己点保存）
+          llmModelInput.value = id;
+          render(ctrl.snapshot());
+        });
+        llmModelsListEl.appendChild(b);
+      }
+    } catch (e) {
+      if (!destroyed) llmModelsStatusEl.textContent = `没能取到模型列表：${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      modelsBusy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
   function onClearLlm(): void {
     if (destroyed || llmBusy || !llmDeps || typeof llmDeps.clear !== 'function') return;
     try {
@@ -385,6 +450,9 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     saveParamsBtn.disabled = busy || typeof deps.setParams !== 'function';
     replayBtn.disabled = busy || typeof deps.replayPrologue !== 'function';
     setHidden(backBtn, typeof deps.onNav !== 'function');
+    // 「拉取模型列表」只在宿主提供该口时显示；在途时禁用（防连点）
+    setHidden(llmModelsBtn, typeof llmDeps?.listModels !== 'function');
+    llmModelsBtn.disabled = modelsBusy;
 
     // AI 分组：可写口在场的按钮才显示；「测试连接」在途时整组按钮禁用（防连点）。
     llmSaveBtn.disabled = llmBusy;
@@ -408,6 +476,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   saveParamsBtn.addEventListener('click', () => void write(() => deps.setParams?.(readParams()), '参数已保存。'));
   replayBtn.addEventListener('click', () => void write(() => deps.replayPrologue?.(), '再看一次序章吧。'));
   llmSaveBtn.addEventListener('click', onSaveLlm);
+  llmModelsBtn.addEventListener('click', () => void onFetchModels());
   llmTestBtn.addEventListener('click', () => void onTestLlm());
   llmClearBtn.addEventListener('click', onClearLlm);
 

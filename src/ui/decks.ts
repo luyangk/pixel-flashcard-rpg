@@ -25,7 +25,7 @@ import { localDayString } from '@core/reviewLedger';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import type { LibraryResult } from '../app/library';
 import type { ExportAndMarkResult, ImportAndSaveResult } from '../app/transfer';
-import { h, setHidden } from './dom';
+import { h, setHidden, type DomChild } from './dom';
 import { showToast } from './toast';
 
 /** 每页条数（Review Focus #5 的数字；测试按它设断言）。 */
@@ -49,6 +49,12 @@ export interface DecksDeps {
   }) => Promise<LibraryResult<Card>>;
   /** 建领域写口（宿主接 app/library.addDeck）。缺省则新建领域表单不显示。 */
   readonly addDeck?: (input: { name: string; id: string }) => Promise<LibraryResult<Deck>>;
+  /** 重命名领域（宿主接 app/library.renameDeck）。缺省则不显示改名入口。 */
+  readonly renameDeck?: (input: { deckId: string; name: string }) => Promise<LibraryResult<Deck>>;
+  /** 删除领域**及其全部卡**（宿主接 app/library.removeDeck）。缺省则不显示删除入口。 */
+  readonly removeDeck?: (input: { deckId: string }) => Promise<LibraryResult<{ cards: number }>>;
+  /** 删除单张卡（宿主接 app/library.removeCard）。缺省则不显示卡片删除入口。 */
+  readonly removeCard?: (input: { cardId: string }) => Promise<LibraryResult<{ id: string }>>;
   /** 导出编排（宿主接 transfer.exportAndMark）。缺省则导出按钮不显示。 */
   readonly exportBackup?: () => Promise<ExportAndMarkResult>;
   /** 导入编排（宿主接 transfer.importBackupAndSave）。缺省则导入按钮不显示。 */
@@ -116,6 +122,12 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   const canAuthor = typeof deps.llmCards === 'function' && canAdd;
 
   let visible = pageSize;
+  /** 正在改名的领域 id（null = 没有行处于编辑态）。 */
+  let renamingDeckId: string | null = null;
+  /** 已按下"删除"、等待二次确认的领域 id（不可逆操作，必须两步）。 */
+  let confirmingDeckId: string | null = null;
+  /** 已按下"删除"、等待二次确认的卡片 id。 */
+  let confirmingCardId: string | null = null;
   let busy = false;
   let destroyed = false;
   let toastOff: (() => void) | null = null;
@@ -137,6 +149,13 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
   const countEl = h('span', { 'data-ui': 'card-count', class: 'card-count' });
   const headerEl = h('header', { class: 'decks-header' }, [backBtn, h('h2', { class: 'screen-title' }, '卡组'), countEl]);
+
+  const decksListEl = h('ul', { 'data-ui': 'deck-manage', class: 'deck-manage' });
+  const decksManageEl = h('section', { 'data-ui': 'deck-manage-section', class: 'settings-group' }, [
+    h('h3', { class: 'field-title' }, '领域管理'),
+    h('p', { class: 'field-hint' }, '改名随时可以；删除领域会**连同它的所有卡一起删**（含复习进度），不可恢复。'),
+    decksListEl,
+  ]);
 
   const listEl = h('ul', { 'data-ui': 'card-list', class: 'card-list' });
   const emptyEl = h('p', { 'data-ui': 'card-empty', class: 'card-empty' }, '卡库还是空的——手写第一张，或者导入一份备份。');
@@ -216,6 +235,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
 
   const screen = h('div', { 'data-ui': 'decks-screen', class: 'decks-screen' }, [
     headerEl,
+    decksManageEl,
     listEl,
     emptyEl,
     loadMoreBtn,
@@ -229,11 +249,94 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   /* ------------------------------------------------------------ 渲染 */
   function cardRow(card: Card, decks: readonly Deck[]): HTMLElement {
     const deck = decks.find((d) => d.id === card.deckId);
-    return h('li', { 'data-card-id': card.id, class: 'card-row' }, [
+    const kids: DomChild[] = [
       h('span', { class: 'card-front' }, card.front),
       h('span', { class: 'card-back' }, card.back),
       h('span', { 'data-ui': 'card-deck', class: 'card-deck' }, deck?.name ?? card.deckId),
-    ]);
+    ];
+    if (typeof deps.removeCard === 'function') {
+      const del = h(
+        'button',
+        { 'data-card-delete': card.id, class: 'card-delete', type: 'button' },
+        confirmingCardId === card.id ? '确认删除' : '删除',
+      ) as HTMLButtonElement;
+      del.addEventListener('click', () => void onDeleteCard(card.id));
+      kids.push(del);
+    }
+    return h('li', { 'data-card-id': card.id, class: 'card-row' }, kids);
+  }
+
+  /** 领域管理行：名字（或改名输入框）+ 改名/删除（删除需两步）。 */
+  function deckManageRow(deck: Deck, cardCount: number): HTMLElement {
+    const kids: DomChild[] = [];
+    if (renamingDeckId === deck.id) {
+      const input = h('input', {
+        'data-deck-rename-input': deck.id,
+        class: 'deck-rename-input',
+        type: 'text',
+        maxlength: '30',
+      }) as HTMLInputElement;
+      input.value = deck.name;
+      const ok = h(
+        'button',
+        { 'data-deck-rename-confirm': deck.id, class: 'deck-rename-confirm', type: 'button' },
+        '保存',
+      ) as HTMLButtonElement;
+      ok.addEventListener('click', () => void onRenameConfirm(deck.id, input.value));
+      const cancel = h(
+        'button',
+        { 'data-deck-rename-cancel': deck.id, class: 'deck-rename-cancel', type: 'button' },
+        '取消',
+      ) as HTMLButtonElement;
+      cancel.addEventListener('click', () => {
+        renamingDeckId = null;
+        render(ctrl.snapshot());
+      });
+      kids.push(input, ok, cancel);
+    } else {
+      kids.push(
+        h('span', { 'data-deck-name': deck.id, class: 'deck-name' }, `${deck.name}（${cardCount} 张）`),
+      );
+      if (typeof deps.renameDeck === 'function') {
+        const rename = h(
+          'button',
+          { 'data-deck-rename': deck.id, class: 'deck-rename', type: 'button' },
+          '改名',
+        ) as HTMLButtonElement;
+        rename.addEventListener('click', () => {
+          renamingDeckId = deck.id;
+          confirmingDeckId = null;
+          render(ctrl.snapshot());
+        });
+        kids.push(rename);
+      }
+      if (typeof deps.removeDeck === 'function') {
+        const del = h(
+          'button',
+          { 'data-deck-delete': deck.id, class: 'deck-delete', type: 'button' },
+          confirmingDeckId === deck.id ? `确认删除（连 ${cardCount} 张卡）` : '删除',
+        ) as HTMLButtonElement;
+        del.addEventListener('click', () => void onDeleteDeck(deck.id));
+        kids.push(del);
+      }
+    }
+    return h('li', { 'data-deck-manage': deck.id, class: 'deck-manage-row' }, kids);
+  }
+
+  function renderDeckManage(decks: readonly Deck[], cards: readonly Card[]): void {
+    if (typeof deps.renameDeck !== 'function' && typeof deps.removeDeck !== 'function') return;
+    const counts = new Map<string, number>();
+    for (const c of cards) counts.set(c.deckId, (counts.get(c.deckId) ?? 0) + 1);
+    const fingerprint = decks.map((d) => `${d.id}:${d.name}:${counts.get(d.id) ?? 0}`).join('|');
+    const state = `${renamingDeckId ?? ''}|${confirmingDeckId ?? ''}|${fingerprint}`;
+    if (decksListEl.getAttribute('data-state') === state) return;
+    decksListEl.setAttribute('data-state', state);
+    decksListEl.replaceChildren();
+    if (decks.length === 0) {
+      decksListEl.appendChild(h('li', { class: 'field-hint' }, '还没有领域。下面新建一个吧。'));
+      return;
+    }
+    for (const d of decks) decksListEl.appendChild(deckManageRow(d, counts.get(d.id) ?? 0));
   }
 
   function renderList(cards: readonly Card[], decks: readonly Deck[]): void {
@@ -242,7 +345,9 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     // 另一份备份"（换汤不换药：条数/领域都不变）会让屏上继续显示旧卡 —— 把权威存档显示错
     // 比显示得慢更糟。front/back 都进指纹，卡面文案改了也会刷新。
     const content = cards.map((c) => `${c.id}\u0001${c.front}\u0001${c.back}\u0001${c.deckId}`).join('\u0002');
-    const key = `${cards.length}|${shown}|${decks.map((d) => d.id).join(',')}|${content}`;
+    // 指纹必须带上"删除确认态"（Plan 5 追加）：它是这一屏的内部状态，不进指纹的话
+    // 点一下"删除"按钮文案不会变成"确认删除"（DM#5 实测抓到的就是这条）
+    const key = `${cards.length}|${shown}|${decks.map((d) => d.id).join(',')}|${confirmingCardId ?? ''}|${content}`;
     if (key !== listKey) {
       listKey = key;
       listEl.replaceChildren();
@@ -280,6 +385,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     const decks = Array.isArray(snap.save?.decks) ? snap.save.decks : [];
     const cards = Array.isArray(snap.save?.cards) ? snap.save.cards : [];
     renderList(cards, decks);
+    renderDeckManage(decks, cards);
     renderDeckOptions(decks, cards);
     addBtn.disabled = busy || decks.length === 0;
     createDeckBtn.disabled = busy;
@@ -351,6 +457,82 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
       }
     } catch (e) {
       toast(`新建领域失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      busy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  async function onRenameConfirm(deckId: string, raw: string): Promise<void> {
+    if (destroyed || busy || !deps.renameDeck) return;
+    busy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.renameDeck({ deckId, name: raw });
+      if (res.ok) {
+        renamingDeckId = null;
+        toast(`领域已改名为「${res.value.name}」。`);
+      } else {
+        toast(res.reason);
+      }
+    } catch (e) {
+      toast(`改名失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      busy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  /**
+   * 删除领域：**两次点击**（第一次只是把按钮变成确认态）。
+   * 不可逆操作不用 window.confirm——它会挡住自动化测试，也更难做可访问的文案。
+   */
+  async function onDeleteDeck(deckId: string): Promise<void> {
+    if (destroyed || busy || !deps.removeDeck) return;
+    if (confirmingDeckId !== deckId) {
+      confirmingDeckId = deckId;
+      renamingDeckId = null;
+      render(ctrl.snapshot());
+      return;
+    }
+    busy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.removeDeck({ deckId });
+      if (res.ok) {
+        confirmingDeckId = null;
+        toast(`领域已删除（连同 ${res.value.cards} 张卡）。`);
+      } else {
+        toast(res.reason);
+      }
+    } catch (e) {
+      toast(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      busy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  /** 删除单张卡：同样是两步（第一次变确认态）。 */
+  async function onDeleteCard(cardId: string): Promise<void> {
+    if (destroyed || busy || !deps.removeCard) return;
+    if (confirmingCardId !== cardId) {
+      confirmingCardId = cardId;
+      render(ctrl.snapshot());
+      return;
+    }
+    busy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.removeCard({ cardId });
+      if (res.ok) {
+        confirmingCardId = null;
+        toast('这张卡已删除。');
+      } else {
+        toast(res.reason);
+      }
+    } catch (e) {
+      toast(`删除失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       busy = false;
       if (!destroyed) render(ctrl.snapshot());

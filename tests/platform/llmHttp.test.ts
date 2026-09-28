@@ -10,7 +10,14 @@
  * - LH#5 超时会真的中止（假 fetch 等 signal.abort）。
  */
 import { describe, expect, it } from 'vitest';
-import { chat, chatEndpoint, DEFAULT_TIMEOUT_MS } from '../../src/platform/llmHttp';
+import {
+  chat,
+  chatEndpoint,
+  DEFAULT_TIMEOUT_MS,
+  listModels,
+  MODELS_MAX,
+  modelsEndpoint,
+} from '../../src/platform/llmHttp';
 import type { ChatMessage } from '../../src/platform/llmTypes';
 
 const KEY = 'sk-super-secret-value';
@@ -147,16 +154,46 @@ describe('chat —— 五种失败与安全', () => {
     if (!r.ok) expect(r.reason).toContain('连不上这个地址');
   });
 
-  it('LH#4 **Key 绝不出现在错误文案里**（服务端回显请求头也带不出来）', async () => {
-    // 故意让响应体里回显 Key：只为抓"把 response.text() 拼进 reason"的实现
-    const echo = fakeFetch({ kind: 'text', status: 400, body: `{"error":"bad key ${KEY}"}` });
+  it('LH#4 错误文案**带服务商原话但抹掉 Key**：400 要说清多半是模型名/参数问题', async () => {
+    // 响应体里同时含"有用的诊断"与"回显的 Key"——两者必须一留一抹
+    const echo = fakeFetch({
+      kind: 'text',
+      status: 400,
+      body: `{"error":{"message":"Model Not Exist: deepseek-chat (key ${KEY})"}}`,
+    });
     const res = await chat({ config: CONFIG, messages: MESSAGES, fetchImpl: echo.impl });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.reason).not.toContain(KEY);
-      expect(res.reason).not.toContain('sk-super');
       expect(res.reason).toContain('400');
+      expect(res.reason).toContain('模型名'); // 可操作的方向
+      expect(res.reason).toContain('Model Not Exist'); // 服务商原话（用户自查的唯一线索）
+      expect(res.reason).not.toContain(KEY); // 但 Key 必须被抹掉
+      expect(res.reason).not.toContain('sk-super');
+      expect(res.reason).toContain('***'); // 抹除的痕迹（说明走的是脱敏路径）
     }
+  });
+
+  it('LH#4b 详情脱敏的边界：`sk-` 形状一律抹除、压成单行、超长截断', async () => {
+    const long = 'x'.repeat(400);
+    const weird = fakeFetch({
+      kind: 'text',
+      status: 500,
+      body: `{"error":{"message":"upstream sk-OTHERKEY123456 failed\n${long}"}}`,
+    });
+    const res = await chat({ config: CONFIG, messages: MESSAGES, fetchImpl: weird.impl });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).not.toContain('sk-OTHERKEY123456');
+      expect(res.reason).not.toContain('\n'); // 单行
+      expect(res.reason.length).toBeLessThan(400); // 截断
+    }
+  });
+
+  it('LH#4c 读不出详情（非 JSON 且无 message）时仍给人话，不抛', async () => {
+    const broken = fakeFetch({ kind: 'text', status: 400, body: 'not json at all' });
+    const res = await chat({ config: CONFIG, messages: MESSAGES, fetchImpl: broken.impl });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('模型名'); // 状态码映射仍然生效
   });
 
   it('LH#5 超时会真的中止请求（假 fetch 一直挂着，只有 abort 才能结束它）', async () => {
@@ -185,5 +222,55 @@ describe('chat —— 五种失败与安全', () => {
     const nontype = fakeFetch({ kind: 'throw', error: new Error('boom') });
     const res = await chat({ config: CONFIG, messages: MESSAGES, fetchImpl: nontype.impl });
     if (!res.ok) expect(res.reason).toContain('boom');
+  });
+});
+
+describe('listModels —— 问服务商要模型名（用户实测驱动的功能）', () => {
+  it('LM#1 正常：GET {base}/models + Bearer 头；去重排序并封顶', async () => {
+    const f = fakeFetch({ kind: 'json', body: { data: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-flash' }, { id: 'deepseek-flash' }, { id: '  ' }, { nope: 1 }] } });
+    const res = await listModels({ config: CONFIG, fetchImpl: f.impl });
+    expect(res).toEqual({ ok: true, models: ['deepseek-flash', 'deepseek-v4-pro'] });
+    expect(f.calls[0].url).toBe('https://api.deepseek.com/models');
+    const headers = f.calls[0].init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('LM#2 未填地址/Key ⇒ 不发请求；401/429/网络各给人话且不含 Key', async () => {
+    const f = fakeFetch({ kind: 'json', body: {} });
+    expect((await listModels({ config: { ...CONFIG, baseUrl: '' }, fetchImpl: f.impl })).ok).toBe(false);
+    expect((await listModels({ config: { ...CONFIG, apiKey: ' ' }, fetchImpl: f.impl })).ok).toBe(false);
+    expect(f.calls).toHaveLength(0);
+
+    const unauthorized = fakeFetch({ kind: 'text', status: 401, body: `{"error":{"message":"bad key ${KEY}"}}` });
+    const r = await listModels({ config: CONFIG, fetchImpl: unauthorized.impl });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('Key 不对');
+      expect(r.reason).not.toContain(KEY); // 脱敏
+    }
+  });
+
+  it('LM#3 形状不符（没有 data 数组 / 空列表 / 非 JSON）各给明确原因', async () => {
+    const shape = fakeFetch({ kind: 'json', body: { models: [] } });
+    expect(await listModels({ config: CONFIG, fetchImpl: shape.impl })).toEqual({
+      ok: false,
+      reason: '这个服务商没有按 OpenAI 兼容格式返回模型列表。',
+    });
+    const empty = fakeFetch({ kind: 'json', body: { data: [] } });
+    expect((await listModels({ config: CONFIG, fetchImpl: empty.impl })).ok).toBe(false);
+    const notJson = fakeFetch({ kind: 'text', body: 'nope' });
+    expect((await listModels({ config: CONFIG, fetchImpl: notJson.impl })).ok).toBe(false);
+  });
+
+  it('LM#4 modelsEndpoint：容忍结尾斜杠与已带 /models；封顶 MODELS_MAX', async () => {
+    expect(modelsEndpoint('https://api.deepseek.com/')).toBe('https://api.deepseek.com/models');
+    expect(modelsEndpoint('https://x.example/v1')).toBe('https://x.example/v1/models');
+    expect(modelsEndpoint('https://x.example/v1/models')).toBe('https://x.example/v1/models');
+    expect(modelsEndpoint('')).toBe('');
+
+    const many = Array.from({ length: MODELS_MAX + 20 }, (_, i) => ({ id: `m${String(i).padStart(3, '0')}` }));
+    const f = fakeFetch({ kind: 'json', body: { data: many } });
+    const res = await listModels({ config: CONFIG, fetchImpl: f.impl });
+    if (res.ok) expect(res.models).toHaveLength(MODELS_MAX);
   });
 });

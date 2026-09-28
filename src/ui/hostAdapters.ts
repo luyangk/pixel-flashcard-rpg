@@ -18,8 +18,8 @@ import type { GameStorage } from '@platform/storage';
 // 【平台 LLM 模块的唯一 import 点】load/save/clear/presets/maskKey 与唯一的网络出口 chat
 // 都在这里接线；UI 层只拿到已装配好的窄函数（fetch 与 localStorage 绝不出 platform）。
 import { clearLlmConfig, LLM_PRESETS, loadLlmConfig, saveLlmConfig } from '../platform/llmConfig';
-import { chat } from '../platform/llmHttp';
-import { addCard, addDeck } from '../app/library';
+import { chat, listModels } from '../platform/llmHttp';
+import { addCard, addDeck, removeCard, removeDeck, renameDeck } from '../app/library';
 import { bossFightParams, setBossName } from '../app/bossFlow';
 import { setEggOnDeck } from '../app/codexFlow';
 import { suggestBossNames, suggestCards, suggestEgg, type ChatFn } from '../app/llmFlow';
@@ -171,6 +171,9 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     addCard: (input) =>
       addCard(coord, { ...input, nowMs: now(), sm2Params: coord.snapshot().settings.sm2Params }),
     addDeck: (input) => addDeck(coord, input),
+    renameDeck: (input) => renameDeck(coord, input),
+    removeDeck: (input) => removeDeck(coord, input),
+    removeCard: (input) => removeCard(coord, input),
     setBossName: (deckId, raw) => setBossName(coord, deckId, raw),
     setTier: (tier) => setBossThresholdTier(coord, tier),
     setParams: (params) => setSm2Params(coord, params),
@@ -230,6 +233,8 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         // 「测试连接」= 一次最小请求：玩家点它就是想确认"地址 + Key + 模型"三者能打通，
         // 因此只发一条最短的 user 消息（不做别的职能的提示词——那会把测试变成一次内容生成）。
         test: (cfg) => chat({ config: cfg, messages: [{ role: 'user', content: 'ping' }] }),
+        // 「拉取模型列表」：与 chat 共用同一个 fetch 注入位（测试同一条路径取证）
+        listModels: (cfg) => listModels({ config: cfg, fetchImpl: deps.llmFetchImpl }),
         presets: LLM_PRESETS,
       } satisfies NonNullable<HostAdapters['llm']>),
     // 三项职能共用一个"每次调用现读配置"的 chat：玩家刚在设置页改完 Key，下一句就得用新的。

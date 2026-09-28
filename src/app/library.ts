@@ -174,3 +174,95 @@ export async function addDeck(coord: Coordinator, input: AddDeckInput): Promise<
   });
   return { ok: true, value: deck };
 }
+
+/* --------------------------------------------------------------------------
+ * Plan 5 追加：领域与卡片的**改名 / 删除**（用户实测反馈："新建领域后不知道如何删除或修改"）
+ * -------------------------------------------------------------------------- */
+
+/** 领域名上限（与称号同口径的短名称，太长在屏上会折行） */
+export const DECK_NAME_MAX = 30;
+
+/** 按码点计长与截断（与 core/llmParse 同一口径；禁止劈开代理对）。 */
+function points(text: string): string[] {
+  return [...text];
+}
+
+/**
+ * 重命名领域。
+ *
+ * 拒绝面（都不触存储）：领域不存在 / 名字空白 / 名字超过 30 字 / 与**其它**领域重名。
+ * 允许改成原名（同值不重写，写放大纪律）——玩家点两次不该推开一次落盘窗。
+ */
+export async function renameDeck(
+  coord: Coordinator,
+  input: { readonly deckId: string; readonly name: string },
+): Promise<LibraryResult<Deck>> {
+  const deckId = input?.deckId;
+  if (isBlank(deckId)) return { ok: false, reason: '重命名失败：没有指定领域。' };
+  const raw = typeof input?.name === 'string' ? input.name.trim() : '';
+  if (raw.length === 0) return { ok: false, reason: '领域要有名字——比如「唐诗」「英语词根」。' };
+  if (points(raw).length > DECK_NAME_MAX) {
+    return { ok: false, reason: `领域名最多 ${DECK_NAME_MAX} 个字，短一点更清楚。` };
+  }
+  if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
+
+  const save = coord.snapshot();
+  const deck = findDeck(save, deckId);
+  if (deck === null) return { ok: false, reason: '这个领域已经不在了——刷新一下卡组页再试。' };
+  if (deck.name === raw) return { ok: true, value: deck }; // 同值不重写
+  const dup = (Array.isArray(save.decks) ? save.decks : []).some((d) => d && d.id !== deckId && d.name === raw);
+  if (dup) return { ok: false, reason: '已经有同名领域了——换个名字吧。' };
+
+  await coord.mutate((s) => {
+    const target = findDeck(s, deckId);
+    if (target) target.name = raw;
+  });
+  return { ok: true, value: { ...deck, name: raw } };
+}
+
+/**
+ * 删除领域。**连同该领域的所有卡一起删**（一次 mutate 内完成）。
+ *
+ * 为什么必须一起删：`validateSave` 要求 `cards[].deckId` 引用闭合，只删领域会让整包自检失败
+ * （落盘静默失败，玩家会以为删掉了）。返回被删掉的卡数，供 UI 如实告知"这一下删掉了多少"。
+ * 卡片连带的 SRS 进度随之消失——所以 UI 侧必须两步确认，这是不可逆操作。
+ */
+export async function removeDeck(
+  coord: Coordinator,
+  input: { readonly deckId: string },
+): Promise<LibraryResult<{ readonly cards: number }>> {
+  const deckId = input?.deckId;
+  if (isBlank(deckId)) return { ok: false, reason: '删除失败：没有指定领域。' };
+  if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
+
+  const save = coord.snapshot();
+  if (findDeck(save, deckId) === null) {
+    return { ok: false, reason: '这个领域已经不在了——刷新一下卡组页再试。' };
+  }
+  const doomed = (Array.isArray(save.cards) ? save.cards : []).filter((c) => c && c.deckId === deckId).length;
+
+  await coord.mutate((s) => {
+    s.decks = (Array.isArray(s.decks) ? s.decks : []).filter((d) => d && d.id !== deckId);
+    s.cards = (Array.isArray(s.cards) ? s.cards : []).filter((c) => c && c.deckId !== deckId);
+  });
+  return { ok: true, value: { cards: doomed } };
+}
+
+/** 删除单张卡（学习过程中发现某张卡写得不好时用）。 */
+export async function removeCard(
+  coord: Coordinator,
+  input: { readonly cardId: string },
+): Promise<LibraryResult<{ readonly id: string }>> {
+  const cardId = input?.cardId;
+  if (isBlank(cardId)) return { ok: false, reason: '删除失败：没有指定卡片。' };
+  if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
+
+  const save = coord.snapshot();
+  const exists = (Array.isArray(save.cards) ? save.cards : []).some((c) => c && c.id === cardId);
+  if (!exists) return { ok: false, reason: '这张卡已经不在了——刷新一下卡组页再试。' };
+
+  await coord.mutate((s) => {
+    s.cards = (Array.isArray(s.cards) ? s.cards : []).filter((c) => c && c.id !== cardId);
+  });
+  return { ok: true, value: { id: cardId } };
+}

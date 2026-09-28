@@ -80,6 +80,16 @@ describe('loadLlmConfig —— 坏值一律回落', () => {
   });
 });
 
+describe('默认配置与预设 —— 必须与官方目录一致', () => {
+  it('LC#5 默认模型是 deepseek-flash（旧的 deepseek-chat 已停用，会导致 400——用户实测）', () => {
+    expect(DEFAULT_LLM_CONFIG.model).toBe('deepseek-flash');
+    const deepseek = LLM_PRESETS.find((p) => p.id === 'deepseek');
+    expect(deepseek?.config.model).toBe('deepseek-flash');
+    // 预设里不得再出现已停用的名字
+    for (const p of LLM_PRESETS) expect(p.config.model).not.toBe('deepseek-chat');
+  });
+});
+
 describe('saveLlmConfig / clearLlmConfig', () => {
   it('LC#2 写进 localStorage 的键固定、可读回；清除只清 Key 保留地址与模型', () => {
     const store = fakeStorage();

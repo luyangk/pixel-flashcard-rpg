@@ -534,6 +534,49 @@ h1 {
   color: var(--paper-dim);
 }
 
+.deck-manage {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.deck-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.deck-name {
+  flex: 1 1 auto;
+  font-size: 0.9rem;
+}
+
+.deck-rename,
+.deck-rename-confirm,
+.deck-rename-cancel,
+.deck-delete,
+.card-delete {
+  min-height: 2.1rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* 删除是不可逆操作：确认态用危险色，和普通按钮拉开距离 */
+.deck-delete:hover,
+.card-delete:hover {
+  border-color: var(--blood);
+  color: var(--blood);
+}
+
+.deck-rename-input {
+  flex: 1 1 8rem;
+  min-height: 2.1rem;
+}
+
 .card-list {
   list-style: none;
   margin: 0;
@@ -659,11 +702,24 @@ h1 {
 }
 
 .prologue-art {
-  width: 64px;
-  height: 64px;
-  transform: scale(3);
-  transform-origin: center;
-  margin-bottom: 1.2rem;
+  /*
+   * 3× 放大：**用显式 width/height，绝不用 transform: scale()**。
+   * transform 只影响绘制、不影响布局 ⇒ 64px 的盒子配 scale(3) 会视觉上盖住下面的旁白
+   * （用户实测的第一个 bug）。显式尺寸既占布局又保持 3 的整数倍（64→192），
+   * 配合全局 image-rendering: pixelated 仍是硬边像素。
+   */
+  width: 192px;
+  height: 192px;
+  flex: 0 0 auto;
+  margin-bottom: 1rem;
+}
+
+/* 矮屏（横屏/小窗）上按 2× 显示，避免插画把旁白挤出可视区 */
+@media (max-height: 560px) {
+  .prologue-art {
+    width: 128px;
+    height: 128px;
+  }
 }
 
 .prologue-text {

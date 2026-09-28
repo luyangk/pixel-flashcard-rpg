@@ -56,6 +56,12 @@ export interface HostAdapters {
     tags?: readonly string[];
   }) => Promise<LibraryResult<Card>>;
   readonly addDeck?: (input: { name: string; id: string }) => Promise<LibraryResult<Deck>>;
+  /** 领域改名（Plan 5 追加：用户实测反馈"新建领域后不知道如何删除或修改"）。 */
+  readonly renameDeck?: (input: { deckId: string; name: string }) => Promise<LibraryResult<Deck>>;
+  /** 删除领域**及其全部卡**（不可逆；UI 侧两步确认）。 */
+  readonly removeDeck?: (input: { deckId: string }) => Promise<LibraryResult<{ cards: number }>>;
+  /** 删除单张卡。 */
+  readonly removeCard?: (input: { cardId: string }) => Promise<LibraryResult<{ id: string }>>;
   readonly setBossName?: (deckId: string, raw: string) => Promise<BossNameResult>;
   readonly setTier?: (tier: 15 | 30 | 50) => Promise<SettingsWriteResult>;
   readonly setParams?: (params: Sm2Params) => Promise<SettingsWriteResult>;

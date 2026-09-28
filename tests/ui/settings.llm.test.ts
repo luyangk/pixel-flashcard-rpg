@@ -161,6 +161,64 @@ describe('mountSettings —— AI 分组：注入面', () => {
     expect((ui(root, 'llm-key') as HTMLInputElement).value).toBe('sk-new');
   });
 
+  it('SL#8 模型名提示在场（400 最常见成因是模型名不符，评审判/用户实测都指向这里）', () => {
+    const root = mountWith(makeFakeLlm());
+    const hint = ui(root, 'llm-model-hint').textContent ?? '';
+    expect(hint).toContain('deepseek-chat');
+    expect(hint).toContain('服务商那里开通的一致'); // 口径：以服务商目录为准，不是我们写死的
+    expect(hint).toContain('400');
+  });
+
+  it('SL#9「拉取模型列表」：结果渲染成可点 chips，点击只填输入框（不落盘）', async () => {
+    const fake = makeFakeLlm();
+    const root = makeRoot();
+    let asked: LlmConfig[] = [];
+    mountSettings(root, makeCtrl(makeSnap()), {
+      toastMs: 0,
+      llm: {
+        ...fake.deps,
+        listModels: (cfg) => {
+          asked = [...asked, { ...cfg }];
+          return Promise.resolve({ ok: true as const, models: ['deepseek-flash', 'deepseek-v4-pro'] });
+        },
+      },
+    });
+
+    click(ui(root, 'llm-models-fetch'));
+    expect(ui(root, 'llm-models-status').textContent).toContain('正在');
+    await flushMicrotasks();
+    expect(ui(root, 'llm-models-status').textContent).toContain('2 个模型');
+    expect(asked).toHaveLength(1);
+    expect(asked[0].baseUrl).toBe(BASE.baseUrl); // 用的是输入框里的配置
+
+    const chips = all(root, '[data-llm-model-option]');
+    expect(chips.map((c) => c.getAttribute('data-llm-model-option'))).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+    click(chips[1]);
+    expect((ui(root, 'llm-model') as HTMLInputElement).value).toBe('deepseek-v4-pro');
+    expect(fake.saved).toEqual([]); // 点 chip **不落盘**：要不要用还得玩家点保存
+  });
+
+  it('SL#9b 拉取失败 ⇒ 原因如实上屏（含服务商原话），不抛', async () => {
+    const fake = makeFakeLlm();
+    const root = makeRoot();
+    mountSettings(root, makeCtrl(makeSnap()), {
+      toastMs: 0,
+      llm: {
+        ...fake.deps,
+        listModels: () => Promise.resolve({ ok: false as const, reason: '请求被拒绝（401）——Key 不对。' }),
+      },
+    });
+    click(ui(root, 'llm-models-fetch'));
+    await flushMicrotasks();
+    expect(ui(root, 'llm-models-status').textContent).toContain('Key 不对');
+    expect(all(root, '[data-llm-model-option]')).toHaveLength(0);
+  });
+
+  it('SL#9c 未注入 listModels ⇒ 按钮隐藏（不显示点了没反应的入口）', () => {
+    const root = mountWith(makeFakeLlm());
+    expect(ui(root, 'llm-models-fetch').hidden).toBe(true);
+  });
+
   it('SL#4 预设只填地址与模型：不落盘、不碰已敲的 Key；「自定义」清空两者', () => {
     const fake = makeFakeLlm();
     const root = mountWith(fake);

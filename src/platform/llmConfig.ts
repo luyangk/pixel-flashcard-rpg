@@ -24,7 +24,11 @@ export const LLM_STORAGE_KEY = 'zx-xia.llm.v1';
 export const DEFAULT_LLM_CONFIG: LlmConfig = {
   baseUrl: 'https://api.deepseek.com',
   apiKey: '',
-  model: 'deepseek-chat',
+  // 【2026-09 实测修正】官方目录现在只有 `deepseek-flash`（= DeepSeek-V4.1-Flash）与
+  // `deepseek-v4-pro`；旧名 `deepseek-chat` 已不被接受（会得到 400）。
+  // 用户实测就是这个坑，因此这里必须跟官方目录对齐——并在设置页提供「拉取模型列表」，
+  // 免得下次改名又要靠猜。
+  model: 'deepseek-flash',
 };
 
 /**
@@ -32,7 +36,7 @@ export const DEFAULT_LLM_CONFIG: LlmConfig = {
  * 通义走 DashScope 的 OpenAI 兼容模式；自定义留给"OpenAI 兼容网关"这类场景。
  */
 export const LLM_PRESETS: ReadonlyArray<{ readonly id: string; readonly label: string; readonly config: LlmConfig }> = [
-  { id: 'deepseek', label: 'DeepSeek', config: { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat' } },
+  { id: 'deepseek', label: 'DeepSeek', config: { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-flash' } },
   {
     id: 'dashscope',
     label: '通义千问',
