@@ -17,7 +17,16 @@ import { GRADES } from '@core/sm2';
 import { createBattle, answer, type BattleState } from '@core/battle';
 import { deriveStats } from '@core/stats';
 import type { FightView } from '../../src/app/battleFlow';
-import { drawFrame, turnAction, turnRetaliated, FLASH_WINDOW_MS, type StageSprites } from '../../src/stage/renderer';
+import {
+  advanceFx,
+  drawFrame,
+  fxFromAnchors,
+  turnAction,
+  turnRetaliated,
+  FLASH_WINDOW_MS,
+  FX_UNPRIMED,
+  type StageSprites,
+} from '../../src/stage/renderer';
 
 function card(id: string): Card {
   const srs: SRSState = {
@@ -141,9 +150,57 @@ describe('T4 评审 Critical 回归 —— 事件溯源与脉冲式反馈', () =
     drawFrame(ctx, hit, viewOf(hit), SPRITES, 0);
     expect(texts).toHaveLength(2); // 玩家 + 敌人
     const [player, enemy] = texts;
-    expect(player.x).toBeLessThan(160); // 玩家条在中线左侧
-    expect(enemy.x).toBeGreaterThan(160); // 敌人条在中线右侧
+    // 判别力版本（二轮评审指出旧断言对"旧叠字实现"同样通过）：
+    // 玩家条 [8,148]、敌人条 [172,312]，label 中心必须各自落在自己条的区间内。
+    expect(player.x).toBeGreaterThanOrEqual(8);
+    expect(player.x).toBeLessThanOrEqual(148);
+    expect(enemy.x).toBeGreaterThanOrEqual(172);
+    expect(enemy.x).toBeLessThanOrEqual(312);
     expect(player.text).toContain('/');
     expect(enemy.text).toContain('/');
+  });
+});
+
+describe('T4 二轮 —— advanceFx 锚点状态机（首帧对齐 / 增量 / 重置）', () => {
+  it('AF#1 首帧对齐：在"日志非空"的 state 上挂载不为历史事件误闪（续战/重进场景）', () => {
+    const hit = afterTurn(GRADES.good); // 已有 [damage, retaliate]
+    const a1 = advanceFx(FX_UNPRIMED, hit.log, 1000);
+    expect(a1.lastLogLen).toBe(hit.log.length);
+    expect(a1.mobHitAt).toBeUndefined(); // ← 关键：历史伤害不打锚点
+    expect(a1.heroHitAt).toBeUndefined();
+    expect(fxFromAnchors(a1, 1000).mobHitElapsedMs).toBeUndefined();
+  });
+
+  it('AF#2 增量锚点：新追加 [damage, retaliate] 才开火，且 elapsed 从锚点起算', () => {
+    const hit = afterTurn(GRADES.good);
+    const base = advanceFx(FX_UNPRIMED, [], 0);
+    const after = advanceFx(base, hit.log, 500);
+    expect(after.mobHitAt).toBe(500);
+    expect(after.heroHitAt).toBe(500);
+    expect(fxFromAnchors(after, 520).mobHitElapsedMs).toBe(20);
+  });
+
+  it('AF#3 空增量保持锚点不变（同帧重复 frame 不刷新反馈）', () => {
+    const hit = afterTurn(GRADES.good);
+    const a = advanceFx(advanceFx(FX_UNPRIMED, [], 0), hit.log, 500);
+    const again = advanceFx(a, hit.log, 700);
+    expect(again).toBe(a); // 引用相等：无新日志即无状态变化
+    expect(fxFromAnchors(again, 700).mobHitElapsedMs).toBe(200); // 已过期 ⇒ 不闪
+  });
+
+  it('AF#4 miss 回合只开 hero 锚点（怪物不闪的机器保证）', () => {
+    const miss = afterTurn(GRADES.again);
+    const a = advanceFx(advanceFx(FX_UNPRIMED, [], 0), miss.log, 100);
+    expect(a.mobHitAt).toBeUndefined();
+    expect(a.heroHitAt).toBe(100);
+  });
+
+  it('AF#5 日志重置（新一局）时只重新对齐、不误闪', () => {
+    const hit = afterTurn(GRADES.good);
+    const a = advanceFx(advanceFx(FX_UNPRIMED, [], 0), hit.log, 500);
+    const reset = advanceFx(a, [], 900); // 新局开局：日志清空
+    expect(reset.lastLogLen).toBe(0);
+    const next = advanceFx(reset, hit.log, 1000);
+    expect(next.mobHitAt).toBe(1000); // 清空后再出现的才是新事件
   });
 });

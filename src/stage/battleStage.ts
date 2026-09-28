@@ -12,7 +12,7 @@
 import type { BattleState } from '@core/battle';
 import type { FightView } from '../app/battleFlow';
 import { LOGICAL_H, LOGICAL_W, fitScale, letterbox } from './layout';
-import { drawFrame, type StageSprites } from './renderer';
+import { advanceFx, drawFrame, fxFromAnchors, FX_UNPRIMED, type FxAnchors, type StageSprites } from './renderer';
 
 /** 挂载依赖：素材必填，其余可选（doc 仅供非浏览器环境注入）。 */
 export interface BattleStageDeps {
@@ -103,27 +103,16 @@ export function mountBattleStage(host: HTMLElement, deps: BattleStageDeps): Batt
   applyScale(initial.w, initial.h);
 
   // —— 受击脉冲的锚点状态（本模块唯一的可变状态，全在注入时间轴 tMs 上记时）——
-  // 首版把"日志末项"当持续状态，导致反馈永挂/永不出现（评审 Critical）。正确做法：
-  // 观测日志**增量**，在事件真实追加的那一刻记下 tMs 锚点，之后由 elapsed 自行过期。
-  let lastLogLen = 0;
-  let mobHitAt: number | undefined;
-  let heroHitAt: number | undefined;
+  // 首版把"日志末项"当持续状态，导致反馈永挂/永不出现（评审 Critical）。现改为：
+  // advanceFx 只对**新增日志**打锚点；FX_UNPRIMED 保证首帧只对齐、不为历史事件误闪
+  // （在日志非空的 state 上挂载画面——续战/重进——不会凭空闪一次）。
+  let anchors: FxAnchors = FX_UNPRIMED;
 
   return {
     frame(st: BattleState, view: FightView, tMs: number): void {
       if (destroyed || !ctx) return;
-      const log = Array.isArray(st?.log) ? st.log : [];
-      if (log.length !== lastLogLen) {
-        // 只看新增切片：本回合打出的动作与被反击与否各有其锚点。
-        const appended = log.slice(lastLogLen);
-        if (appended.some((e) => e?.kind === 'damage')) mobHitAt = tMs;
-        if (appended.some((e) => e?.kind === 'retaliate')) heroHitAt = tMs;
-        lastLogLen = log.length;
-      }
-      drawFrame(ctx, st, view, deps.sprites, tMs, {
-        mobHitElapsedMs: mobHitAt === undefined ? undefined : tMs - mobHitAt,
-        heroHitElapsedMs: heroHitAt === undefined ? undefined : tMs - heroHitAt,
-      });
+      anchors = advanceFx(anchors, Array.isArray(st?.log) ? st.log : [], tMs);
+      drawFrame(ctx, st, view, deps.sprites, tMs, fxFromAnchors(anchors, tMs));
     },
     onResize(viewW: number, viewH: number): void {
       if (destroyed) return;

@@ -11,11 +11,11 @@
  *
  * 绘制顺序：clear → 背景 → 侠客 → 怪物 → 受击闪白 → 两条血条 + HP 数字。
  * 闪白 = 同帧用 globalCompositeOperation 再叠一次素材（'lighter' 加亮到近白），
- * 亮两帧、灭两帧（FLASH_FRAME_MS 步进），所以"连续两帧闪白"是可数出来的。
+ * 亮两帧、灭两帧（FLASH_FRAME_MS 步进），窗口之外一律不亮。
  * miss 回合怪物**完全不动**：不闪、不抖（D28 的 miss 语义在画面上也得看得见）。
  */
 
-import type { BattleState } from '@core/battle';
+import type { BattleEvent, BattleState } from '@core/battle';
 import { enemyHpForPool } from '@core/stats';
 import type { FightView } from '../app/battleFlow';
 import { LOGICAL_H, LOGICAL_W } from './layout';
@@ -209,6 +209,47 @@ export function turnRetaliated(st: BattleState): boolean {
     if (k === 'damage' || k === 'miss') return false; // 扫到本回合动作即停：本轮无反击
   }
   return false;
+}
+
+/**
+ * FX 锚点状态（纯数据，便于单测）：记录"上次观测到的日志长度"与两个事件的锚点时刻。
+ * `lastLogLen === null` 表示**尚未对齐**——首帧只做对齐、不为历史事件打锚点，
+ * 否则在日志非空的 state 上挂载画面（续战/重进）会让历史伤害误闪一次。
+ */
+export interface FxAnchors {
+  readonly lastLogLen: number | null;
+  readonly mobHitAt?: number;
+  readonly heroHitAt?: number;
+}
+
+/** 未对齐的初始锚点。 */
+export const FX_UNPRIMED: FxAnchors = { lastLogLen: null };
+
+/**
+ * 推进 FX 锚点：只对**新增日志**打时间锚点，并把锚点交给 FrameFx 换算 elapsed。
+ * 纯函数（不读钟、不改入参）——battleStage 每帧调用它，测试可直接喂日志序列。
+ */
+export function advanceFx(prev: FxAnchors, log: readonly BattleEvent[], tMs: number): FxAnchors {
+  const events = Array.isArray(log) ? log : [];
+  if (prev.lastLogLen === null || events.length < prev.lastLogLen) {
+    // 首帧对齐，或日志被重置（新一局）：只记录长度，不为既有历史闪。
+    return { lastLogLen: events.length, mobHitAt: prev.mobHitAt, heroHitAt: prev.heroHitAt };
+  }
+  if (events.length === prev.lastLogLen) return prev;
+  const appended = events.slice(prev.lastLogLen);
+  return {
+    lastLogLen: events.length,
+    mobHitAt: appended.some((e) => e?.kind === 'damage') ? tMs : prev.mobHitAt,
+    heroHitAt: appended.some((e) => e?.kind === 'retaliate') ? tMs : prev.heroHitAt,
+  };
+}
+
+/** 由锚点换算本帧的 FrameFx（过期由 pulsing 负责）。 */
+export function fxFromAnchors(a: FxAnchors, tMs: number): FrameFx {
+  return {
+    mobHitElapsedMs: a.mobHitAt === undefined ? undefined : tMs - a.mobHitAt,
+    heroHitElapsedMs: a.heroHitAt === undefined ? undefined : tMs - a.heroHitAt,
+  };
 }
 
 /** 帧内 FX 输入（由 battleStage 依"日志增量 + 注入时间轴"算好后传入；renderer 保持纯函数）。 */
