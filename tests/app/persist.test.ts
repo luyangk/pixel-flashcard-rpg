@@ -31,7 +31,7 @@ import { createMemoryStorage } from '@platform/memoryStore';
 import { startFight, answerCurrent, type FightView } from '../../src/app/battleFlow';
 import { levelFromExp, playerStatsFor, settleFight } from '../../src/app/growth';
 import type { FlushResult } from '../../src/app/persist';
-import { createCoordinator, DEFAULT_MAX_BATCH_MS, type Coordinator } from '../../src/app/persist';
+import { createCoordinator, DEFAULT_DEBOUNCE_MS, DEFAULT_MAX_BATCH_MS, type Coordinator } from '../../src/app/persist';
 
 // —— 仿真锚点：全部时间由测试显式注入，coordinator 不读时钟 ——
 const NOW = Date.UTC(2026, 9, 26, 4, 0, 0); // tz=+480 → 本地日键 2026-10-26
@@ -1139,5 +1139,162 @@ describe('I-1 伪造越账：log 里的池外 cardId 不落账', () => {
     });
     expect(r.cards[0].srs.reps).toBe(4); // 池内唯一张照常落账
     expect(r.exp).toBe(victoryExp(pool, 'encounter')); // 释放面被钳在池长
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C1（Fix Round 1）：落盘在途时到达的 mutate 不得被静默丢弃
+//
+// 评审 P6/P6b 实测（BASE f73d185）：live plays=42、store plays=1、flush()===true、
+// dirty()===false，空转 60s 无第二次写，销毁重建后 42 蒸发——用户数据静默丢失。
+// 根因是 performFlush 在 `await store.save` **之后**才无条件 `dirty=false`：在途
+// mutate 已把 dirty 置 true 的那一位被这次清零，armWindow 见 !dirty 随即撤窗，
+// 那批改动再无人写。本组用例把窗口钉在「快照已取 / 写未 resolve」之间复现该状态。
+// ---------------------------------------------------------------------------
+
+describe('C1 在途 mutate 的批次归属 —— 落盘批次在 await 前认领', () => {
+  /**
+   * 三段可控存储：hold() 让下一次 save 卡在 await 上（复现"落盘在途"窗口）、
+   * failNext() 让下一次 save 抛配额错、release() 放行挂起的那次写。
+   * pending()===true 即证明 performFlush 确实停在 store.save 里（而非尚未进入）。
+   */
+  function stagedStore(inner: GameStorage): {
+    store: GameStorage;
+    hold: () => void;
+    failNext: () => void;
+    pending: () => boolean;
+    saves: () => number;
+    release: () => Promise<void>;
+  } {
+    let gate: (() => void) | null = null;
+    let holdNext = false;
+    let failOnce = false;
+    let saveCount = 0;
+    const store: GameStorage = {
+      kind: inner.kind,
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save: async (f) => {
+        saveCount += 1;
+        if (holdNext) {
+          holdNext = false;
+          await new Promise<void>((res) => {
+            gate = res;
+          });
+        }
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('QuotaExceededError: 模拟配额满');
+        }
+        return inner.save(f);
+      },
+    };
+    return {
+      store,
+      hold: () => {
+        holdNext = true;
+      },
+      failNext: () => {
+        failOnce = true;
+      },
+      pending: () => gate !== null,
+      saves: () => saveCount,
+      release: async () => {
+        holdNext = false;
+        const g = gate;
+        gate = null;
+        g?.();
+        await drainMicrotasks();
+      },
+    };
+  }
+
+  it('C1a 显式 flush 在途 mutate：dirty 不被清零，随后 flush 把 plays 累加写进 store', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    const staged = stagedStore(raw);
+    const coord = await createCoordinator(staged.store, { now: clock.now });
+
+    await coord.mutate((s) => {
+      s.meta.plays = 1;
+    });
+    staged.hold();
+    const flushing = coord.flush(); // 快照已取（clone 同步完成），停在 store.save
+    await drainMicrotasks();
+    expect(staged.pending()).toBe(true); // 证明确实处在"落盘在途"窗口内
+
+    await coord.mutate((s) => {
+      s.meta.plays = 42; // 在途改动：不属于本次已取快照
+    });
+    expect(coord.snapshot().meta.plays).toBe(42);
+
+    await staged.release();
+    expect(await flushing).toBe(true);
+    expect((await raw.load())!.meta.plays).toBe(1); // 本次写只含第一批
+
+    // C1 的核心断言：在途那批必须仍被认作"未落盘"，否则静默丢数据
+    expect(coord.dirty()).toBe(true);
+
+    expect(await coord.flush()).toBe(true);
+    expect((await raw.load())!.meta.plays).toBe(42); // 两批都进了存储，无蒸发
+    expect(coord.snapshot().meta.plays).toBe(42);
+    expect(coord.dirty()).toBe(false);
+  });
+
+  it('C1b 定时器驱动的落盘在途 mutate：不显式 flush，仅靠重排窗口也能落盘', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    const staged = stagedStore(raw);
+    const coord = await createCoordinator(staged.store, { now: clock.now });
+
+    await coord.mutate((s) => {
+      s.meta.plays = 1;
+    });
+    staged.hold();
+    clock.tick(DEFAULT_DEBOUNCE_MS); // debounce 到期自动落盘，卡在 store.save
+    await drainMicrotasks();
+    expect(staged.pending()).toBe(true);
+
+    await coord.mutate((s) => {
+      s.meta.plays = 7; // 自动落盘在途中的新改动
+    });
+    await staged.release();
+    expect((await raw.load())!.meta.plays).toBe(1);
+    expect(coord.dirty()).toBe(true);
+
+    clock.tick(DEFAULT_DEBOUNCE_MS); // 无需显式 flush：重排的窗口自己到期
+    await drainMicrotasks();
+    expect(coord.dirty()).toBe(false);
+    expect((await raw.load())!.meta.plays).toBe(7);
+    expect(staged.saves()).toBe(2);
+  });
+
+  it('C1c 在途 mutate 且本次写失败：dirty 保持 true，退避窗把两批一起落盘', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    const staged = stagedStore(raw);
+    const coord = await createCoordinator(staged.store, { now: clock.now });
+
+    await coord.mutate((s) => {
+      s.meta.plays = 1;
+    });
+    staged.hold();
+    staged.failNext();
+    const flushing = coord.flush();
+    await drainMicrotasks();
+    expect(staged.pending()).toBe(true);
+
+    await coord.mutate((s) => {
+      s.meta.plays = 42;
+    });
+    await staged.release();
+    expect(await flushing).toBe(false); // 写失败面照常上抛
+    expect(coord.dirty()).toBe(true); // 失败不得吞掉在途那批
+    expect(await raw.load()).toBeNull(); // 存储原样（从未写成功）
+
+    clock.tick(600); // 失败退避窗（完整 debounce）到期后自愈
+    await drainMicrotasks();
+    expect(coord.dirty()).toBe(false);
+    expect((await raw.load())!.meta.plays).toBe(42);
   });
 });

@@ -187,9 +187,13 @@ export async function createCoordinator(
     save = seedSave(now());
   }
 
-  // 攒批硬上界锚点：本批脏数据"首次被排窗"的时刻。跨失败重试保持不动——
-  // maxBatch 的语义是"脏数据悬着的总时长上界"，配额失败的退避时间也计入
-  // （Q#4 教训）。仅在落盘成功清脏时作废（performFlush 尾部）。
+  // 攒批硬上界锚点：本批脏数据"首次被排窗"的时刻。maxBatch 的语义是"脏数据悬着的
+  // 总时长上界"（Q#4 教训）。锚点有两个处置点，都在 performFlush 一侧：
+  // - **成功**：批次在 `await store.save` **之前**就被认领，认领即置 null
+  //   （本批已提交，下一批重新定格；见 performFlush 内的认领段）；
+  // - **失败**：复位到当下，使重试窗按**完整 debounce** 退避，而不是被陈旧 maxBatch
+  //   界压成 0ms（否则"内容持续非法"时 0ms 定时器反复自触发空转）。退避这段时间
+  //   因此不计入下一次的悬脏上界。
   let batchStartedAt: number | null = null;
   let dirty = false;
   let lastSaved: number | null = null;
@@ -263,9 +267,10 @@ export async function createCoordinator(
       return;
     }
     // 攒批锚点：本批首次开窗定格，批内后续 mutate 不得后推（RF1#3 教训——
-    // debounce 顺延不能连带推走 maxBatch 上界）。跨失败重试保持：退避时间计入
-    // 悬脏总时长（Q#4）。递归防护不在锚点上做，而在 performFlush 的同步预检里
-    // （见该函数头部）——它保证"内容非法 ⇒ 永不触 store"，无论窗口何时到点。
+    // debounce 顺延不能连带推走 maxBatch 上界）。锚点不跨失败保持：失败时
+    // performFlush / flushDetailed 会把它复位到当下，用完整 debounce 退避重试
+    // （Q#4 的自愈节奏即由此而来）。递归防护不在锚点上做，而在 performFlush 的
+    // 同步预检里（见该函数头部）——它保证"内容非法 ⇒ 永不触 store"，无论窗口何时到点。
     if (batchStartedAt === null) batchStartedAt = now();
     scheduleWindow();
   }
@@ -295,25 +300,43 @@ export async function createCoordinator(
     // 且 copy 与内存权威对象零共享引用（SN#1 守护的正是这条边界）。
     const savedAt = now();
     copy.meta.savedAt = savedAt;
+    // —— 在途批次认领（C1，本函数的数据安全核心）——
+    // clone/validate 已通过，本次要写的内容此刻起与后续 mutate 无关，故在**首个
+    // await 之前**同步清脏、同步作废锚点，语义是"这批改动已被本次写认领"：此后
+    // 到达的 mutate 会重新标脏、重新定格锚点，属于下一批，必须由下一次写负责。
+    // 若把清脏留到 await 之后，在途 mutate 置上的 dirty 会被无条件抹掉，那批改动
+    // 再无人写（评审 P6 实测：live plays=42 / store plays=1 / flush()===true /
+    // dirty()===false，空转 60s 无第二次写，销毁重建后蒸发）。
+    // 附注：dirty() 只表示"内存里有尚未被任何一次写认领的改动"，**不是落盘凭据**
+    // （认领瞬间写还没落，写失败还会重新标脏）——装配层不得只凭 dirty()===false
+    // 断定"已持久"。
+    dirty = false;
+    batchStartedAt = null;
     try {
       await store.save(copy);
     } catch (e) {
-      // 配额满 / 存储故障：dirty 原样保留，错误经返回值上抛给 UI 层。
+      // 配额满 / 存储故障：本次认领作废——把批次重新标脏并复位锚点到当下
+      // （退避，避免 0ms 自旋），错误经返回值上抛给 UI 层。重排窗口由
+      // flushDetailed 尾部统一负责（Q#4 自愈），此处不重复开窗。
+      dirty = true;
+      batchStartedAt = now();
       return { ok: false, reason: `写入存储失败：${describeError(e)}` };
     }
+    // 成功：只刷新落盘时刻。**不再清 dirty / 不再动锚点**——若在途 mutate 已重新
+    // 标脏，那一位是下一批的凭据，必须原样留着（旧实现正是在这里把 C1 那批抹掉的）。
     save.meta.savedAt = savedAt;
-    dirty = false;
     lastSaved = savedAt;
-    batchStartedAt = null; // 本批清脏，锚点作废（唯一作废点）
     return { ok: true };
   }
 
   async function flushDetailed(): Promise<FlushResult> {
     clearTimer();
-    // 并发合流：同一时刻多个 flush 请求共享同一次写（FL#3）。
-    // 合流期间又生新脏时，等待方返回的是"自己那份改动已被落盘"的 true——
-    // performFlush 在第一个 await 前同步取快照，新 mutate 排在队列尾之后，
-    // 故此刻的 dirty 属于下一批；剩余批次由重排的窗口兜底，不丢数据。
+    // 并发合流：同一时刻多个 flush 请求共享同一次写（FL#3）——合流的含义是
+    // "已被认领的那一批只写一次"。performFlush 在首个 await 前同步取快照并同步清脏
+    // （C1 的认领时机），故合流期间新到达的 mutate 不属于本次写，它自己会重新标脏
+    // 并重排窗口（flushDetailed 尾部也会再 armWindow 一次），剩余批次由那个窗口兜底，
+    // 不丢数据。据此：等待方拿到的 true 只承诺"被认领的那批已写"，dirty() 也只表示
+    // "有未被认领的改动"——**dirty() 不是落盘凭据，装配层不得只信它**。
     if (inflight !== null) return inflight;
     if (!dirty) return { ok: true };
     const task = performFlush().finally(() => {
@@ -322,11 +345,13 @@ export async function createCoordinator(
     inflight = task;
     const result = await task;
     // 成功与失败统一重排下一窗：
-    // - 成功：dirty 已清，armWindow 走"净则撤窗"分支，等下一次标脏；
-    // - 失败：dirty 保持（Q#4）、lastSaved 不动（FL#4），此处把攒批锚点复位到
-    //   当下，使重试窗按完整 debounce 退避而不是被陈旧 maxBatch 界压成 0ms——
-    //   否则"内容持续非法"时会出现 0ms 定时器反复自触发的空转（虽永不触 store，
-    //   但白烧 CPU/电池）。复位后重试节奏 500ms 一档，配额恢复即自愈。
+    // - 成功：本次认领的批次已写。期间无新 mutate ⇒ dirty 为净，armWindow 走"净则
+    //   撤窗"分支等下一次标脏；期间有在途 mutate ⇒ 它已重新标脏，armWindow 正好把
+    //   那批排进下一窗（这正是 C1 的收尾：不再是"被清零后无人写"）；
+    // - 失败：performFlush 已把批次重新标脏（Q#4）、lastSaved 不动（FL#4），此处再
+    //   把攒批锚点复位到当下，使重试窗按完整 debounce 退避，而不是被陈旧 maxBatch 界
+    //   压成 0ms——否则"内容持续非法"时会出现 0ms 定时器反复自触发的空转（虽永不触
+    //   store，但白烧 CPU/电池）。复位后重试节奏 500ms 一档，配额恢复即自愈。
     if (!result.ok) batchStartedAt = now();
     armWindow();
     return result;

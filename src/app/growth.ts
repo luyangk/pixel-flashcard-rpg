@@ -118,9 +118,11 @@ export function playerStatsFor(save: SaveFile): PlayerStats {
  *   （core/battle.ts 头注释，EW#1/IDX#1/CB#11 已评审钉死）：won 于第 N 击时 idx === N，
  *   slice(0, idx) 即"被作答过的卡"全体——击杀击是最后作答的一张，也在释放子集尾格上；
  *   "剩余卡作废"指 pool[idx:] 永不被答的那些（EW#1：won 后 answer 幂等），不含击杀击。
- * - 落账（消耗）面 = log 的 cardId ∪ pool[0..releaseLen)：正常流程二者恒等（每回合
- *   恰一事件、idx 同步 +1）；并集只防脏 log 漏账，min(idx, 池长) 上界防伪造越账。
- * lost 无"最后一击"：池尽即全数登场，消耗 = 释放 = 全池。answering 保守取 slice(0, idx)。
+ * - 落账（消耗）面 = **池前缀 pool[0..releaseLen)**，单一来源：releaseLen 由
+ *   min(idx, 池长) 钳住（伪造越账到此为止），lost 时即全池。log 不再是来源——
+ *   T4 加的池前缀 filter 曾使 log 项恒落在这个前缀内、对结果零贡献，M1 遂删掉
+ *   该分支（行为零变化）；池外伪造 id 因此天然不落账。
+ * - lost 无"最后一击"：池尽即全数登场，消耗 = 释放 = 全池。answering 保守取 slice(0, idx)。
  */
 function consumedAndRelease(state: BattleState, pool: readonly Card[]): { consumedIds: Set<string>; released: Card[] } {
   const rawIdx = typeof state?.idx === 'number' && Number.isFinite(state.idx) ? Math.max(0, state.idx) : 0;
@@ -129,20 +131,9 @@ function consumedAndRelease(state: BattleState, pool: readonly Card[]): { consum
   const releaseLen = phase === 'lost' ? pool.length : idx;
   const released = pool.slice(0, releaseLen);
   const consumedIds = new Set<string>();
-  if (Array.isArray(state?.log)) {
-    // T4 捎带修复（T3 I-1）：log 侧同样受池前缀下界约束——只收 pool[0..releaseLen)
-    // 内的 id，兑现本函数头注释「min(idx, 池长) 上界防伪造越账」的承诺。
-    // 正常流程 log 的 cardId 恒落在该前缀内，此 filter 对生产路径零行为变化；
-    // 脏 log（伪造/回放损坏）里的池外 id 一律不落账。
-    const inWindow = new Set<string>();
-    for (let i = 0; i < releaseLen; i++) {
-      const id = pool[i]?.id;
-      if (typeof id === 'string') inWindow.add(id);
-    }
-    for (const ev of state.log) {
-      if (typeof ev?.cardId === 'string' && inWindow.has(ev.cardId)) consumedIds.add(ev.cardId);
-    }
-  }
+  // 消耗集合即池前缀本身（每张被释放的卡都算消耗）。此处不再扫 state.log：
+  // T4 的 inWindow 过滤曾把 log 项限制在本前缀内，紧随其后的本循环又把它们全部加入，
+  // 故 log 分支对结果零贡献，M1 删除（FORGE#1/#2 的池外伪造 id 依旧不落账）。
   for (let i = 0; i < releaseLen; i++) {
     const id = pool[i]?.id;
     if (typeof id === 'string') consumedIds.add(id);
@@ -183,8 +174,8 @@ export interface SettleResult {
  * 战斗结算 → 复习落账链（N-2 兑现点）。
  *
  * 消耗 / 释放两口径由 consumedAndRelease 单点切分（裁决全文见该函数注释）：
- * - **消耗**（落账面）：log 的 damage/miss cardId ∪ pool[0..releaseLen)——won 时含
- *   击杀击（玩家用它作答了，SRS 必须推进），lost 时全池；
+ * - **消耗**（落账面）：池前缀 pool[0..releaseLen)（单一口径，log 侧来源已在 M1
+ *   清理中删除）——won 时含击杀击（玩家用它作答了，SRS 必须推进），lost 时全池；
  * - **释放**（exp 面）：plan3 line 15 verbatim「won 时 pool.slice(0, idx)，lost 时全池」。
  * 每张消耗卡经 applyReview（唯一合法入口）落账；其余卡零推进。
  */
