@@ -209,6 +209,29 @@ describe('resetFlow（重置存档）', () => {
     expect(rig.coord.snapshot().cards.length).toBe(0);
   });
 
+  it('RS#8 坏档也能靠重置自救：闩锁解除 + 换代（控制器/UI 据此重估只读位）', async () => {
+    const store = createMemoryStorage();
+    // 坏档（schemaVersion 不认识）⇒ 冷启动就进只读态：写面全拒，玩家只能导出原文或重置
+    await store.save({ schemaVersion: 99, decks: [], cards: [], settings: {}, meta: {} } as unknown as SaveFile);
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    expect(coord.readOnly()).toBe(true);
+    const epochBefore = coord.epoch();
+
+    const res = await resetSave({ coord, store, content: presetJson, nowMs: NOW });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.cards).toBe(30);
+    expect(coord.readOnly()).toBe(false); // 闩锁解除（D32 的既定口径：reload 是唯一解闩面）
+    // **换代**是关键：只读位被控制器/UI 缓存着，没有代次它们不会知道"世界变了"
+    // （GC#14 就是这条的控制器侧对照：不重估 ⇒ 横幅挂着 + 写入静默早退）
+    expect(coord.epoch()).toBeGreaterThan(epochBefore);
+    expect((await store.load())?.cards.length).toBe(30);
+    // 重置后确实可写了（不再被闩锁拒）
+    await coord.mutate((save) => {
+      save.settings.progress.exp = 7;
+    });
+    expect(coord.snapshot().settings.progress.exp).toBe(7);
+  });
+
   it('RS#7 本模块不碰 LLM Key：代码里没有 localStorage / llmConfig 的痕迹', () => {
     // 注释里**故意**写着"Key 存在 localStorage、不在存档里"（那句话正是本条的依据），
     // 所以先剥注释再断言：断言的对象是"实现有没有碰它"，不是"文档有没有提它"。

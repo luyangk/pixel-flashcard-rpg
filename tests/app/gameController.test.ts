@@ -403,6 +403,41 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     expect(ctrl.snapshot().readOnly).toBe(false);
     expect(JSON.stringify(await store.load())).not.toBe(before); // 有写入发生
   });
+
+  /**
+   * GC#14 —— 「坏档自救」这条路必须真的走通（Plan 5 追加，写「重置存档」时发现）。
+   *
+   * 场景：坏档 ⇒ 冷启动进只读（横幅 + 写面早退）。玩家在设置里点「重置存档」
+   * （= `store.clear()` + `coord.reload()`，见 app/resetFlow.ts）或导入一份好备份，
+   * **协调器**侧闩锁确实解除了——但控制器里那位 `readOnly` 是**构造期抄下来的缓存**，
+   * 只会被置真、从不重估：于是横幅继续挂着，且 `guardedWrite` 一直早退 ⇒
+   * 玩家"修好了存档"却发现进度**再也不落盘**（比只读更隐蔽的坏法）。
+   *
+   * 判别力：实现若只在构造期取一次 `coord.readOnly()`（现状），本条必红。
+   */
+  it('GC#14 坏档被修好后（clear+reload / 导入好备份）只读位重估：横幅撤下、写入恢复', async () => {
+    const clock = fakeClock(NOW);
+    const store = createMemoryStorage();
+    // 坏档：schemaVersion 不在支持列表 ⇒ migrateSave 拒 ⇒ 种子档接管 + 只读闩锁
+    await store.save({ schemaVersion: 99, decks: [], cards: [], settings: {}, meta: {} } as unknown as SaveFile);
+    const coord = await createCoordinator(store, { now: clock.now, debounceMs: 0 });
+    expect(coord.readOnly()).toBe(true);
+
+    const ctrl = await createGameController({ coord, rng: mulberry32(11), now: clock.now, tzOffsetMin: TZ });
+    expect(ctrl.snapshot().readOnly).toBe(true); // 冷启动：横幅在
+
+    // 自救（与 resetFlow 的头两步逐字同款；导入好备份走的是同一条 reload）
+    await store.clear();
+    const reloaded = await coord.reload();
+    expect(reloaded.ok).toBe(true);
+    expect(coord.readOnly()).toBe(false); // 协调器侧松开了
+
+    expect(ctrl.snapshot().readOnly).toBe(false); // ← 控制器必须跟着松（缓存不重估的实现必红）
+    // 写入真的恢复：序章收尾这次落库不能走只读早退
+    await ctrl.intent({ type: 'seenPrologue' });
+    expect(coord.snapshot().settings.story.prologueSeen).toBe(true);
+    expect(ctrl.snapshot().notice).not.toBe('存档无法读取，本次进度不会保存');
+  });
 });
 
 /* ------------------------------------------------------------------ 卷灵战（T8） */

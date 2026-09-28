@@ -163,6 +163,15 @@ export interface Coordinator {
    * "存档无法读取，请勿继续写"并给用户手动导出/抢救的出口。正常存档恒 false。
    */
   readOnly(): boolean;
+  /**
+   * **重载代**（Plan 5 追加，只在 reload 成功时 +1）。
+   *
+   * 为什么必须有它：`reload()` 会解除只读闩锁（上一段），而控制器/UI 侧往往**缓存**了
+   * 只读位（`gameController` 就是构造期抄一次）。缓存方看不到"闩锁被解开了"——除非有个
+   * 单调量告诉它"世界已经换代"。少了这个量就会出现最难查的一类故障：玩家重置存档/导入
+   * 好备份之后，横幅继续挂着、写面继续早退，**进度静默不落盘**（比只读更隐蔽）。
+   */
+  epoch(): number;
 }
 
 export type FlushResult = { ok: true } | { ok: false; reason: string };
@@ -297,7 +306,10 @@ export async function createCoordinator(
 
   // —— 初始态：load() 优先；null → 种子档；**不可迁移/不可读 → 种子档接管 + 只读闩锁** ——
   // 只读闩锁（C-1）：一旦置位就是终态（本波不提供解锁面），所有写入面据此拒绝。
+  // Plan 5 追加：唯一的例外是 `reload()`（导入好备份 / 重置存档），它解闩并让 `epoch` +1，
+  // 好让缓存了只读位的调用方（gameController）知道"该重估了"。
   let readOnly = false;
+  let epoch = 0;
   let save: SaveFile;
   try {
     const loaded = await store.load();
@@ -605,6 +617,9 @@ export async function createCoordinator(
     markExported,
     flushDetailed,
     readOnly: () => readOnly,
+    epoch(): number {
+      return epoch;
+    },
     async reload(): Promise<{ ok: boolean; reason?: string }> {
       try {
         const loaded = await store.load();
@@ -613,12 +628,14 @@ export async function createCoordinator(
           save = seedSave(now());
           dirty = false;
           readOnly = false;
+          epoch += 1; // 换代：缓存了只读位的调用方（控制器/UI）据此重估
           return { ok: true };
         }
         const next = migrateSave(loaded);
         save = next;
         dirty = false;
         readOnly = false;
+        epoch += 1; // 同上
         return { ok: true };
       } catch (e) {
         readOnly = true;

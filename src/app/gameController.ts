@@ -76,16 +76,53 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
   let lastError: StartError | null = null;
   let notice: string | null = null;
   let readOnly = coord.readOnly();
+  /**
+   * 抄下 `readOnly` 时协调器处在哪一"代"（见 `Coordinator.epoch`）。
+   *
+   * 为什么需要：`readOnly` 是**构造期取一次**的缓存位，写面被拒时只会置真、从不重估。
+   * 而 `reload()`（导入好备份 / 重置存档 / D40）会解除协调器侧的闩锁——不重估的话，
+   * 玩家修好存档后横幅依然挂着、`guardedWrite` 依然早退，**进度静默不落盘**：
+   * 比"只读"更坏的一类故障（GC#14 钉住它）。
+   */
+  let readOnlyEpoch = currentEpoch();
   // 每局的自评记录：settleFight 需要"每张已作答卡当时的 grade"，而 FightView 不存评定。
   let grades = new Map<string, Grade>();
   const listeners = new Set<(s: ControllerSnapshot) => void>();
+
+  /**
+   * 协调器的"重载代"。老协调器（或测试里手工造的 fake）没有 `epoch` ⇒ 记 0，
+   * 于是行为与从前完全一致（缓存位粘住）——这条兼容分支让本改动**只影响真实 reload**。
+   */
+  function currentEpoch(): number {
+    const f = (coord as { epoch?: () => number }).epoch;
+    return typeof f === 'function' ? f.call(coord) : 0;
+  }
+
+  /** 置只读位并记账"这是哪一代下的判断"。 */
+  function setReadOnly(on: boolean): void {
+    readOnly = on;
+    readOnlyEpoch = currentEpoch();
+  }
+
+  /**
+   * 只读位求值：**"曾被拒写"的记忆** + **"协调器当下还说只读吗"**。
+   * 记忆只在同代内有效——换过代（reload 过）就重新以协调器为准：它说可写了，
+   * 说明玩家已经自救成功（重置/导入），横幅必须撤下、写面必须恢复。
+   */
+  function isReadOnly(): boolean {
+    const e = currentEpoch();
+    if (readOnly && e !== readOnlyEpoch) {
+      setReadOnly(coord.readOnly());
+    }
+    return readOnly;
+  }
 
   function snapshot(): ControllerSnapshot {
     return {
       screen,
       fight,
       save: coord.snapshot(),
-      readOnly,
+      readOnly: isReadOnly(),
       reminderDue: backupReminderDue(coord.snapshot().meta.lastExportedAt ?? null, now()),
       lastResult,
       lastError,
@@ -100,7 +137,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
 
   /** 写路径统一收口：只读与写入失败都转成快照位，绝不让异常逃到 UI 事件处理器。 */
   async function guardedWrite(fn: () => Promise<void>): Promise<void> {
-    if (readOnly) {
+    if (isReadOnly()) {
       notice = notices.readOnly;
       return;
     }
@@ -108,7 +145,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
       await fn();
     } catch (e) {
       if (isSaveReadOnlyError(e)) {
-        readOnly = true;
+        setReadOnly(true);
         notice = notices.readOnly;
       } else {
         notice = notices.saveFailed;
@@ -295,7 +332,9 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         break;
       }
     }
-    if (coord.readOnly()) readOnly = true;
+    // 每个意图收尾都把只读位与协调器对一次账（含"换过代就重估"）。这里用 setReadOnly
+    // 记账代次，保证"本来可写、这次被拒"之后记忆不会因为一次无关的 reload 而漂移。
+    if (coord.readOnly() && !readOnly) setReadOnly(true);
     emit();
   }
 
