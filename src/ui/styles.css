@@ -741,3 +741,36 @@ h1 {
   padding: 0.35rem 0.7rem;
   font-size: 0.85rem;
 }
+
+/* ------------------------------------------------------------------ 设置：存档（重置） */
+/*
+ * 「重置存档」是全 app 唯一不可撤销的操作，样式上必须**看起来就该小心**：
+ * 触发按钮与普通按钮同形（它本身无害），而确认按钮走血红边（--blood）并明确写"确认重置"。
+ * 玩家扫一眼屏就知道哪个按钮按下去会清档。
+ */
+.save-reset {
+  align-self: flex-start;
+  border-color: var(--wash);
+  color: var(--paper-dim);
+}
+
+.save-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--blood);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(163, 39, 58, 0.12), transparent);
+}
+
+.save-confirm {
+  border-color: var(--blood);
+  color: #ffd9df;
+  background: linear-gradient(180deg, rgba(163, 39, 58, 0.5), var(--ink-800));
+}
+
+.save-export,
+.save-cancel {
+  min-height: 2.5rem;
+}

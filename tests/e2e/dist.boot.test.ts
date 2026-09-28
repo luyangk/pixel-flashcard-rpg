@@ -184,4 +184,46 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     await settle();
     expect(win.document.querySelector('[data-ui="llm-author-open"]'), '卡组屏拿不到 llmCards 依赖').not.toBeNull();
   }, 30_000);
+
+  it('DB#5 产物里「重置存档」真的能清档重装（main.ts 漏传 presetContent ⇒ 整组不显示）', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    // 从卡组屏回菜单 → 设置
+    expect(click('[data-ui="back"]')).toBe(true);
+    await settle();
+    expect(click('[data-nav="settings"]')).toBe(true);
+    await settle();
+
+    // ① 「存档」分组可见 ⇒ main.ts 把 presetJson 交给了 assembleHost（缺它 resetSave 不接、整组隐藏）
+    const saveGroup = q('[data-ui="save-group"]');
+    expect(saveGroup, '设置屏里没有存档分组（main.ts 漏传 presetContent）').not.toBeNull();
+    expect(saveGroup?.hidden, '存档分组被藏着').toBe(false);
+
+    // ② 两步确认：第一下只展开代价说明，第二下才真清
+    expect(click('[data-ui="save-reset"]')).toBe(true);
+    await settle();
+    expect(q('[data-ui="save-reset-actions"]')?.hidden, '确认面板没展开').toBe(false);
+    expect(click('[data-ui="save-reset-confirm"]')).toBe(true);
+
+    // ③ 等真实链路跑完（清存储 → reload → 灌 30 张预置卡 → flush），成功 toast 会报出真数量
+    let text = '';
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      text = win.document.body.textContent ?? '';
+      if (text.includes('存档已重置')) break;
+    }
+    expect(text, '产物里重置没有成功（真实链路某一步失败）').toContain('存档已重置');
+    expect(text).toContain('4 个领域');
+    expect(text).toContain('30 张卡');
+  }, 30_000);
 });

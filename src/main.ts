@@ -93,6 +93,8 @@ async function boot(): Promise<void> {
     acts: arcJson.acts as unknown as readonly ArcAct[],
     eggs: eggsJson.eggs as Readonly<Record<string, string>>,
     wordTable: new Map(Object.entries(fakeWordsJson.pairs as Record<string, string>)),
+    // 「重置存档」的最后一步要重新灌预置内容，所以把原文交给装配层（缺它整组不显示）
+    presetContent: presetJson,
     hostRef: () => host, // 「重看序章」用它把序章当场挂回来
     onNotice: (text) => showToast(root, text, { ms: 8000 }),
   });

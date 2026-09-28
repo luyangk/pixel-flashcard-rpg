@@ -74,7 +74,7 @@ describe('mountResult —— 胜负与成长', () => {
     mountResult(root, ctrl, {});
     const hint = ui(root, 'lose-hint');
     expect(hint.hidden).toBe(false);
-    expect(hint.textContent).toContain('一成涨到十成'); // 讲清机制：稳定度决定伤害
+    expect(hint.textContent).toContain('三成涨到十成'); // 讲清机制：稳定度决定伤害（数值须与 damageMultiplier 同步：new=0.3）
 
     ctrl.push(snapWith(summary({ won: true })));
     expect((root.querySelector('[data-ui="lose-hint"]') as HTMLElement).hidden).toBe(true);

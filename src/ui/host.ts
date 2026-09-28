@@ -138,8 +138,9 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
    * 各屏的挂载点。
    *
    * 【易错点】这里是**显式白名单**：`assembleHost` 造出来的依赖（`llm`/`llmCards`/`llmNames`/
-   * `llmEgg`/`setEgg`）如果没在这里透传，功能在生产里就是死的——而"直挂屏组件"的单元测试
-   * 仍然全绿（它们自己传 deps）。Plan 5 的 AI 接线就踩过一次，故这四行单独标注。
+   * `llmEgg`/`setEgg`/`resetSave`/`exportBackupNow`）如果没在这里透传，功能在生产里就是死的——
+   * 而"直挂屏组件"的单元测试仍然全绿（它们自己传 deps）。Plan 5 的 AI 接线就踩过一次，
+   * 「重置存档」的接线又踩过一次（设置屏测了、宿主没透传），故这些行单独标注。
    */
   function mountFor(view: HostView, snap: ControllerSnapshot): { unmount(): void } {
     switch (view.kind) {
@@ -220,6 +221,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               setParams: deps.setParams,
               setPoolSize: deps.setPoolSize,
               replayPrologue: deps.replayPrologue,
+              resetSave: deps.resetSave,
+              exportBackupNow: deps.exportBackupNow,
               toastMs: deps.toastMs,
             });
           case 'menu':

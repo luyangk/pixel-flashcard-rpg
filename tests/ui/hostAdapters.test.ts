@@ -45,7 +45,7 @@ interface Rig {
   replayCalls: () => number;
 }
 
-async function makeRig(opts: { seed?: SaveFile; debounceMs?: number } = {}): Promise<Rig> {
+async function makeRig(opts: { seed?: SaveFile; debounceMs?: number; presetContent?: unknown } = {}): Promise<Rig> {
   const store = createMemoryStorage();
   if (opts.seed) await store.save(opts.seed);
   const coord = await createCoordinator(store, { now: () => NOW, debounceMs: opts.debounceMs ?? 0 });
@@ -69,6 +69,9 @@ async function makeRig(opts: { seed?: SaveFile; debounceMs?: number } = {}): Pro
     acts: arcJson.acts as never,
     eggs: eggsJson.eggs as never,
     wordTable: new Map([['唐朝', '宋朝']]),
+    // 缺省**不**传：这条缺省本身就是产品行为（没有预置内容就没有"新装状态"可言，
+    // 于是「重置存档」整组不显示）——AD#9 守着它，AD#8 用真内容驱动。
+    presetContent: opts.presetContent,
     onNotice: (t) => notices.push(t),
     hostRef: () => ({ replayPrologue: () => void (replay += 1) }),
     toastMs: 0,
@@ -331,6 +334,41 @@ describe('assembleHost —— 会话记忆与练习关', () => {
     expect(res).toEqual({ ok: true });
     expect(rig.replayCalls()).toBe(1);
     expect(rig.coord.snapshot().settings.story.prologueSeen).toBe(false);
+  });
+});
+
+describe('assembleHost —— 重置存档（Plan 5 追加）', () => {
+  it('AD#8 给了 presetContent ⇒ resetSave 真的清档重装；exportBackupNow 导出并按下发文件名', async () => {
+    const played = makeSave();
+    played.meta.plays = 7;
+    played.settings.progress.exp = 420;
+    const rig = await makeRig({ seed: played, presetContent: presetJson });
+
+    expect(typeof rig.assembly.adapters.resetSave).toBe('function');
+    const res = await rig.assembly.adapters.resetSave?.();
+    expect(res).toEqual({ ok: true, cards: 30, decks: 4 });
+    // 内存档与存储档都得是"新装状态"（resetFlow 的 flush 收口；ADR 见 app/resetFlow.ts）
+    expect(rig.coord.snapshot().meta.plays).toBe(0);
+    expect(rig.coord.snapshot().settings.progress.exp).toBe(0);
+    const disk = await rig.store.load();
+    expect(disk?.cards.length).toBe(30);
+    expect(disk?.meta.plays).toBe(0);
+
+    // 「先导出备份」：走 exportAndMark（信封 + 记时），文件名与卡组页导出同一家族
+    const exported = await rig.assembly.adapters.exportBackupNow?.();
+    expect(exported?.ok).toBe(true);
+    expect(rig.downloads).toHaveLength(1);
+    expect(rig.downloads[0][1]).toMatch(/^zx-xia-backup-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(rig.downloads[0][0]).toContain('"schemaVersion"');
+    // 记时也真的落了（导出成功 = 时间戳写进 meta；只给文件不记时的实现必红）
+    expect(rig.coord.snapshot().meta.lastExportedAt).toBe(NOW);
+  });
+
+  it('AD#9 没给 presetContent ⇒ 不接 resetSave（缺它整组隐藏，而不是给一个会清空的按钮）', async () => {
+    const rig = await makeRig({ seed: makeSave() });
+    expect(rig.assembly.adapters.resetSave).toBeUndefined();
+    // 导出依旧可用（它不依赖预置内容），但设置屏里整组不显示 ⇒ 设置屏上也点不到它
+    expect(typeof rig.assembly.adapters.exportBackupNow).toBe('function');
   });
 });
 

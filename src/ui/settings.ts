@@ -14,6 +14,7 @@
  */
 import type { Sm2Params } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import type { ResetSaveResult } from '../app/resetFlow';
 import type { SettingsWriteResult } from '../app/settingsFlow';
 import { BOSS_TIERS, POOL_SIZE_MIN, POOL_SIZE_MAX } from '../app/settingsFlow';
 import type { ChatResult, LlmConfig } from '../platform/llmTypes';
@@ -64,6 +65,18 @@ export interface SettingsDeps {
   readonly replayPrologue?: () => Promise<SettingsWriteResult>;
   /** AI（可选）分组；缺省则整组隐藏（不显示点了没反应的入口）。 */
   readonly llm?: LlmSettingsDeps;
+  /**
+   * 「重置存档」（宿主接 `app/resetFlow.resetSave`）：清空 → 重装预置内容 → 回到"新装状态"。
+   * 缺省则整个「存档」分组隐藏（同 AI 分组的口径：不显示点了没反应的入口）。
+   */
+  readonly resetSave?: () => Promise<ResetSaveResult>;
+  /**
+   * 「先导出备份」（宿主接 `transfer.exportAndMark` + 默认文件名下载）。
+   *
+   * 为什么不让本屏自己拼文件名/调下载：那要求本屏认识时钟与文件口，而"重置"这个
+   * 会话本来就该由**宿主**保证"导出的就是当下这份档"。本屏只要一个 boolean 面。
+   */
+  readonly exportBackupNow?: () => Promise<{ readonly ok: boolean; readonly reason?: string }>;
   /** toast 存活毫秒（测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -101,6 +114,20 @@ const LLM_MODEL_HINT =
   '（旧的 deepseek-chat 已停用，填它会得到 400）；通义是 qwen-plus / qwen-max 等；' +
   '中转/自建网关请照它自己的目录填。拿不准就点「拉取模型列表」，它会问你自己的账号要。';
 
+/** 存档分组的一句话说明（与「重看序章」的区别是玩家最容易搞混的点）。 */
+const SAVE_HINT =
+  '想从头再玩一遍（重打第一场教学局、等级与榜单归零）就用下面的「重置存档」；' +
+  '只想重看序章，用上面的「重看序章」。';
+
+/**
+ * 重置的代价要说全（诚实披露：说漏一项就是"以为只是清进度，结果卡库没了"）。
+ * 逐项对着 `persist.seedSave` 的实际形状写，而不是凭印象——设置也在存档里，所以回默认。
+ */
+const RESET_WARNING =
+  '重置会清空：卡库（含你自己加的卡与领域）、复习进度、等级与经验、战绩榜、序章记录，' +
+  '设置（阈值 / 池子 / 复习参数）也回到默认。这一步不能撤销——建议先点「先导出备份」。' +
+  '（AI 的 Key 存在浏览器里、不在存档内，重置后不用重填。）';
+
 /**
  * 在 root 里挂设置屏。所有写入都是"点一下/保存一次"的显式动作，屏幕自己不攒状态
  * （唯一例外是 SM-2 输入框里的草稿值，见文件头第 3 条）。
@@ -120,6 +147,10 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   let llmBusy = false;
   /** 模型列表请求在途（与 llmBusy 分开：它不影响保存/测试的可用性） */
   let modelsBusy = false;
+  /** 重置的"已确认过一次"标记（两步确认的第一步，见 onResetSave）。 */
+  let resetArmed = false;
+  /** 重置/导出在途：这期间整组按钮禁用（连点两次就会连清两遍）。 */
+  let saveBusy = false;
   /** 当前**已存**的配置（Key 只在这份内存副本里过手，绝不写进任何 DOM 属性/文本）。 */
   let storedLlm: LlmConfig = { baseUrl: '', apiKey: '', model: '' };
 
@@ -179,8 +210,32 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   const replayBtn = h('button', { 'data-ui': 'replay-prologue', class: 'replay-btn', type: 'button' }, '重看序章') as HTMLButtonElement;
   const storyEl = h('section', { 'data-ui': 'story-group', class: 'settings-group' }, [
     h('h3', { class: 'field-title' }, '序章'),
-    h('p', { class: 'field-hint' }, '点了会**马上**重演一次（可跳过）。'),
+    h('p', { class: 'field-hint' }, '点了会马上重演一次（可跳过）。'),
     replayBtn,
+  ]);
+
+  /* ------------------------------------------------------------ 存档（Plan 5 追加：重置） */
+  const resetBtn = h('button', { 'data-ui': 'save-reset', class: 'save-reset', type: 'button' }, '重置存档') as HTMLButtonElement;
+  const resetConfirmBtn = h(
+    'button',
+    { 'data-ui': 'save-reset-confirm', class: 'save-confirm', type: 'button' },
+    '确认重置',
+  ) as HTMLButtonElement;
+  const resetCancelBtn = h('button', { 'data-ui': 'save-reset-cancel', class: 'save-cancel', type: 'button' }, '取消') as HTMLButtonElement;
+  const resetExportBtn = h('button', { 'data-ui': 'save-export-first', class: 'save-export', type: 'button' }, '先导出备份') as HTMLButtonElement;
+  const resetWarningEl = h('p', { 'data-ui': 'save-reset-warning', class: 'field-hint' }, RESET_WARNING);
+  // 确认态（hidden 到玩家点了「重置存档」为止）：代价 + 自救出口 + 真正的那个危险按钮
+  const resetActionsEl = h('div', { 'data-ui': 'save-reset-actions', class: 'save-actions', hidden: true }, [
+    resetWarningEl,
+    resetExportBtn,
+    resetConfirmBtn,
+    resetCancelBtn,
+  ]);
+  const saveEl = h('section', { 'data-ui': 'save-group', class: 'settings-group' }, [
+    h('h3', { class: 'field-title' }, '存档'),
+    h('p', { class: 'field-hint' }, SAVE_HINT),
+    resetBtn,
+    resetActionsEl,
   ]);
 
   /* ------------------------------------------------------------ AI（可选，Plan 5 · T4） */
@@ -253,6 +308,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
 
   const screen = h('div', { 'data-ui': 'settings-screen', class: 'settings-screen' }, [
     headerEl,
+    saveEl,
     tierEl,
     poolEl,
     paramEl,
@@ -414,6 +470,58 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     }
   }
 
+  /**
+   * 「重置存档」——**两步确认**：第一次点击只展开"代价 + 先导出备份 + 确认重置"，
+   * 第二次（点在确认按钮上）才真清。
+   *
+   * 为什么不用 `window.confirm`：本屏其余部分零 DOM 依赖、测试可在 happy-dom 里全驱动，
+   * 而原生 confirm 在无头环境里恒返回 undefined（等于"点了没反应"）；且它的文案我们
+   * 无法排版（重置的代价有好几行，塞进一句话会没人看）。两步按钮 = 同样的摩擦，可控的文案。
+   */
+  function onArmReset(): void {
+    if (destroyed || saveBusy) return;
+    resetArmed = true;
+    render(ctrl.snapshot());
+  }
+
+  /** 第二步：真清。成功后收起确认态（别把玩家留在"再来一次"的位置上）。 */
+  async function onConfirmReset(): Promise<void> {
+    if (destroyed || saveBusy || typeof deps.resetSave !== 'function') return;
+    saveBusy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.resetSave();
+      if (res.ok) {
+        resetArmed = false; // 成功后收起确认态，别留在"再来一次"的位置上
+        toast(`存档已重置：${res.decks} 个领域、${res.cards} 张卡回来了。`);
+      } else {
+        toast(res.reason);
+      }
+    } catch (e) {
+      // 写口可能真 reject（只读闩锁）——收成一句提示，绝不让 rejection 逃到事件处理器
+      toast(`重置没能完成：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      saveBusy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  /** 「先导出备份」：重置前唯一的自救出口（导出成功与否都如实说）。 */
+  async function onExportBeforeReset(): Promise<void> {
+    if (destroyed || saveBusy || typeof deps.exportBackupNow !== 'function') return;
+    saveBusy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.exportBackupNow();
+      toast(res.ok ? '备份已导出。' : (res.reason ?? '导出没能完成。'));
+    } catch (e) {
+      toast(`导出没能完成：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      saveBusy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
   function onClearLlm(): void {
     if (destroyed || llmBusy || !llmDeps || typeof llmDeps.clear !== 'function') return;
     try {
@@ -450,6 +558,14 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     saveParamsBtn.disabled = busy || typeof deps.setParams !== 'function';
     replayBtn.disabled = busy || typeof deps.replayPrologue !== 'function';
     setHidden(backBtn, typeof deps.onNav !== 'function');
+    // 存档组：只有宿主给了重置口才显示；未确认时只露一个按钮（不把"危险按钮"摆在最前）
+    setHidden(saveEl, typeof deps.resetSave !== 'function');
+    resetActionsEl.hidden = !resetArmed;
+    resetBtn.disabled = saveBusy || resetArmed;
+    resetConfirmBtn.disabled = saveBusy;
+    resetCancelBtn.disabled = saveBusy;
+    resetExportBtn.disabled = saveBusy || typeof deps.exportBackupNow !== 'function';
+    setHidden(resetExportBtn, typeof deps.exportBackupNow !== 'function');
     // 「拉取模型列表」只在宿主提供该口时显示；在途时禁用（防连点）
     setHidden(llmModelsBtn, typeof llmDeps?.listModels !== 'function');
     llmModelsBtn.disabled = modelsBusy;
@@ -479,6 +595,13 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   llmModelsBtn.addEventListener('click', () => void onFetchModels());
   llmTestBtn.addEventListener('click', () => void onTestLlm());
   llmClearBtn.addEventListener('click', onClearLlm);
+  resetBtn.addEventListener('click', onArmReset);
+  resetConfirmBtn.addEventListener('click', () => void onConfirmReset());
+  resetCancelBtn.addEventListener('click', () => {
+    resetArmed = false;
+    render(ctrl.snapshot());
+  });
+  resetExportBtn.addEventListener('click', () => void onExportBeforeReset());
 
   // 初次回填：地址/模型照抄已存值，Key 只以掩码形态出现在 placeholder（明文绝不进 DOM）。
   if (canLlm) {

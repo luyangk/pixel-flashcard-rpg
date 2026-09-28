@@ -12,6 +12,7 @@ import type { CardCandidate, NameCandidate, ParseResult } from '@core/llmParse';
 import type { ChatResult, LlmConfig } from '../platform/llmTypes';
 import type { BossNameResult } from '../app/bossFlow';
 import type { LibraryResult } from '../app/library';
+import type { ResetSaveResult } from '../app/resetFlow';
 import type { SettingsWriteResult } from '../app/settingsFlow';
 import type { ExportAndMarkResult, ImportAndSaveResult } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
@@ -91,6 +92,19 @@ export interface HostAdapters {
     deckName: string,
     sampleFronts?: readonly string[],
   ) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
+
+  /* 存档重置（Plan 5 追加：「不知道怎么从头体验」） */
+  /**
+   * 重置存档（接 `app/resetFlow.resetSave`）。缺省 = 设置屏的「存档」分组整组隐藏
+   * （`assembleHost` 只在宿主给了 `presetContent` 时才接这个口）。
+   */
+  readonly resetSave?: () => Promise<ResetSaveResult>;
+  /**
+   * 重置前的自救出口：「先导出备份」一键导出**当下这份**档并按默认文件名下载。
+   * 与 `exportBackup` 的区别只在"谁拼文件名"——本口是给设置屏用的 boolean 面，
+   * 免得设置屏为了一行文件名去认识时钟与文件口。
+   */
+  readonly exportBackupNow?: () => Promise<{ readonly ok: boolean; readonly reason?: string }>;
 
   /* 导入导出与抢救 */
   readonly exportBackup?: () => Promise<ExportAndMarkResult>;

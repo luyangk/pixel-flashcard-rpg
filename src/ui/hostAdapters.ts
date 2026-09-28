@@ -32,9 +32,11 @@ import {
   setSm2Params,
 } from '../app/settingsFlow';
 import { saveBeatCursor } from '../app/storyState';
+import { resetSave } from '../app/resetFlow';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
 import type { FetchLike, LlmConfig } from '../platform/llmTypes';
+import { backupFileName } from './decks';
 import type { HostAdapters } from './hostTypes';
 
 export interface AssembleDeps {
@@ -52,6 +54,14 @@ export interface AssembleDeps {
   readonly acts: HostAdapters['acts'];
   readonly eggs: HostAdapters['eggs'];
   readonly wordTable: ReadonlyMap<string, string>;
+  /**
+   * 预置内容原文（`assets/content/preset.json`，由 main.ts 静态 import 传进来）。
+   *
+   * **缺省 = 不接「重置存档」**：重置的最后一步是"重装预置内容"，没有素材就没有
+   * "新装状态"可言（会留下一个空卡库，比不重置更糟）。于是宁可整组不显示，
+   * 也不给一个点了会坏档的按钮。
+   */
+  readonly presetContent?: unknown;
   /** 需要让玩家知道的一句话（导入后重载失败等）；缺省丢弃。 */
   readonly onNotice?: (text: string) => void;
   /** 宿主句柄（用于「重看序章」把序章重新挂回来）；缺省则只写存档。 */
@@ -143,6 +153,17 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     return (messages) => chat({ config: llmIo.load(), messages, fetchImpl: deps.llmFetchImpl });
   }
 
+  /**
+   * 把一段文本交到玩家手里（生产 = `platform/files.downloadText` 的 Blob 下载；测试注入）。
+   * 抽成局部常量是因为它现在有两个调用点（卡组页导出、设置页「先导出备份」，后者见下），
+   * 默认实现写两遍就会有一天分叉。
+   */
+  const saveText: (text: string, filename: string) => void =
+    deps.saveTextFile ??
+    ((text, filename) => {
+      void import('../platform/files').then((m) => m.downloadText(text, filename));
+    });
+
   /** 配置读写端口（生产 = platform/llmConfig；测试可注入内存实现）。 */
   const llmIo =
     deps.llmConfigIo ??
@@ -216,12 +237,24 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         const picked = await pickTextFile();
         return picked.ok ? picked.text : null; // 取消与读失败都回 null（导入屏据此不提示）
       }),
-    saveTextFile:
-      deps.saveTextFile ??
-      ((text, filename) => {
-        void import('../platform/files').then((m) => m.downloadText(text, filename));
-      }),
+    saveTextFile: saveText,
     rawDump: () => coord.rawDump(),
+
+    /* ---- 存档重置（Plan 5 追加） ---- */
+    // 只有在拿到预置内容时才接：见 AssembleDeps.presetContent 的注释。
+    resetSave:
+      deps.presetContent === undefined
+        ? undefined
+        : () => resetSave({ coord, store, content: deps.presetContent, nowMs: now() }),
+    exportBackupNow: async () => {
+      const res = await exportAndMark(coord, now());
+      // 只要有文本就先交到用户手里——哪怕 ok:false（与卡组页导出同口径：
+      // "没记成导出时间"不该扣下他手里的那份档）
+      if (typeof res.text === 'string' && res.text.length > 0) {
+        saveText(res.text, backupFileName(now(), tzOffsetMin));
+      }
+      return res.ok ? { ok: true } : { ok: false, reason: res.reason ?? '导出没能完成。' };
+    },
 
     /* ---- AI（Plan 5 · T4/T5） ---- */
     llm:

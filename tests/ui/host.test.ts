@@ -384,4 +384,46 @@ describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
     await flushMicrotasks();
     expect(root.querySelectorAll('[data-name-candidate]')).toHaveLength(1);
   });
+
+  it('设置屏拿到 resetSave / exportBackupNow（漏透传 = 生产里功能是死的，单元测试仍全绿）', async () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: {
+          ...makeSave(),
+          settings: { ...makeSave().settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    let resets = 0;
+    let exports = 0;
+    const { deps } = adapters({
+      resetSave: () => {
+        resets += 1;
+        return Promise.resolve({ ok: true, cards: 30, decks: 4 });
+      },
+      exportBackupNow: () => {
+        exports += 1;
+        return Promise.resolve({ ok: true });
+      },
+    });
+    mountHost(root, ctrl, deps);
+    click(root.querySelector('[data-nav="settings"]') as HTMLElement);
+
+    // ① 分组可见 ⇒ resetSave 透传成功（缺它整组隐藏）
+    expect(ui(root, 'save-group').hidden).toBe(false);
+    // ② 「先导出备份」可见 ⇒ exportBackupNow 透传成功
+    click(ui(root, 'save-reset'));
+    await flushMicrotasks();
+    expect(ui(root, 'save-export-first').hidden).toBe(false);
+
+    // ③ 走到底：确认后真的调到宿主那份写口
+    click(ui(root, 'save-export-first'));
+    await flushMicrotasks();
+    click(ui(root, 'save-reset-confirm'));
+    await flushMicrotasks();
+    expect(exports).toBe(1);
+    expect(resets).toBe(1);
+  });
 });
