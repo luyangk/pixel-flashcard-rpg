@@ -15,8 +15,14 @@
  */
 import type { Rng } from '@core/rng';
 import type { GameStorage } from '@platform/storage';
+// 【平台 LLM 模块的唯一 import 点】load/save/clear/presets/maskKey 与唯一的网络出口 chat
+// 都在这里接线；UI 层只拿到已装配好的窄函数（fetch 与 localStorage 绝不出 platform）。
+import { clearLlmConfig, LLM_PRESETS, loadLlmConfig, saveLlmConfig } from '../platform/llmConfig';
+import { chat } from '../platform/llmHttp';
 import { addCard, addDeck } from '../app/library';
 import { bossFightParams, setBossName } from '../app/bossFlow';
+import { setEggOnDeck } from '../app/codexFlow';
+import { suggestBossNames, suggestCards, suggestEgg, type ChatFn } from '../app/llmFlow';
 import type { GameController, GameIntent } from '../app/controllerTypes';
 import type { Coordinator } from '../app/persist';
 import {
@@ -57,6 +63,16 @@ export interface AssembleDeps {
    */
   readonly pickBackupText?: HostAdapters['pickBackupText'];
   readonly saveTextFile?: HostAdapters['saveTextFile'];
+  /**
+   * AI 面覆盖位（Plan 5 · T4/T5；缺省走真实现：platform/llmConfig + llmHttp + app/llmFlow）。
+   * 存在的理由与文件口覆盖位同款：装配链（设置屏的读写、三项 AI 职能的现读配置）要在测试里
+   * 用假实现穷举，而**真装配**仍必须可被驱动。
+   */
+  readonly llmOverride?: HostAdapters['llm'];
+  readonly llmCardsOverride?: HostAdapters['llmCards'];
+  readonly llmNamesOverride?: HostAdapters['llmNames'];
+  readonly llmEggOverride?: HostAdapters['llmEgg'];
+  readonly setEggOverride?: HostAdapters['setEgg'];
 }
 
 export interface HostAssembly {
@@ -99,6 +115,17 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       return ctrl.intent(i);
     },
   };
+
+  /**
+   * 造一个"**每次调用现读一次配置**"的 chat 绑定。
+   *
+   * 为什么不是绑定时就 load 一次：玩家在设置页改完 Key/模型后回到卡组页，下一句生成
+   * 必须用新配置。缓存一份配置会让改动要等刷新页面才生效——而这条接缝在单测里看不出来
+   * （测试注入的是假 chat），所以把理由写在这里而不是靠人记。
+   */
+  function boundChat(): ChatFn {
+    return (messages) => chat({ config: loadLlmConfig(), messages });
+  }
 
   const adapters: HostAdapters = {
     prologueScenes: deps.prologueScenes,
@@ -167,6 +194,25 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         void import('../platform/files').then((m) => m.downloadText(text, filename));
       }),
     rawDump: () => coord.rawDump(),
+
+    /* ---- AI（Plan 5 · T4/T5） ---- */
+    llm:
+      deps.llmOverride ??
+      ({
+        load: () => loadLlmConfig(),
+        save: (cfg) => saveLlmConfig(cfg),
+        clear: () => clearLlmConfig(),
+        // 「测试连接」= 一次最小请求：玩家点它就是想确认"地址 + Key + 模型"三者能打通，
+        // 因此只发一条最短的 user 消息（不做别的职能的提示词——那会把测试变成一次内容生成）。
+        test: (cfg) => chat({ config: cfg, messages: [{ role: 'user', content: 'ping' }] }),
+        presets: LLM_PRESETS,
+      } satisfies NonNullable<HostAdapters['llm']>),
+    // 三项职能共用一个"每次调用现读配置"的 chat：玩家刚在设置页改完 Key，下一句就得用新的。
+    // 绑定一次配置会让改动要等重启页面才生效（这是最容易漏的一条接缝）。
+    llmCards: deps.llmCardsOverride ?? ((input) => suggestCards({ chat: boundChat() }, input)),
+    llmNames: deps.llmNamesOverride ?? ((deckName) => suggestBossNames({ chat: boundChat() }, { deckName })),
+    llmEgg: deps.llmEggOverride ?? ((deckName) => suggestEgg({ chat: boundChat() }, { deckName })),
+    setEgg: deps.setEggOverride ?? ((deckId, text) => setEggOnDeck(coord, deckId, text)),
   };
 
   return { ctrl: wrapped, adapters };

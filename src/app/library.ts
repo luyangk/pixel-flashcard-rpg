@@ -43,6 +43,12 @@ export interface AddCardInput {
   readonly nowMs: number;
   /** SM-2 参数（缺省用 core 的规范默认）。 */
   readonly sm2Params?: Sm2Params;
+  /**
+   * 溯源类型（Plan 5 · T4）：`'llm'` = 模型辅建后经玩家确认入库；缺省 `'manual'`。
+   * 域与 `saveMigrate.SOURCE_TYPES` 一致（那边已含 `'llm'`）；域外值一律回落 `'manual'`
+   * ——写口不做"猜意图"的事，脏值也不能让落盘自检整包拒。
+   */
+  readonly sourceType?: 'manual' | 'llm';
 }
 
 /** 建领域的入参。 */
@@ -93,7 +99,8 @@ function findDeck(save: { decks: readonly Deck[] }, deckId: string): Deck | null
 }
 
 /**
- * 往卡库加一张手写卡。成功补 `{type:'manual'}` 溯源（PRD §6.2 的来源字段）。
+ * 往卡库加一张手写卡。成功补 `{type:'manual'}` 溯源（PRD §6.2 的来源字段）；
+ * `input.sourceType === 'llm'` 时改落 `{type:'llm'}`（Plan 5 · T4：模型辅建后经玩家确认的那条路）。
  *
  * 拒绝面（全部返回 `{ok:false, reason}`，**不触存储**）：
  * - front / back 空白；
@@ -124,12 +131,13 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
     return { ok: false, reason: '加卡失败：卡片编号和已有的一张撞了。' };
   }
 
+  const sourceType: 'manual' | 'llm' = input.sourceType === 'llm' ? 'llm' : 'manual';
   const card: Card = {
     id: input.id,
     deckId: input.deckId,
     front: input.front,
     back: input.back,
-    source: { type: 'manual', createdAt: input.nowMs },
+    source: { type: sourceType, createdAt: input.nowMs },
     srs: createInitialSRS(input.nowMs, input.sm2Params),
     tags,
   };

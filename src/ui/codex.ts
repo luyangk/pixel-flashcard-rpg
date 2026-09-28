@@ -4,8 +4,9 @@
  * 这是"玩家打过的仗变成了什么"的展示面，三块内容各有权威来源：
  * - **条目**：`save.decks` 里 `purifiedAt` 非空的领域，按净化时间**新者前**（老板最后看见
  *   自己刚净化的那一个在最上面）。称号取 `bossFlow.bossNameOf`（存档有就用，否则默认模板）。
- * - **彩蛋**：`assets/narrative/eggs.json`（预置 4 领域手写；LORE §5.4）。自建领域在 MVP
- *   期**没有**彩蛋——R-P4-a 把 LLM 全线移到 Plan 5，故这里如实显示「已净化」而不是编一段
+ * - **彩蛋**：预置领域取 `assets/narrative/eggs.json`（LORE §5.4）；自建领域自 Plan 5 · T5
+ *   起可以有一条自己的 `deck.egg`（AI 产出经玩家点「用这段」后才写进去）。取值优先级是
+ *   `deck.egg` → `eggs.json` 的键 → 字面「已净化」：没有彩蛋的领域如实留白，绝不编一段
  *   假冷知识（编造内容比留白更糟）。
  * - **行记**：两块内容——
  *   ① 三幕暗线（LORE §5.3），解锁判据是 `settings.story.arcSeen`（由净化数 3/6/9 驱动，
@@ -24,6 +25,7 @@ import type { ControllerSnapshot, GameController } from '../app/controllerTypes'
 import { bossNameOf, purifiedCount } from '../app/bossFlow';
 import { nextBeat, type BeatEntry } from './beats';
 import { h, setHidden } from './dom';
+import { showToast } from './toast';
 
 /** 一幕暗线的展示数据（与 assets/narrative/arc.json 同形）。 */
 export interface ArcAct {
@@ -46,6 +48,15 @@ export interface CodexDeps {
   readonly beats?: readonly BeatEntry[];
   /** 历史战报最多显示多少条（缺省 20；越久越早的会被截掉）。 */
   readonly beatHistoryLimit?: number;
+  /**
+   * AI 彩蛋生成（Plan 5 · T5；宿主接 `app/llmFlow.suggestEgg`）。缺省则隐藏该入口。
+   * 它**只回文本**：写入仍要玩家点「用这段」→ `setEgg`。
+   */
+  readonly llmEgg?: (deckName: string) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
+  /** 彩蛋写口（宿主接 `app/codexFlow.setEggOnDeck`）。缺省则隐藏该入口。 */
+  readonly setEgg?: (deckId: string, text: string) => Promise<{ ok: boolean; reason?: string }>;
+  /** toast 存活毫秒（彩蛋回执用；测试给 0 免定时器）。 */
+  readonly toastMs?: number;
   /** 时区偏移（净化日期显示用；日期本体取 deck.purifiedAt，故不需要时钟）。 */
   readonly tzOffsetMin?: number;
 }
@@ -95,6 +106,18 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
       ? Math.floor(deps.beatHistoryLimit)
       : 20;
   const tzOffsetMin = typeof deps.tzOffsetMin === 'number' && Number.isFinite(deps.tzOffsetMin) ? deps.tzOffsetMin : 0;
+  /** 生成口与写入口**都在**才显示「让 AI 写彩蛋」（缺一个就是不显示点了没反应的入口）。 */
+  const canAuthorEgg = typeof deps.llmEgg === 'function' && typeof deps.setEgg === 'function';
+  let toastOff: (() => void) | null = null;
+  /** 正在生成彩蛋的领域 id（null = 没有在途请求）；生成中禁用所有「让 AI 写彩蛋」。 */
+  let eggBusyDeckId: string | null = null;
+  /** 「用这段」在途（写入中禁用两键，免得半途重复提交）。 */
+  let eggAccepting = false;
+  /** 预览归属的领域与其正文（null = 没有预览）。 */
+  let previewDeckId: string | null = null;
+  let previewText = '';
+  /** 每个条目行上的「让 AI 写彩蛋」按钮（render 里逐个刷 disabled，不重建整个列表）。 */
+  const eggButtons = new Map<string, HTMLButtonElement>();
 
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
   const countEl = h('span', { 'data-ui': 'codex-count', class: 'codex-count' });
@@ -123,10 +146,25 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
   ]);
   journalEl.appendChild(beatSectionEl);
 
+  /**
+   * AI 彩蛋预览区（Plan 5 · T5）：**全屏一个**（不是每行一个），因为同一时刻只该有一份
+   * 待确认的产出——多份预览会让"「用这段」到底写进哪个领域"变得含糊。
+   */
+  const eggPreviewTextEl = h('p', { 'data-ui': 'egg-preview-text', class: 'egg-preview-text' });
+  const eggAcceptBtn = h('button', { 'data-ui': 'egg-accept', class: 'egg-accept', type: 'button' }, '用这段') as HTMLButtonElement;
+  const eggDiscardBtn = h('button', { 'data-ui': 'egg-discard', class: 'egg-discard', type: 'button' }, '不要') as HTMLButtonElement;
+  const eggPreviewEl = h('section', { 'data-ui': 'egg-preview', class: 'egg-preview', hidden: true }, [
+    h('h4', { class: 'field-title' }, 'AI 写的彩蛋'),
+    eggPreviewTextEl,
+    eggAcceptBtn,
+    eggDiscardBtn,
+  ]);
+
   const screen = h('div', { 'data-ui': 'codex-screen', class: 'codex-screen' }, [
     headerEl,
     listEl,
     emptyEl,
+    eggPreviewEl,
     journalEl,
   ]);
   root.appendChild(screen);
@@ -139,7 +177,11 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
   /* ------------------------------------------------------------ 条目 */
   function entryRow(entry: CodexEntry, cards: readonly Card[]): HTMLElement {
     const deck = entry.deck;
-    const egg = typeof eggs[deck.id] === 'string' ? eggs[deck.id] : '';
+    // 取值优先级（Plan 5 · T5）：自建领域的 `deck.egg` → 预置 eggs.json 的键 → 字面「已净化」。
+    // 自建领域优先读自己的字段，玩家 AI 写过的彩蛋因此不会被空白的预置表盖掉。
+    const presetEgg = typeof eggs[deck.id] === 'string' ? eggs[deck.id] : '';
+    const ownEgg = typeof deck.egg === 'string' ? deck.egg : '';
+    const egg = ownEgg.length > 0 ? ownEgg : presetEgg;
     const n = deckCardCount(cards, deck.id);
     const practice = h(
       'button',
@@ -149,14 +191,29 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
     if (typeof deps.onPractice === 'function') practice.addEventListener('click', () => deps.onPractice?.(deck.id));
     else practice.disabled = true;
 
-    return h('li', { 'data-codex-entry': deck.id, class: 'codex-entry' }, [
+    const kids: HTMLElement[] = [
       h('h3', { 'data-ui': 'entry-name', class: 'entry-name' }, bossNameOf(deck)),
       h('div', { 'data-ui': 'entry-meta', class: 'entry-meta' }, [
         `${n} 张卡 · 净化于 ${localDayString(entry.purifiedAt, tzOffsetMin)}`,
       ]),
       h('p', { 'data-ui': 'entry-egg', class: 'entry-egg' }, egg.length > 0 ? egg : '已净化'),
       practice,
-    ]);
+    ];
+
+    // 「让 AI 写彩蛋」：**只对还没有彩蛋的领域**显示（既非预置键、也没有 deck.egg）——
+    // 已有彩蛋的领域再挂一个生成入口，只会诱使玩家覆盖掉自己已经满意的那段。
+    if (canAuthorEgg && egg.length === 0) {
+      const aiBtn = h(
+        'button',
+        { 'data-ui': 'egg-ai', 'data-egg-deck': deck.id, class: 'egg-ai-btn', type: 'button' },
+        '让 AI 写彩蛋',
+      ) as HTMLButtonElement;
+      aiBtn.addEventListener('click', () => void onWriteEgg(deck.id));
+      eggButtons.set(deck.id, aiBtn);
+      kids.push(aiBtn);
+    }
+
+    return h('li', { 'data-codex-entry': deck.id, class: 'codex-entry' }, kids);
   }
 
   /* ------------------------------------------------------------ 行记（三幕） */
@@ -231,23 +288,109 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
 
     // 指纹带**逐领域**卡数（评审 m-6）：只用全库 cards.length 时，卡在两个领域间搬移
     // （总数不变）不会刷新条目里的「N 张卡」——T7 的卡组页刚因同类问题修过。
+    // 【Plan 5 · T5 扩指纹】`deck.egg` 也必须进指纹：否则「用这段」写进去之后快照虽变、
+    // 条目却继续显示「已净化」（内容变了不重建 = 屏上违背权威存档）。
     const key = entries
-      .map((e) => `${e.deck.id}:${e.deck.bossName ?? ''}:${e.purifiedAt}:${deckCardCount(cards, e.deck.id)}`)
+      .map(
+        (e) =>
+          `${e.deck.id}:${e.deck.bossName ?? ''}:${e.purifiedAt}:${deckCardCount(cards, e.deck.id)}:${e.deck.egg ?? ''}`,
+      )
       .join('|');
     if (key !== listKey) {
       listKey = key;
+      eggButtons.clear(); // 列表重建 ⇒ 旧按钮全部作废（避免 Map 里留着已摘掉的节点）
       listEl.replaceChildren();
       for (const entry of entries) listEl.appendChild(entryRow(entry, cards));
       setHidden(emptyEl, entries.length > 0);
     }
     countEl.textContent = entries.length === 0 ? '空卷' : `已净化 ${purifiedCount(save)} 个领域`;
 
+    // 生成/写入在途 ⇒ 所有「让 AI 写彩蛋」禁用；预览区只由 previewDeckId 驱动显隐
+    for (const btn of eggButtons.values()) btn.disabled = eggBusyDeckId !== null || eggAccepting;
+    setHidden(eggPreviewEl, previewDeckId === null);
+    eggAcceptBtn.disabled = eggAccepting;
+    eggDiscardBtn.disabled = eggAccepting;
+
     renderJournal(save.settings.story.arcSeen);
     renderBeatHistory(save.settings.story.beatIndex);
     setHidden(backBtn, typeof deps.onNav !== 'function');
   }
 
+  /* ------------------------------------------------------------ AI 彩蛋（Plan 5 · T5） */
+  function toast(text: string): void {
+    toastOff?.();
+    toastOff = showToast(screen, text, { ms: deps.toastMs });
+  }
+
+  /** 收起预览（零写入）：预览只是"待确认的草稿"，丢掉它不碰存档。 */
+  function clearPreview(): void {
+    previewDeckId = null;
+    previewText = '';
+    eggPreviewTextEl.textContent = '';
+    setHidden(eggPreviewEl, true);
+  }
+
+  /**
+   * 「让 AI 写彩蛋」：生成中禁用 → 把正文放进预览区等玩家确认。
+   * 失败只 toast 一句人话（不抛、不写盘）；**成功也不写盘**——写入要等「用这段」。
+   */
+  async function onWriteEgg(deckId: string): Promise<void> {
+    if (destroyed || eggBusyDeckId !== null || eggAccepting || !deps.llmEgg) return;
+    const deck = ctrl.snapshot().save?.decks.find((d) => d.id === deckId);
+    eggBusyDeckId = deckId;
+    clearPreview(); // 一次只留一份待确认产出（见 eggPreviewEl 的注释）
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.llmEgg(deck?.name ?? '');
+      if (destroyed || eggBusyDeckId !== deckId) return; // 屏已拆/已换目标：结果作废
+      if (!res || res.ok !== true) {
+        toast(res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : 'AI 没能写出彩蛋。');
+        return;
+      }
+      previewDeckId = deckId;
+      previewText = res.text;
+      eggPreviewTextEl.textContent = res.text;
+      setHidden(eggPreviewEl, false);
+    } catch (e) {
+      if (!destroyed) toast(`AI 写彩蛋失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      if (eggBusyDeckId === deckId) eggBusyDeckId = null;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  /** 「用这段」：唯一写入口（`deps.setEgg` → app/codexFlow.setEggOnDeck → deck.egg）。 */
+  async function onAcceptEgg(): Promise<void> {
+    if (destroyed || eggAccepting || previewDeckId === null || !deps.setEgg) return;
+    const deckId = previewDeckId;
+    const text = previewText;
+    eggAccepting = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.setEgg(deckId, text);
+      if (destroyed) return;
+      if (res && res.ok) {
+        clearPreview();
+        toast('彩蛋已写进图鉴。');
+      } else {
+        // 写失败时**保留预览**：玩家的文本还在，可以再点一次（而不是白等一场）
+        toast(res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : '彩蛋没能写进存档。');
+      }
+    } catch (e) {
+      if (!destroyed) toast(`彩蛋没能写进存档：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      eggAccepting = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
   backBtn.addEventListener('click', () => deps.onNav?.('menu'));
+  eggAcceptBtn.addEventListener('click', () => void onAcceptEgg());
+  eggDiscardBtn.addEventListener('click', () => {
+    if (destroyed || eggAccepting) return;
+    clearPreview();
+    render(ctrl.snapshot());
+  });
   const unsubscribe = ctrl.subscribe((snap) => {
     if (destroyed) return;
     render(snap);
@@ -258,6 +401,10 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
     if (destroyed) return;
     destroyed = true;
     unsubscribe();
+    if (toastOff) {
+      toastOff();
+      toastOff = null;
+    }
     screen.remove();
   }
 

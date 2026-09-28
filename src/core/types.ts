@@ -55,6 +55,14 @@ export interface Deck {
   isPreset: boolean;
   bossName?: string; // 卷灵称号；预置手写，自建默认模板 + 首次触发询问
   purifiedAt?: number; // 净化时间戳（undefined = 未净化）
+  /**
+   * 自建领域的 AI 彩蛋正文（Plan 5 · T5，可选扩位）；缺席 = 没有
+   * （预置领域用 assets/narrative/eggs.json 的键，不走本字段）。
+   *
+   * 三段式：可选 + 在场严检（saveMigrate 要求非空字符串且码点 ≤200）+ 不补默认。
+   * 取值优先级由 ui/codex 负责：`deck.egg` → `eggs.json[deck.id]` → 字面「已净化」。
+   */
+  egg?: string;
 }
 
 /** 战斗相关设置（Plan 2 · Task 8 新增；v2.1 之前的旧档缺此字段，由 migrateSave 补默认）。 */

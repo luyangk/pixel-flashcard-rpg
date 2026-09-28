@@ -21,6 +21,7 @@
  * `screen.remove()` 即拆干净；唯一需要显式撤销的是对控制器的订阅。
  */
 import type { Card, Deck } from '@core/types';
+import type { NameCandidate, ParseResult } from '@core/llmParse';
 import type { ControllerSnapshot, GameController, StartErrorCode } from '../app/controllerTypes';
 import {
   bossFightParams,
@@ -46,6 +47,11 @@ export interface PrepareDeps {
    * 这样没有写口的宿主（测试/降级装配）也不会卡在弹窗上。
    */
   readonly setBossName?: (deckId: string, raw: string) => Promise<BossNameResult>;
+  /**
+   * AI 起名（Plan 5 · T5；宿主接 `app/llmFlow.suggestBossNames`）。缺省则弹窗里不显示该入口。
+   * 它**只回候选**：点候选只把名字填进输入框，入库仍走既有「就用这个名字」→ `setBossName`。
+   */
+  readonly llmNames?: (deckName: string) => Promise<ParseResult<NameCandidate>>;
   /** toast 存活毫秒（称号回执用；测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -101,6 +107,10 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
   let toastOff: (() => void) | null = null;
   /** 正在等称号输入的领域 id（null = 没开弹窗）。 */
   let namingDeckId: string | null = null;
+  /** AI 起名在途（禁用按钮防连点；**不**禁用确认，玩家随时可以手打名字走既有路径）。 */
+  let nameAiBusy = false;
+  /** 代际令牌：关窗/重开会让在途的旧请求作废，免得候选写进下一次弹窗。 */
+  let nameAiToken = 0;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const chipsEl = h('div', { 'data-ui': 'deck-chips', class: 'deck-chips' });
@@ -138,10 +148,21 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     { 'data-ui': 'boss-name-confirm', class: 'boss-name-confirm', type: 'button' },
     '就用这个名字',
   ) as HTMLButtonElement;
+  /* AI 起名（Plan 5 · T5）：只回候选、只填输入框——入库的唯一路径仍是「就用这个名字」。 */
+  const bossNameAiBtn = h(
+    'button',
+    { 'data-ui': 'boss-name-ai', class: 'boss-name-ai', type: 'button' },
+    '让 AI 起几个名',
+  ) as HTMLButtonElement;
+  const bossNameAiStatusEl = h('p', { 'data-ui': 'boss-name-ai-status', class: 'boss-name-ai-status' });
+  const bossNameAiListEl = h('div', { 'data-ui': 'boss-name-ai-list', class: 'boss-name-ai-list' });
   const bossNameDialog = h('div', { 'data-ui': 'boss-name-dialog', class: 'boss-name-dialog', hidden: true }, [
     h('h3', { 'data-ui': 'boss-name-title', class: 'boss-name-title' }, '给它起个称号'),
     h('p', { class: 'boss-name-hint' }, '自建领域的卷灵第一次现身——它的称号由你定，最多 30 字。'),
     bossNameInput,
+    bossNameAiBtn,
+    bossNameAiStatusEl,
+    bossNameAiListEl,
     bossNameDefaultBtn,
     bossNameConfirmBtn,
   ]);
@@ -251,9 +272,11 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
       bossNameInput.placeholder = defaultBossName(namingDeck.name);
       setHidden(bossNameDefaultBtn, typeof deps.setBossName !== 'function');
       setHidden(bossNameConfirmBtn, typeof deps.setBossName !== 'function');
+      setHidden(bossNameAiBtn, typeof deps.llmNames !== 'function');
     }
     bossNameDefaultBtn.disabled = pending;
     bossNameConfirmBtn.disabled = pending;
+    bossNameAiBtn.disabled = pending || nameAiBusy;
 
     const err = snap.lastError;
     setHidden(errorEl, err === null);
@@ -306,10 +329,60 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     if (needName && typeof deps.setBossName === 'function') {
       namingDeckId = deckId;
       bossNameInput.value = '';
+      // 每次开窗都把 AI 区清干净，并让上一次的在途请求作废（候选绝不跨窗串台）
+      nameAiToken += 1;
+      nameAiBusy = false;
+      bossNameAiStatusEl.textContent = '';
+      bossNameAiListEl.replaceChildren();
       render(ctrl.snapshot());
       return;
     }
     void startBoss(deckId);
+  }
+
+  /**
+   * 「让 AI 起几个名」：生成中禁用入口 → 渲染候选按钮。
+   * 候选**只填输入框**（`bossNameInput.value = name`），绝不直接调 `setBossName`：
+   * 入库必须经过玩家再点一次「就用这个名字」，这是"产出不可信"的硬闸门。
+   * 失败只把 reason 写进状态行（人话，已是可上屏文案），不抛、不关窗——玩家还能手打。
+   */
+  async function onAskNames(): Promise<void> {
+    if (destroyed || pending || nameAiBusy || !deps.llmNames || namingDeckId === null) return;
+    const deckId = namingDeckId;
+    const deck = ctrl.snapshot().save.decks.find((d) => d.id === deckId);
+    const token = ++nameAiToken;
+    nameAiBusy = true;
+    bossNameAiListEl.replaceChildren();
+    bossNameAiStatusEl.textContent = '正在生成…';
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.llmNames(deck?.name ?? '');
+      if (destroyed || token !== nameAiToken) return; // 已关窗/重开：结果作废（零写入）
+      if (!res || res.ok !== true) {
+        bossNameAiStatusEl.textContent =
+          res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : 'AI 没能给出名字。';
+        return;
+      }
+      bossNameAiStatusEl.textContent = res.truncated ? `已截断为前 ${res.value.length} 个。` : '';
+      res.value.forEach((candidate, i) => {
+        const b = h(
+          'button',
+          { 'data-name-candidate': String(i), class: 'name-candidate', type: 'button' },
+          candidate.name,
+        ) as HTMLButtonElement;
+        b.addEventListener('click', () => {
+          bossNameInput.value = candidate.name; // 只填框；写盘归「就用这个名字」
+        });
+        bossNameAiListEl.appendChild(b);
+      });
+    } catch (e) {
+      if (!destroyed && token === nameAiToken) {
+        bossNameAiStatusEl.textContent = `AI 起名失败：${e instanceof Error ? e.message : String(e)}`;
+      }
+    } finally {
+      if (token === nameAiToken) nameAiBusy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
   }
 
   async function confirmBossName(useDefault: boolean): Promise<void> {
@@ -370,6 +443,7 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
   for (const [s, b] of sizeButtons) b.addEventListener('click', () => onPickSize(s));
   bossNameDefaultBtn.addEventListener('click', () => void confirmBossName(true));
   bossNameConfirmBtn.addEventListener('click', () => void confirmBossName(false));
+  bossNameAiBtn.addEventListener('click', () => void onAskNames());
   startBtn.addEventListener('click', () => void onStart());
   errorGoBtn.addEventListener('click', () => deps.onNav?.('decks'));
   backBtn.addEventListener('click', () => deps.onNav?.('menu'));

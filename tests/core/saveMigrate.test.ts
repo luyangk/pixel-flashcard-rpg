@@ -156,6 +156,52 @@ describe('validateSave —— 合法存档', () => {
     expect(r.ok).toBe(true);
   });
 
+  /**
+   * Plan 5 · T5：`deck.egg` 三段式第一段——**合法侧**（含码点边界）。
+   * 判别力：把"≤200"写成"<200"（或按 `.length` 算 emoji）的实现在这一条上必红——
+   * 200 个汉字必须过，且 200 个**码点**的 emoji 串也必须过（`.length` 会算出 400）。
+   */
+  it('egg 合法：普通短文过、恰 200 码点过（含代理对，按码点数不按 UTF-16 长度）', () => {
+    const raw = sample();
+    const decks = raw.decks as Record<string, unknown>[];
+    decks[0].egg = '雷声与闪电本是同一件事。';
+    decks[1].egg = '字'.repeat(200); // 恰在上限
+    const r = validateSave(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.save.decks[0].egg).toBe('雷声与闪电本是同一件事。');
+
+    const raw2 = sample();
+    (raw2.decks as Record<string, unknown>[])[0].egg = '⚡'.repeat(200); // 200 码点 = 400 UTF-16 长度
+    expect(validateSave(raw2).ok).toBe(true);
+  });
+
+  /**
+   * Plan 5 · T5 第二段：**在场严检**。非字符串 / 空串 / 只空白 / 超长（201 码点）一律整包拒，
+   * 且 reason 带 `decks[i].egg` 路径。
+   * 判别力：只做"是字符串就放行"的实现（无空值与长度检查）在这条上必红。
+   */
+  it('egg 非法：非字符串/空串/全空白/超 200 码点 → 拒且 reason 含 decks[i].egg', () => {
+    const bads: unknown[] = [123, null, '', '   ', '\n\t ', 1, { text: 'x' }, '字'.repeat(201)];
+    for (const bad of bads) {
+      const raw = sample();
+      (raw.decks as Record<string, unknown>[])[1].egg = bad;
+      const r = validateSave(raw);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain('decks[1].egg');
+    }
+  });
+
+  it('egg 缺席不拒（可选位，与 bossName/purifiedAt 同性质）；migrateSave 也不补默认', () => {
+    const raw = sample();
+    const decks = raw.decks as Record<string, unknown>[];
+    for (const d of decks) delete d.egg;
+    const r = validateSave(raw);
+    expect(r.ok).toBe(true);
+
+    const migrated = migrateSave(raw);
+    for (const d of migrated.decks) expect('egg' in d).toBe(false);
+  });
+
   it('空 decks/cards/tags/effectiveReviewDays 数组合法', () => {
     const raw = sample();
     raw.decks = [];

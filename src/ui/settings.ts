@@ -16,8 +16,33 @@ import type { Sm2Params } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import type { SettingsWriteResult } from '../app/settingsFlow';
 import { BOSS_TIERS, POOL_SIZE_MIN, POOL_SIZE_MAX } from '../app/settingsFlow';
+import type { ChatResult, LlmConfig } from '../platform/llmTypes';
+// maskKey 是 Key 展示形态的**唯一权威**（永不回显明文）：设置屏只消费它，不自己拼掩码。
+// 平台 LLM 配置模块的其余读写口仍由宿主装配（见 hostAdapters），本文件只取这一个纯函数。
+import { maskKey } from '../platform/llmConfig';
 import { h, setHidden } from './dom';
 import { showToast } from './toast';
+
+/**
+ * AI（可选）分组的注入面（Plan 5 · T4）。
+ *
+ * 全部经宿主装配：`load/save/clear` 接 `platform/llmConfig`（Key 的唯一存放点），
+ * `test` 接 `platform/llmHttp.chat` 的一次最小请求，`presets` 接 `LLM_PRESETS`。
+ * 本屏**不认识 localStorage、不认识网络**——因此它在测试里可以直接用假实现穷举
+ * "保存时留空是否保留原 Key""失败 toast 说了什么"。
+ */
+export interface LlmSettingsDeps {
+  /** 读当前配置（Key 明文只在内存里过一手，绝不进 DOM）。 */
+  readonly load: () => LlmConfig;
+  /** 写配置（宿主接 platform/llmConfig.saveLlmConfig）。 */
+  readonly save: (cfg: LlmConfig) => void;
+  /** 清 Key（保留地址/模型）。 */
+  readonly clear: () => void;
+  /** 「测试连接」：发一次最小请求，reason 已是人话。 */
+  readonly test: (cfg: LlmConfig) => Promise<ChatResult>;
+  /** 预设（DeepSeek / 通义 / 自定义；**恒不含 Key**）。 */
+  readonly presets: ReadonlyArray<{ readonly id: string; readonly label: string; readonly config: LlmConfig }>;
+}
 
 export interface SettingsDeps {
   /** 返回主菜单。 */
@@ -26,6 +51,8 @@ export interface SettingsDeps {
   readonly setParams?: (params: Sm2Params) => Promise<SettingsWriteResult>;
   readonly setPoolSize?: (size: number) => Promise<SettingsWriteResult>;
   readonly replayPrologue?: () => Promise<SettingsWriteResult>;
+  /** AI（可选）分组；缺省则整组隐藏（不显示点了没反应的入口）。 */
+  readonly llm?: LlmSettingsDeps;
   /** toast 存活毫秒（测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -48,6 +75,14 @@ const PARAM_FIELDS: ReadonlyArray<{ readonly key: keyof Sm2Params; readonly labe
 const TIER_HINT = '阈值越低，卷灵越早现身；引导领域「生活常识」恒为 15 次。';
 
 /**
+ * AI 分组的文案（LS#6 要求如实两条：Key 只在本机、不进备份；换设备要重填）。
+ * 也顺带说清"留空保存 = 不改动已存的 Key"与"清除要用按钮"——否则玩家会以为
+ * 输入框空着就是把 Key 删了（或以为页面在偷偷留着他的 Key 却不显示）。
+ */
+const LLM_KEY_HINT = 'Key 只存在这台设备的浏览器里（本地明文），不进备份文件；换设备要重新填一次。';
+const LLM_INPUT_HINT = '保存时 Key 留空 = 不改动已存的 Key；想清掉请点「清除 Key」。';
+
+/**
  * 在 root 里挂设置屏。所有写入都是"点一下/保存一次"的显式动作，屏幕自己不攒状态
  * （唯一例外是 SM-2 输入框里的草稿值，见文件头第 3 条）。
  */
@@ -59,6 +94,13 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   let toastOff: (() => void) | null = null;
   /** 上次回填输入框所依据的 params 引用（同引用不覆盖玩家草稿）。 */
   let filledFrom: Sm2Params | null = null;
+  /** AI 分组的写口（缺省 = 整组隐藏；见 SettingsDeps.llm）。 */
+  const llmDeps = deps.llm;
+  const canLlm = !!llmDeps && typeof llmDeps.load === 'function' && typeof llmDeps.save === 'function';
+  /** 「测试连接」在途标记（与 busy 分开：一次网络请求不该把阈值/池子按钮一起冻住）。 */
+  let llmBusy = false;
+  /** 当前**已存**的配置（Key 只在这份内存副本里过手，绝不写进任何 DOM 属性/文本）。 */
+  let storedLlm: LlmConfig = { baseUrl: '', apiKey: '', model: '' };
 
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
   const headerEl = h('header', { class: 'settings-header' }, [
@@ -120,12 +162,70 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     replayBtn,
   ]);
 
+  /* ------------------------------------------------------------ AI（可选，Plan 5 · T4） */
+  const llmBaseInput = h('input', {
+    'data-ui': 'llm-base',
+    class: 'llm-input',
+    type: 'text',
+    placeholder: 'https://api.deepseek.com',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  const llmModelInput = h('input', {
+    'data-ui': 'llm-model',
+    class: 'llm-input',
+    type: 'text',
+    placeholder: 'deepseek-chat',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  // Key 输入框：type=password + 只显示掩码 placeholder。**任何路径都不写 value=明文**
+  // （保存成功即清空输入框，改回掩码 placeholder）。
+  const llmKeyInput = h('input', {
+    'data-ui': 'llm-key',
+    class: 'llm-input',
+    type: 'password',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  const llmSaveBtn = h('button', { 'data-ui': 'llm-save', class: 'llm-btn', type: 'button' }, '保存') as HTMLButtonElement;
+  const llmTestBtn = h(
+    'button',
+    { 'data-ui': 'llm-test', class: 'llm-btn', type: 'button' },
+    '测试连接',
+  ) as HTMLButtonElement;
+  const llmClearBtn = h(
+    'button',
+    { 'data-ui': 'llm-clear', class: 'llm-btn', type: 'button' },
+    '清除 Key',
+  ) as HTMLButtonElement;
+
+  const llmPresetButtons = (llmDeps?.presets ?? []).map((preset) => {
+    const b = h(
+      'button',
+      { 'data-llm-preset': preset.id, class: 'llm-preset', type: 'button' },
+      preset.label,
+    ) as HTMLButtonElement;
+    b.addEventListener('click', () => onPickPreset(preset.id));
+    return b;
+  });
+
+  const llmPresetsEl = h('div', { 'data-ui': 'llm-presets', class: 'llm-presets' }, llmPresetButtons);
+  const llmEl = h('section', { 'data-ui': 'llm-group', class: 'settings-group', hidden: !canLlm }, [
+    h('h3', { class: 'field-title' }, 'AI（可选）'),
+    h('p', { class: 'field-hint' }, LLM_KEY_HINT),
+    h('p', { class: 'field-hint' }, LLM_INPUT_HINT),
+    llmPresetsEl,
+    h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, 'Base URL'), llmBaseInput]),
+    h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '模型'), llmModelInput]),
+    h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, 'API Key'), llmKeyInput]),
+    h('div', { class: 'llm-actions' }, [llmSaveBtn, llmTestBtn, llmClearBtn]),
+  ]);
+
   const screen = h('div', { 'data-ui': 'settings-screen', class: 'settings-screen' }, [
     headerEl,
     tierEl,
     poolEl,
     paramEl,
     storyEl,
+    llmEl,
   ]);
   root.appendChild(screen);
 
@@ -154,6 +254,96 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     }
   }
 
+  /* ------------------------------------------------------------ AI 分组的读写 */
+  /** 读一次"已存配置"（加载口异常也不让设置屏炸掉：回落空配置）。 */
+  function readStoredLlm(): LlmConfig {
+    try {
+      const cfg = llmDeps?.load();
+      if (!cfg || typeof cfg !== 'object') return { baseUrl: '', apiKey: '', model: '' };
+      return {
+        baseUrl: typeof cfg.baseUrl === 'string' ? cfg.baseUrl : '',
+        apiKey: typeof cfg.apiKey === 'string' ? cfg.apiKey : '',
+        model: typeof cfg.model === 'string' ? cfg.model : '',
+      };
+    } catch {
+      return { baseUrl: '', apiKey: '', model: '' };
+    }
+  }
+
+  /** 把"已存配置"映到输入框：地址/模型照抄，**Key 只以掩码出现在 placeholder**。 */
+  function applyStoredLlm(): void {
+    llmBaseInput.value = storedLlm.baseUrl;
+    llmModelInput.value = storedLlm.model;
+    llmKeyInput.value = '';
+    llmKeyInput.placeholder = maskKey(storedLlm.apiKey);
+  }
+
+  /** 当前输入框里的配置：Key 留空 ⇒ **沿用已存值**（留空不等于清空，清空要点「清除 Key」）。 */
+  function inputLlmConfig(): LlmConfig {
+    const typed = llmKeyInput.value.trim();
+    return {
+      baseUrl: llmBaseInput.value,
+      apiKey: typed.length > 0 ? typed : storedLlm.apiKey,
+      model: llmModelInput.value,
+    };
+  }
+
+  /**
+   * 预设**只填地址与模型**（预设里恒无 Key）；「自定义」的两个字段是空串，于是清空让玩家自己填。
+   * Key 输入框与已存 Key 都不动——换一家服务商不该顺手把玩家的 Key 抹掉。
+   */
+  function onPickPreset(id: string): void {
+    if (destroyed || llmBusy) return;
+    const preset = (llmDeps?.presets ?? []).find((p) => p.id === id);
+    if (!preset) return;
+    llmBaseInput.value = preset.config.baseUrl;
+    llmModelInput.value = preset.config.model;
+  }
+
+  function onSaveLlm(): void {
+    if (destroyed || llmBusy || !llmDeps) return;
+    try {
+      llmDeps.save(inputLlmConfig());
+    } catch (e) {
+      toast(`没保存：${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    // 回读**真正存下的**那份（platform 侧会 trim 并对空地址/空模型回落默认值），
+    // 于是"屏幕上显示的 = 生效的"；Key 输入框同时清空，DOM 里不残留明文。
+    storedLlm = readStoredLlm();
+    applyStoredLlm();
+    toast('AI 设置已保存。');
+  }
+
+  async function onTestLlm(): Promise<void> {
+    if (destroyed || llmBusy || !llmDeps || typeof llmDeps.test !== 'function') return;
+    llmBusy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await llmDeps.test(inputLlmConfig());
+      if (res && res.ok === true) toast('连接正常。');
+      else toast(res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : '连接失败。');
+    } catch (e) {
+      toast(`连接失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      llmBusy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  function onClearLlm(): void {
+    if (destroyed || llmBusy || !llmDeps || typeof llmDeps.clear !== 'function') return;
+    try {
+      llmDeps.clear();
+    } catch (e) {
+      toast(`没清掉：${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    storedLlm = readStoredLlm();
+    applyStoredLlm();
+    toast('已清除。');
+  }
+
   function render(snap: ControllerSnapshot): void {
     const settings = snap.save?.settings;
     for (const [i, tier] of BOSS_TIERS.entries()) {
@@ -177,6 +367,14 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     saveParamsBtn.disabled = busy || typeof deps.setParams !== 'function';
     replayBtn.disabled = busy || typeof deps.replayPrologue !== 'function';
     setHidden(backBtn, typeof deps.onNav !== 'function');
+
+    // AI 分组：可写口在场的按钮才显示；「测试连接」在途时整组按钮禁用（防连点）。
+    llmSaveBtn.disabled = llmBusy;
+    llmTestBtn.disabled = llmBusy || typeof llmDeps?.test !== 'function';
+    llmClearBtn.disabled = llmBusy || typeof llmDeps?.clear !== 'function';
+    setHidden(llmTestBtn, !canLlm || typeof llmDeps?.test !== 'function');
+    setHidden(llmClearBtn, !canLlm || typeof llmDeps?.clear !== 'function');
+    setHidden(llmPresetsEl, llmPresetButtons.length === 0);
   }
 
   function readParams(): Sm2Params {
@@ -191,6 +389,15 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   backBtn.addEventListener('click', () => deps.onNav?.('menu'));
   saveParamsBtn.addEventListener('click', () => void write(() => deps.setParams?.(readParams()), '参数已保存。'));
   replayBtn.addEventListener('click', () => void write(() => deps.replayPrologue?.(), '再看一次序章吧。'));
+  llmSaveBtn.addEventListener('click', onSaveLlm);
+  llmTestBtn.addEventListener('click', () => void onTestLlm());
+  llmClearBtn.addEventListener('click', onClearLlm);
+
+  // 初次回填：地址/模型照抄已存值，Key 只以掩码形态出现在 placeholder（明文绝不进 DOM）。
+  if (canLlm) {
+    storedLlm = readStoredLlm();
+    applyStoredLlm();
+  }
 
   const unsubscribe = ctrl.subscribe((snap) => {
     if (destroyed) return;

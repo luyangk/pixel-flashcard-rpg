@@ -54,6 +54,8 @@ import type { GameStorage } from '@platform/storage';
 // 日键口径唯一权威在 reviewLedger（R-T6-c）：跨模块 import 复用而非复制——
 // 两者同属 core、无循环依赖，复制反会制造"两份定义各自漂移"的隐患。
 import { DAY_KEY_RE, MAX_EFFECTIVE_DAYS } from './reviewLedger';
+// 彩蛋长度上限的唯一权威在 llmParse（模型产出的同一封顶）：跨模块 import 复用而非复制。
+import { EGG_MAX } from './llmParse';
 
 // ---------------------------------------------------------------------------
 // validateSave
@@ -229,6 +231,21 @@ function requireDayLedger(v: unknown, path: string): void {
     () => `条目数不得超过账本滚动上限 ${MAX_EFFECTIVE_DAYS}，实际为 ${arr.length}`);
 }
 
+/**
+ * 彩蛋正文域（Plan 5 · T5）：**非空字符串**（去首尾空白后非空）且**码点数 ≤ EGG_MAX**。
+ *
+ * 上限取 `core/llmParse.EGG_MAX`（模型产出的同一个封顶）——存档里的彩蛋只有"模型产出经
+ * 玩家确认"与手写两条来源，两者同域才不会出现"UI 收得下、落盘自检整包拒"的裂缝。
+ * 按码点数（`[...s].length`）而不是 `.length`：代理对（emoji）算一个字，与 UI 侧一致。
+ */
+function requireEggText(v: unknown, path: string): void {
+  assertShape(typeof v === 'string' && v.trim().length > 0, path,
+    () => `应为非空字符串，实际为 ${describeValue(v)}`);
+  const points = [...(v as string)].length;
+  assertShape(points <= EGG_MAX, path,
+    () => `彩蛋正文不得超过 ${EGG_MAX} 个字符，实际为 ${points}`);
+}
+
 function validateDeck(raw: unknown, i: number): void {
   const p = `decks[${i}]`;
   const o = requireObject(raw, p);
@@ -237,6 +254,8 @@ function validateDeck(raw: unknown, i: number): void {
   assertShape(isBoolean(o.isPreset), `${p}.isPreset`, () => `应为布尔值，实际为 ${describeValue(o.isPreset)}`);
   if ('bossName' in o && o.bossName !== undefined) requireString(o.bossName, `${p}.bossName`);
   if ('purifiedAt' in o && o.purifiedAt !== undefined) requireTimestamp(o.purifiedAt, `${p}.purifiedAt`);
+  // Plan 5 · T5：可选位（与 bossName 同性质）——在场严检，**缺席不拒**，migrateSave 不补默认
+  if ('egg' in o && o.egg !== undefined) requireEggText(o.egg, `${p}.egg`);
 }
 
 function validateSrs(raw: unknown, path: string): void {

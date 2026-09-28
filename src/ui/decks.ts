@@ -20,6 +20,7 @@
  * 导出的文件名因此可逐字断言。
  */
 import type { Card, Deck } from '@core/types';
+import type { CardCandidate, ParseResult } from '@core/llmParse';
 import { localDayString } from '@core/reviewLedger';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import type { LibraryResult } from '../app/library';
@@ -36,7 +37,16 @@ export interface DecksDeps {
   /** 返回上一屏（缺省不显示返回按钮）。 */
   readonly onNav?: (target: 'menu') => void;
   /** 加卡写口（宿主接 app/library.addCard）。缺省则加卡表单不显示。 */
-  readonly addCard?: (input: { front: string; back: string; deckId: string; id: string }) => Promise<LibraryResult<Card>>;
+  readonly addCard?: (input: {
+    front: string;
+    back: string;
+    deckId: string;
+    id: string;
+    /** Plan 5 · T4：AI 辅建卡走 `'llm'`，手写恒不传（缺省 `'manual'`）。 */
+    sourceType?: 'manual' | 'llm';
+    /** 主题标签（AI 辅建带过来；PRD §3 主题筛选的依据）。缺省 = 无标签。 */
+    tags?: readonly string[];
+  }) => Promise<LibraryResult<Card>>;
   /** 建领域写口（宿主接 app/library.addDeck）。缺省则新建领域表单不显示。 */
   readonly addDeck?: (input: { name: string; id: string }) => Promise<LibraryResult<Deck>>;
   /** 导出编排（宿主接 transfer.exportAndMark）。缺省则导出按钮不显示。 */
@@ -53,6 +63,11 @@ export interface DecksDeps {
   readonly tzOffsetMin?: number;
   /** id 生成位（宿主注入；缺省优先 crypto.randomUUID）。 */
   readonly newId?: () => string;
+  /**
+   * AI 辅建卡（Plan 5 · T4；宿主接 `app/llmFlow.suggestCards`）。缺省则整块隐藏。
+   * 它**只回候选**：写入仍由本屏在玩家逐条勾选/编辑后走 `addCard`。
+   */
+  readonly llmCards?: (input: { text: string; deckName: string; max?: number }) => Promise<ParseResult<CardCandidate>>;
   /** toast 存活毫秒（透传 showToast；测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -97,6 +112,8 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   const canCreateDeck = typeof deps.addDeck === 'function';
   const canExport = typeof deps.exportBackup === 'function' && typeof deps.saveTextFile === 'function';
   const canImport = typeof deps.importBackup === 'function' && typeof deps.pickBackupText === 'function';
+  /** AI 辅建卡要**同时**有生成口与入库口：缺一个就不显示（不显示点了没反应的入口）。 */
+  const canAuthor = typeof deps.llmCards === 'function' && canAdd;
 
   let visible = pageSize;
   let busy = false;
@@ -104,6 +121,17 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   let toastOff: (() => void) | null = null;
   /** 上次渲染列表所依据的指纹（内容变了才重建 DOM）。 */
   let listKey = '';
+  /** AI 辅建卡面板是否展开（展开时隐藏「AI 辅建卡」入口按钮）。 */
+  let authorOpen = false;
+  /** 生成中：禁用生成与入库按钮（防连点、防"边生成边入库"）；**「取消」保持可用**。 */
+  let authorGenerating = false;
+  /** 入库中：三个按钮全禁用——逐条写盘跑到一半被取消会留下"写了几张但没说"。 */
+  let authorSaving = false;
+  /**
+   * 代际令牌：取消/重新生成会让在途的旧请求作废。没有它，玩家点「取消」后
+   * 旧请求回来的候选会**写进已经关掉的面板**（下次展开时凭空出现一批候选）。
+   */
+  let authorToken = 0;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
@@ -142,6 +170,50 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     importBtn,
   ]);
 
+  /* ------------------------------------------------------------ AI 辅建卡（Plan 5 · T4） */
+  const authorText = h('textarea', {
+    'data-ui': 'llm-author-text',
+    class: 'llm-author-text',
+    rows: '5',
+    placeholder: '把一段资料粘在这里（课文、笔记、讲义都行）',
+  }) as HTMLTextAreaElement;
+  const authorRunBtn = h(
+    'button',
+    { 'data-ui': 'llm-author-run', class: 'llm-author-run', type: 'button' },
+    '生成候选',
+  ) as HTMLButtonElement;
+  const authorStatusEl = h('p', { 'data-ui': 'llm-author-status', class: 'llm-author-status' });
+  const authorListEl = h('ul', { 'data-ui': 'llm-author-list', class: 'llm-author-list' });
+  const authorConfirmBtn = h(
+    'button',
+    { 'data-ui': 'llm-author-confirm', class: 'llm-author-confirm', type: 'button' },
+    '加入卡库',
+  ) as HTMLButtonElement;
+  const authorCancelBtn = h(
+    'button',
+    { 'data-ui': 'llm-author-cancel', class: 'llm-author-cancel', type: 'button' },
+    '取消',
+  ) as HTMLButtonElement;
+  const authorEl = h('div', { 'data-ui': 'llm-author', class: 'llm-author', hidden: true }, [
+    authorText,
+    authorRunBtn,
+    authorStatusEl,
+    authorListEl,
+    authorConfirmBtn,
+    authorCancelBtn,
+  ]);
+  const authorOpenBtn = h(
+    'button',
+    { 'data-ui': 'llm-author-open', class: 'llm-author-open', type: 'button' },
+    'AI 辅建卡',
+  ) as HTMLButtonElement;
+  const authorSectionEl = h('section', { 'data-ui': 'llm-author-section', class: 'llm-author-section', hidden: !canAuthor }, [
+    h('h3', { class: 'field-title' }, 'AI 辅建卡'),
+    h('p', { class: 'field-hint' }, '只把这段文字发给 AI；产出先给你逐条改、逐条确认，确认前不会入库。'),
+    authorOpenBtn,
+    authorEl,
+  ]);
+
   const screen = h('div', { 'data-ui': 'decks-screen', class: 'decks-screen' }, [
     headerEl,
     listEl,
@@ -149,6 +221,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     loadMoreBtn,
     addFormEl,
     newDeckEl,
+    authorSectionEl,
     transferEl,
   ]);
   root.appendChild(screen);
@@ -215,6 +288,12 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     setHidden(backBtn, typeof deps.onNav !== 'function');
     setHidden(exportBtn, !canExport);
     setHidden(importBtn, !canImport);
+    // AI 辅建卡：展开时藏入口；生成/入库中把动作按钮禁用（「取消」只在入库中禁用）
+    setHidden(authorOpenBtn, authorOpen);
+    setHidden(authorEl, !authorOpen);
+    authorRunBtn.disabled = authorGenerating || authorSaving;
+    authorConfirmBtn.disabled = authorGenerating || authorSaving;
+    authorCancelBtn.disabled = authorSaving;
   }
 
   /* ------------------------------------------------------------ 交互 */
@@ -317,12 +396,184 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     }
   }
 
+  /* ------------------------------------------------------------ AI 辅建卡交互 */
+  /** 当前下拉选中的领域名（发提示词用；找不到就空串，llmFlow 自己会兜）。 */
+  function selectedDeckName(): string {
+    const decks = Array.isArray(ctrl.snapshot().save?.decks) ? ctrl.snapshot().save.decks : [];
+    const deck = decks.find((d) => d && d.id === deckSelect.value);
+    return deck ? deck.name : '';
+  }
+
+  /**
+   * 收摊：清候选与状态，并让在途请求作废（代际令牌 +1）。
+   * `keepText=true`（「加入卡库」之后）保留粘贴的资料——玩家常常想从同一段资料再生成一批；
+   * 「取消」则连资料一起清掉（那才是"这次不要了"的语义）。
+   */
+  function closeAuthor(keepText = false): void {
+    authorToken += 1;
+    authorOpen = false;
+    authorGenerating = false;
+    if (!keepText) authorText.value = '';
+    authorStatusEl.textContent = '';
+    authorListEl.replaceChildren();
+  }
+
+  function onAuthorOpen(): void {
+    if (destroyed || authorSaving) return;
+    closeAuthor();
+    authorOpen = true;
+    render(ctrl.snapshot());
+  }
+
+  /** 渲染候选：**默认全勾**；正反面都是可编辑输入框，入库读的是此刻输入框里的值。 */
+  function renderCandidates(list: readonly CardCandidate[]): void {
+    authorListEl.replaceChildren();
+    list.forEach((candidate, i) => {
+      const check = h('input', {
+        'data-candidate-check': String(i),
+        class: 'candidate-check',
+        type: 'checkbox',
+      }) as HTMLInputElement;
+      check.checked = true;
+      const front = h('input', {
+        'data-candidate-front': String(i),
+        class: 'candidate-input',
+        type: 'text',
+        placeholder: '正面',
+      }) as HTMLInputElement;
+      front.value = candidate.front;
+      const back = h('input', {
+        'data-candidate-back': String(i),
+        class: 'candidate-input',
+        type: 'text',
+        placeholder: '背面',
+      }) as HTMLInputElement;
+      back.value = candidate.back;
+      // 标签是生成时算出来的分类（PRD §3 的主题筛选依据）：这里只读展示 + 挂在行上，
+      // 确认入库时随卡一起写（**不**做成可编辑——三个输入框已经够挤，且标签改错影响筛选口径）
+      const tagHint = h(
+        'span',
+        { 'data-candidate-tag-text': String(i), class: 'candidate-tags' },
+        candidate.tags.length > 0 ? `标签：${candidate.tags.join('/')}` : '',
+      );
+      authorListEl.appendChild(
+        h(
+          'li',
+          { 'data-candidate': String(i), 'data-candidate-tags': candidate.tags.join('\u0001'), class: 'candidate' },
+          [check, front, back, tagHint],
+        ),
+      );
+    });
+  }
+
+  async function onAuthorRun(): Promise<void> {
+    if (destroyed || authorGenerating || authorSaving || !deps.llmCards) return;
+    const text = authorText.value;
+    if (text.trim().length === 0) {
+      authorStatusEl.textContent = '先粘一段资料进来。';
+      return;
+    }
+    const token = ++authorToken;
+    authorGenerating = true;
+    authorListEl.replaceChildren();
+    authorStatusEl.textContent = '正在生成…';
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.llmCards({ text, deckName: selectedDeckName() });
+      if (destroyed || token !== authorToken) return; // 已被取消/重新生成：结果作废，零写入
+      if (!res || res.ok !== true) {
+        authorStatusEl.textContent = res && typeof res.reason === 'string' ? res.reason : '生成失败。';
+        return;
+      }
+      renderCandidates(res.value);
+      // truncated 是解析器**如实申报**的截断：不静默丢弃，必须让玩家知道少了几条
+      authorStatusEl.textContent = res.truncated
+        ? `已截断为前 ${res.value.length} 条。`
+        : `生成了 ${res.value.length} 条候选，改完再点「加入卡库」。`;
+    } catch (e) {
+      if (!destroyed && token === authorToken) authorStatusEl.textContent = `生成失败：${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      if (token === authorToken) authorGenerating = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  async function onAuthorConfirm(): Promise<void> {
+    if (destroyed || authorGenerating || authorSaving || !deps.addCard) return;
+    const rows = Array.from(authorListEl.children) as HTMLElement[];
+    const picked: Array<{ front: string; back: string; tags: string[] }> = [];
+    for (const row of rows) {
+      const check = row.querySelector('[data-candidate-check]') as HTMLInputElement | null;
+      if (!check || !check.checked) continue; // 取消勾选的**不入库**（含默认勾选后手动取消）
+      const front = (row.querySelector('[data-candidate-front]') as HTMLInputElement | null)?.value ?? '';
+      const back = (row.querySelector('[data-candidate-back]') as HTMLInputElement | null)?.value ?? '';
+      // tags 一起带上：它是 PRD §3 主题筛选的依据，生成时算出来的分类不该在入库时丢掉
+      const tagText = row.getAttribute('data-candidate-tags') ?? '';
+      picked.push({
+        front,
+        back,
+        tags: tagText
+          .split('\u0001')
+          .map((t) => t.trim())
+          .filter((t) => t.length > 0),
+      });
+    }
+    if (picked.length === 0) {
+      authorStatusEl.textContent = '至少勾一张要加入的卡。';
+      return;
+    }
+    const deckId = deckSelect.value;
+    authorSaving = true;
+    render(ctrl.snapshot());
+    let added = 0;
+    const failures: string[] = [];
+    try {
+      // **逐条 await**：一条卡一个写口调用（来源标 llm），失败不中断其余——
+      // 与"整包提交"相比，玩家不会因为第 3 张撞了编号就丢掉前两张。
+      for (const item of picked) {
+        try {
+          const res = await deps.addCard({
+            front: item.front,
+            back: item.back,
+            deckId,
+            id: newId(),
+            sourceType: 'llm',
+            tags: item.tags,
+          });
+          if (res.ok) added += 1;
+          else failures.push(typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : '有一张没加进去。');
+        } catch (e) {
+          failures.push(e instanceof Error ? e.message : String(e));
+        }
+      }
+    } finally {
+      authorSaving = false;
+    }
+    if (destroyed) return;
+    // 失败原因不吞：逐条提示过（下面这行 toast 会覆盖它），故在收尾提示里再带一句最后一次原因
+    toast(
+      failures.length === 0
+        ? `已加入 ${added} 张卡。`
+        : `已加入 ${added} 张卡。有 ${failures.length} 张没能加进去：${failures[failures.length - 1]}`,
+    );
+    closeAuthor(true); // 保留资料：玩家常想从同一段材料再生成一批
+    render(ctrl.snapshot());
+  }
+
   backBtn.addEventListener('click', () => deps.onNav?.('menu'));
   loadMoreBtn.addEventListener('click', onLoadMore);
   addBtn.addEventListener('click', () => void onAddCard());
   createDeckBtn.addEventListener('click', () => void onCreateDeck());
   exportBtn.addEventListener('click', () => void onExport());
   importBtn.addEventListener('click', () => void onImport());
+  authorOpenBtn.addEventListener('click', onAuthorOpen);
+  authorRunBtn.addEventListener('click', () => void onAuthorRun());
+  authorConfirmBtn.addEventListener('click', () => void onAuthorConfirm());
+  authorCancelBtn.addEventListener('click', () => {
+    if (destroyed || authorSaving) return;
+    closeAuthor();
+    render(ctrl.snapshot());
+  });
 
   const unsubscribe = ctrl.subscribe((snap) => {
     if (destroyed) return;

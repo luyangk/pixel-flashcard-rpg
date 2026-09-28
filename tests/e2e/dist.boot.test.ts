@@ -15,11 +15,17 @@
  * 3. 断言序章屏出现且旁白与 LORE §5.1 第一句逐字一致；再连点 8 屏，断言进菜单
  *    （证事件绑定与快照订阅在产物里也是活的）。
  *
- * ## 前置条件与跳过语义
- * 需要 `dist/` 已构建。`npm run verify` 的顺序是 `test → build:only → smoke:dist`，
- * 所以门禁里它一定跑得到；单独跑 `npm test`（未构建）时本文件**显式跳过**并说明原因——
- * 不假装通过，也不因为缺少产物而红。
+ * ## 前置条件与跳过语义（两个条件都满足才跑）
+ * 1. `dist/` 存在；
+ * 2. 环境变量 `DIST_SMOKE=1` —— 由 `npm run smoke:dist` 设置。
+ *
+ * 为什么需要第 2 条：`npm run verify` 的顺序是 `test → build:only → smoke:dist`，
+ * 而**构建前的那次 `npm test` 看到的是上一次构建的 dist**（可能已经过期）。
+ * 早期版本没有这个开关，于是"刚改完 UI 但还没构建"时对产物断言会在 `npm test` 阶段假红
+ * （产物里当然没有新 UI）——那是一次真实的误报，故改成"显式声明我要测产物"。
+ * 跳过不是"假装通过"：`verify` 的最后一段一定会跑它。
  */
+const DIST_SMOKE_ON = process.env.DIST_SMOKE === '1';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -30,11 +36,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DIST = join(ROOT, 'dist');
 const INDEX = join(DIST, 'index.html');
 const hasDist = existsSync(INDEX);
+/** 两个条件都满足才跑（见文件头「跳过语义」）。 */
+const runDistSmoke = hasDist && DIST_SMOKE_ON;
 
 /** 线上基址（相对路径的解析基准；也是我们真正要服务的地址）。 */
 const LIVE_BASE = 'https://luyangk.github.io/pixel-flashcard-rpg/';
 
-describe.skipIf(!hasDist)('真实产物启动冒烟（dist/）', () => {
+describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
   const saved = new Map<string, PropertyDescriptor | undefined>();
 
   /**
@@ -149,5 +157,31 @@ describe.skipIf(!hasDist)('真实产物启动冒烟（dist/）', () => {
     expect(win.document.querySelectorAll('[data-nav]')).toHaveLength(4);
     // 新装玩家拿到了预置内容（六维面板不是占位符）
     expect(win.document.querySelector('[data-stat="level"]')?.textContent).toBe('1');
+  }, 30_000);
+
+  it('DB#4 产物里 AI 接线不落空：设置页有 AI 分组、卡组页有辅建入口（漏透传 ⇒ 必红）', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const click = (sel: string): boolean => {
+      const el = win.document.querySelector(sel) as HTMLElement | null;
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    // 菜单 → 设置：AI 分组必须在（说明 assembleHost 造出的 llm 依赖真的透传到了屏上）
+    expect(click('[data-nav="settings"]'), '菜单里没有设置入口').toBe(true);
+    await settle();
+    expect(win.document.querySelector('[data-ui="settings-screen"]'), '设置屏没挂上').not.toBeNull();
+    expect(win.document.querySelector('[data-ui="llm-group"]'), '设置屏拿不到 llm 依赖（漏透传）').not.toBeNull();
+
+    // 回菜单 → 卡组：辅建卡入口必须在
+    expect(click('[data-ui="back"]')).toBe(true);
+    await settle();
+    expect(click('[data-nav="decks"]')).toBe(true);
+    await settle();
+    expect(win.document.querySelector('[data-ui="llm-author-open"]'), '卡组屏拿不到 llmCards 依赖').not.toBeNull();
   }, 30_000);
 });

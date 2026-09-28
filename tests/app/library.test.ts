@@ -122,6 +122,39 @@ describe('addCard —— 成功路径（真落库）', () => {
     tags.push('污染');
     expect(res.value.tags).toEqual(['历史']);
   });
+
+  /**
+   * Plan 5 · T4：`sourceType` 的溯源落库。
+   * 判别力：把来源写死成 `'manual'` 的实现在 `'llm'` 那条上必红；而**不消毒**、把
+   * 运行时脏值（`'preset'`/`'x'`）原样塞进 `source.type` 的实现会让落盘自检整包拒
+   * （SOURCE_TYPES 不含它们）——`flush()` 与 `validateSave` 两条断言因此都必要。
+   */
+  it('LB#1c sourceType=llm 落 {type:"llm"}；脏值/缺省一律回落 manual 且仍能落盘', async () => {
+    const { coord, store } = await makeCoord(seed());
+    const llm = await addCard(coord, { front: 'f1', back: 'b1', deckId: 'deck-a', id: 'c-llm', nowMs: NOW, sourceType: 'llm' });
+    expect(llm.ok).toBe(true);
+    if (llm.ok) expect(llm.value.source).toEqual({ type: 'llm', createdAt: NOW });
+
+    const manual = await addCard(coord, { front: 'f2', back: 'b2', deckId: 'deck-a', id: 'c-manual', nowMs: NOW });
+    expect(manual.ok).toBe(true);
+    if (manual.ok) expect(manual.value.source).toEqual({ type: 'manual', createdAt: NOW });
+
+    const dirty = await addCard(coord, {
+      front: 'f3',
+      back: 'b3',
+      deckId: 'deck-a',
+      id: 'c-dirty',
+      nowMs: NOW,
+      sourceType: 'preset' as never,
+    });
+    expect(dirty.ok).toBe(true);
+    if (dirty.ok) expect(dirty.value.source).toEqual({ type: 'manual', createdAt: NOW });
+
+    expect(await coord.flush()).toBe(true);
+    const persisted = await store.load();
+    expect(persisted?.cards.map((c) => c.source?.type)).toEqual(['llm', 'manual', 'manual']);
+    expect(() => validateSave(persisted)).not.toThrow();
+  });
 });
 
 describe('addCard —— 拒绝面（不触存储）', () => {

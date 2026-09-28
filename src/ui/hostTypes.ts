@@ -8,6 +8,8 @@
  */
 import type { Card, Deck, Sm2Params } from '@core/types';
 import type { Rng } from '@core/rng';
+import type { CardCandidate, NameCandidate, ParseResult } from '@core/llmParse';
+import type { ChatResult, LlmConfig } from '../platform/llmTypes';
 import type { BossNameResult } from '../app/bossFlow';
 import type { LibraryResult } from '../app/library';
 import type { SettingsWriteResult } from '../app/settingsFlow';
@@ -17,6 +19,7 @@ import type { BattleScreenWindow } from './battleScreen';
 import type { BeatEntry } from './beats';
 import type { ArcAct } from './codex';
 import type { PrologueScene } from './prologue';
+import type { LlmSettingsDeps } from './settings';
 
 /** 假记忆战败演出的注入位（与 result.ts / fakeMemory.ts 的形参同构，避免跨模块再定义）。 */
 export interface Timers {
@@ -42,16 +45,37 @@ export interface HostAdapters {
   readonly newId: () => string;
 
   /* 写口（全部来自 app 层） */
-  readonly addCard?: (input: { front: string; back: string; deckId: string; id: string }) => Promise<LibraryResult<Card>>;
+  readonly addCard?: (input: {
+    front: string;
+    back: string;
+    deckId: string;
+    id: string;
+    /** Plan 5 · T4：AI 辅建卡标 `'llm'`；手写不传（缺省 `'manual'`）。 */
+    sourceType?: 'manual' | 'llm';
+    /** 主题标签（AI 辅建带过来；PRD §3 主题筛选的依据）。缺省 = 无标签。 */
+    tags?: readonly string[];
+  }) => Promise<LibraryResult<Card>>;
   readonly addDeck?: (input: { name: string; id: string }) => Promise<LibraryResult<Deck>>;
   readonly setBossName?: (deckId: string, raw: string) => Promise<BossNameResult>;
   readonly setTier?: (tier: 15 | 30 | 50) => Promise<SettingsWriteResult>;
   readonly setParams?: (params: Sm2Params) => Promise<SettingsWriteResult>;
   readonly setPoolSize?: (size: number) => Promise<SettingsWriteResult>;
   readonly replayPrologue?: () => Promise<SettingsWriteResult>;
+  /** 彩蛋写口（Plan 5 · T5；接 app/codexFlow.setEggOnDeck）。 */
+  readonly setEgg?: (deckId: string, text: string) => Promise<{ ok: boolean; reason?: string }>;
   readonly onBeatDrawn?: (cursor: number) => void;
   readonly onReplay?: () => void;
   readonly onPractice?: (deckId: string) => void;
+
+  /* AI（Plan 5 · T4/T5；全部可选——没有它们时对应 UI 整块隐藏） */
+  /** 设置屏「AI（可选）」分组的读写口（Key 的唯一存放点 + 唯一网络出口）。 */
+  readonly llm?: LlmSettingsDeps;
+  /** 卡组页「AI 辅建卡」（接 app/llmFlow.suggestCards）。 */
+  readonly llmCards?: (input: { text: string; deckName: string; max?: number }) => Promise<ParseResult<CardCandidate>>;
+  /** 备战屏「让 AI 起几个名」（接 app/llmFlow.suggestBossNames）。 */
+  readonly llmNames?: (deckName: string) => Promise<ParseResult<NameCandidate>>;
+  /** 藏书阁「让 AI 写彩蛋」（接 app/llmFlow.suggestEgg）。 */
+  readonly llmEgg?: (deckName: string) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
 
   /* 导入导出与抢救 */
   readonly exportBackup?: () => Promise<ExportAndMarkResult>;

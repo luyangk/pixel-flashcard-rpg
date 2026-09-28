@@ -16,7 +16,7 @@ import type { GameController } from '../../src/app/controllerTypes';
 import type { BattleScreenDeps } from '../../src/ui/battleScreen';
 import { mountHost, resolveView, type HostDeps, type HostRoute } from '../../src/ui/host';
 import type { StageSprites } from '../../src/stage/renderer';
-import { all, click, makeCtrl, makeRoot, makeSave, makeSnap, ui } from './support';
+import { all, click, flushMicrotasks, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, makeSrs, ui } from './support';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -297,5 +297,91 @@ describe('mountHost —— 换屏与本地路由', () => {
     expect(ui(root, 'fake-memory').hidden).toBe(false);
     expect(ui(root, 'fake-back').textContent).toContain('宋朝'); // 篡改后的答案
     expect(fake.getAttribute('data-fake-rule')).toBe('word-swap');
+  });
+});
+
+/**
+ * HS#11 —— Plan 5 · T4/T5：**AI 依赖的透传不落空**。
+ *
+ * 为什么单独立这条（这是真实踩过的坑）：宿主 → 各屏的 deps 是**显式白名单**
+ * （`host.ts` 里逐个字段列出来），`HostAdapters` 上加了字段而 host.ts 忘记透传时，
+ * 四条屏内单测**全绿**、生产里 AI 功能却是死的。这条用例走**真 mountHost**，
+ * 逐个屏断言"注入的假 llm 依赖确实到了屏上"——漏任何一处透传，对应断言必红。
+ */
+describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
+  /** 15 个有效复习日 = 低档阈值 15 的达标线（口径同 prepare.test.ts）。 */
+  const DAYS = Array.from({ length: 15 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);
+
+  function aiSave() {
+    const base = makeSave({
+      decks: [
+        makeDeck('d-boss', '唐诗'), // 未命名自建 + 达标 ⇒ 点 chip 会弹称号窗
+        makeDeck('d-clean', '英语词根', { purifiedAt: 200 }), // 已净化、无彩蛋 ⇒ 挂 AI 彩蛋入口
+      ],
+      cards: [
+        makeCard('c1', { deckId: 'd-boss', srs: makeSrs({ stability: 'review', effectiveReviewDays: DAYS }) }),
+      ],
+    });
+    return { ...base, settings: { ...base.settings, bossThresholdTier: 15 as const } };
+  }
+
+  it('四个屏各自拿到 llm / llmCards / llmNames / llmEgg+setEgg（漏一处透传即红）', async () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: {
+          ...aiSave(),
+          settings: { ...aiSave().settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    const { deps } = adapters({
+      llm: {
+        load: () => ({ baseUrl: 'https://api.deepseek.com', apiKey: 'sk-fake', model: 'deepseek-chat' }),
+        save: () => undefined,
+        clear: () => undefined,
+        test: () => Promise.resolve({ ok: true, text: 'pong' }),
+        presets: [],
+      },
+      llmCards: () => Promise.resolve({ ok: true, value: [{ front: 'f', back: 'b', tags: [] }], truncated: false }),
+      llmNames: () => Promise.resolve({ ok: true, value: [{ name: '诗酒篇·卷灵' }], truncated: false }),
+      llmEgg: () => Promise.resolve({ ok: true, text: '一段彩蛋。' }),
+      setEgg: () => Promise.resolve({ ok: true }),
+      setBossName: () => Promise.resolve({ ok: true, name: 'x' }),
+      // AI 辅建卡还要有入库口才整块显示（缺一个就隐藏——见 decks.canAuthor）
+      addCard: () => Promise.resolve({ ok: true, value: makeCard('new-card') }),
+    });
+    mountHost(root, ctrl, deps);
+
+    // ① 设置屏：llm 分组必须存在且可见（说明 deps.llm 透传成功）
+    click(root.querySelector('[data-nav="settings"]') as HTMLElement);
+    expect(ui(root, 'llm-group').hidden).toBe(false);
+    expect(root.querySelectorAll('[data-ui="llm-key"]')).toHaveLength(1);
+
+    // ② 卡组屏：AI 辅建卡入口
+    click(ui(root, 'back'));
+    click(root.querySelector('[data-nav="decks"]') as HTMLElement);
+    expect(ui(root, 'llm-author-section').hidden).toBe(false);
+    expect(ui(root, 'llm-author-open').hidden).toBe(false);
+
+    // ③ 藏书阁：已净化且无彩蛋的领域挂「让 AI 写彩蛋」
+    click(ui(root, 'back'));
+    click(root.querySelector('[data-nav="codex"]') as HTMLElement);
+    const eggAi = all(root, '[data-ui="egg-ai"]');
+    expect(eggAi).toHaveLength(1);
+    expect(eggAi[0].getAttribute('data-egg-deck')).toBe('d-clean');
+
+    // ④ 备战屏：达标卷灵的称号弹窗里有 AI 起名入口
+    click(ui(root, 'back'));
+    click(root.querySelector('[data-nav="prepare"]') as HTMLElement);
+    click(root.querySelector('[data-boss="d-boss"]') as HTMLElement);
+    expect(ui(root, 'boss-name-dialog').hidden).toBe(false);
+    expect(ui(root, 'boss-name-ai').hidden).toBe(false);
+
+    // ⑤ 透传的是**同一份**依赖：点一下真的能走到假 llmNames（而不是屏内自带空实现）
+    click(ui(root, 'boss-name-ai'));
+    await flushMicrotasks();
+    expect(root.querySelectorAll('[data-name-candidate]')).toHaveLength(1);
   });
 });

@@ -134,6 +134,13 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
     sync(ctrl.snapshot());
   }
 
+  /**
+   * 各屏的挂载点。
+   *
+   * 【易错点】这里是**显式白名单**：`assembleHost` 造出来的依赖（`llm`/`llmCards`/`llmNames`/
+   * `llmEgg`/`setEgg`）如果没在这里透传，功能在生产里就是死的——而"直挂屏组件"的单元测试
+   * 仍然全绿（它们自己传 deps）。Plan 5 的 AI 接线就踩过一次，故这四行单独标注。
+   */
   function mountFor(view: HostView, snap: ControllerSnapshot): { unmount(): void } {
     switch (view.kind) {
       case 'prologue':
@@ -171,15 +178,16 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
         });
       }
       case 'prepare':
-        return mountPrepare(root, ctrl, { onNav: (t) => onNav(t), setBossName: deps.setBossName, toastMs: deps.toastMs });
+        return mountPrepare(root, ctrl, { onNav: (t) => onNav(t), setBossName: deps.setBossName, llmNames: deps.llmNames, toastMs: deps.toastMs });
       case 'screen':
         switch (view.route) {
           case 'prepare':
-            return mountPrepare(root, ctrl, { onNav: (t) => onNav(t), setBossName: deps.setBossName, toastMs: deps.toastMs });
+            return mountPrepare(root, ctrl, { onNav: (t) => onNav(t), setBossName: deps.setBossName, llmNames: deps.llmNames, toastMs: deps.toastMs });
           case 'decks':
             return mountDecks(root, ctrl, {
               onNav: () => onNav('menu'),
               addCard: deps.addCard,
+              llmCards: deps.llmCards,
               addDeck: deps.addDeck,
               exportBackup: deps.exportBackup,
               importBackup: deps.importBackup,
@@ -197,11 +205,14 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               eggs: deps.eggs,
               acts: deps.acts as readonly ArcAct[],
               beats: deps.beats as readonly BeatEntry[],
+              llmEgg: deps.llmEgg,
+              setEgg: deps.setEgg,
               tzOffsetMin: deps.tzOffsetMin,
             });
           case 'settings':
             return mountSettings(root, ctrl, {
               onNav: () => onNav('menu'),
+              llm: deps.llm,
               setTier: deps.setTier,
               setParams: deps.setParams,
               setPoolSize: deps.setPoolSize,
