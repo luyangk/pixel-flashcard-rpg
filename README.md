@@ -28,9 +28,10 @@
 ## 玩一局（本地）
 
 ```bash
-npm install          # 首次；/sdcard（noexec）上还需 node scripts/link-native-bindings.mjs
-npm run dev -- --host 127.0.0.1
-# 手机/浏览器打开 http://127.0.0.1:5173
+npm install                       # 首次；/sdcard（noexec）上还需 node scripts/link-native-bindings.mjs
+npm run dev -- --host 127.0.0.1   # 只在本机浏览器打开 http://127.0.0.1:5173
+# 想在**手机**上玩：绑到局域网，然后用手机浏览器访问 http://<电脑局域网IP>:5173
+npm run dev -- --host 0.0.0.0
 ```
 
 首次启动会自动灌入 4 个预置领域（成语典故 / 英语词根 / 生活常识 / 唐诗，共 30 张手写卡）。
