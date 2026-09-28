@@ -176,6 +176,12 @@ const btn = (root: HTMLElement, grade: string): HTMLButtonElement => {
 };
 const grades = (root: HTMLElement): HTMLButtonElement[] =>
   Array.from(root.querySelectorAll<HTMLButtonElement>('button[data-grade]'));
+/** 两段式作答：先点"看答案"翻面，再自评（评分按钮在未翻面时是禁用的）。 */
+const reveal = (root: HTMLElement): void => {
+  const el = root.querySelector<HTMLButtonElement>('[data-ui="reveal"]');
+  if (!el) throw new Error('missing reveal button');
+  el.click();
+};
 const hidden = (root: HTMLElement, ui: string): boolean =>
   root.querySelector(`[data-ui="${ui}"]`)!.hasAttribute('hidden');
 const text = (root: HTMLElement, ui: string): string =>
@@ -204,6 +210,7 @@ describe('mountBattleScreen —— 结构与四档按钮', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
 
+    reveal(hs.root);
     btn(hs.root, 'good').click();
 
     expect(hs.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.good }]);
@@ -217,6 +224,7 @@ describe('mountBattleScreen —— 结构与四档按钮', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
 
+    reveal(hs.root);
     btn(hs.root, 'easy').click();
     btn(hs.root, 'again').click();
 
@@ -228,19 +236,24 @@ describe('mountBattleScreen —— 结构与四档按钮', () => {
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
     const same = hs.ctrl.snapshot();
 
+    reveal(hs.root);
     btn(hs.root, 'good').click();
     hs.ctrl.push(same); // 旧对象重放：不是"新快照"
     expect(btn(hs.root, 'good').disabled).toBe(true);
 
     hs.ctrl.push(makeSnap({ fight: makeFight(1, [{ kind: 'damage', cardId: 'c1', amount: 12 }]) }));
-    expect(grades(hs.root).every((b) => !b.disabled)).toBe(true);
     expect(text(hs.root, 'card-front')).toContain('q-c2');
+    // 换了卡就必须重新翻面：新卡未看答案前不给评分（两段式语义）
+    expect(grades(hs.root).every((b) => b.disabled)).toBe(true);
+    reveal(hs.root);
+    expect(grades(hs.root).every((b) => !b.disabled)).toBe(true);
   });
 
   it('终局快照（非 answering）不解禁答题按钮', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
 
+    reveal(hs.root);
     btn(hs.root, 'good').click();
     hs.ctrl.push(makeSnap({ fight: makeFight(0, [{ kind: 'end' }], 'won') }));
 
@@ -351,5 +364,45 @@ describe('mountBattleScreen —— rAF / resize / destroy', () => {
     expect(canvas).not.toBeNull();
     expect(canvas!.width).toBe(320);
     expect(canvas!.height).toBe(240);
+  });
+});
+
+/* --------------------------------------------------- T5 评审 Important 回归钉 */
+describe('mountBattleScreen —— 答案归属（跨卡错配的回归钉）', () => {
+  it('R#1 未翻面时四档禁用：看不到答案就无法自评（两段式的机器保证）', () => {
+    const hs = setup();
+    mountBattleScreen(hs.root, hs.ctrl, hs.deps);
+    expect(grades(hs.root).every((b) => b.disabled)).toBe(true);
+    expect(hidden(hs.root, 'card-back')).toBe(true);
+    reveal(hs.root);
+    expect(grades(hs.root).every((b) => !b.disabled)).toBe(true);
+    expect(hidden(hs.root, 'card-back')).toBe(false);
+    expect(text(hs.root, 'card-back')).toContain('a-c1');
+  });
+
+  it('R#2 作答后新快照换卡：答案立刻收回，绝不能把上一张的 back 挂在新 front 上', () => {
+    const hs = setup();
+    mountBattleScreen(hs.root, hs.ctrl, hs.deps);
+    reveal(hs.root);
+    expect(text(hs.root, 'card-back')).toContain('a-c1'); // 旧实现：这张的答案会一直挂着
+
+    btn(hs.root, 'good').click();
+    hs.ctrl.push(makeSnap({ fight: makeFight(1, [{ kind: 'damage', cardId: 'c1', amount: 12 }]) }));
+
+    // 关键断言：front 已是 c2，back 必须隐藏（旧实现此处在整局里持续显示 a-c1）
+    expect(text(hs.root, 'card-front')).toContain('q-c2');
+    expect(hidden(hs.root, 'card-back')).toBe(true);
+    // 隐藏后文本内容不参与可见性判断，故只钉 hidden（内容残留无害，重挂时会重写）
+    expect(text(hs.root, 'card-front')).not.toContain('答案');
+  });
+
+  it('R#3 同一张卡内翻面状态稳定：快照重放不会把答案收回（只按卡 id 重置）', () => {
+    const hs = setup();
+    mountBattleScreen(hs.root, hs.ctrl, hs.deps);
+    reveal(hs.root);
+    const same = hs.ctrl.snapshot();
+    hs.ctrl.push(same); // 重放同一快照对象
+    expect(hidden(hs.root, 'card-back')).toBe(false);
+    expect(text(hs.root, 'card-back')).toContain('a-c1');
   });
 });

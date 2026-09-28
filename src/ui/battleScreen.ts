@@ -15,9 +15,10 @@
  * 4. **脉冲式反馈（T4 教训①）**：只对"本次快照新增的战报条目"显示空转提示与回击飘字，
  *    下一快照即清空。用 `log.some(kind==='miss')` 那种累计口径写，会让提示永远挂着。
  *
- * 卡面流程（自评）：**先只显示 front**；玩家按下一档 = 作答，随即显示那张卡的 back 作为
- * 确认（"我评的是这张"），并停留在屏上直到开新局。作答与下一帧出新题之间没有中间屏，
- * 这是 T5 的既定范围（假记忆演出属 T7）。
+ * 卡面流程（自评，**两段式**）：先只显示 front + "看答案"；翻面后才显示该卡 back 且四档
+ * 解禁；评分后换到下一张卡时，答案立即收回。**答案恒属于当前这张卡**——首版把"上一张的
+ * back"挂在"下一张的 front"上（真实同步快照链路整局错配，评审 Important）。
+ * 假记忆演出属 T7。
  */
 import { GRADES, type Grade } from '@core/sm2';
 import type { BattleEvent } from '@core/battle';
@@ -75,6 +76,9 @@ export interface BattleScreenHandle {
 
 const EMPTY_EVENTS: readonly BattleEvent[] = [];
 
+/** 翻面按钮文案（功能文本大白话；叙事文案归 T6/T7）。 */
+const REVEAL_TEXT = '看答案';
+
 /** 快照是否处于"可以作答"的状态（终局/离开 fight 屏都要锁住四档）。 */
 function canAnswer(snap: ControllerSnapshot): boolean {
   const fight = snap.fight;
@@ -114,7 +118,19 @@ export function mountBattleScreen(
   const missEl = h('div', { 'data-ui': 'miss-hint', class: 'miss-hint', hidden: true }, MISS_HINT_TEXT);
   const frontEl = h('div', { 'data-ui': 'card-front', class: 'card-front' });
   const backEl = h('div', { 'data-ui': 'card-back', class: 'card-back', hidden: true });
-  const cardEl = h('div', { 'data-ui': 'card', class: 'card' }, [frontEl, backEl]);
+  // 两段式翻面：先看题面 → 点"看答案" → 再自评。答案因此恒属于**当前这张卡**，
+  // 不会把上一张卡的 back 挂在下一张卡的 front 上（评审 Important 的修复面）。
+  const revealBtn = h(
+    'button',
+    { 'data-ui': 'reveal', class: 'reveal-btn', type: 'button' },
+    REVEAL_TEXT
+  ) as HTMLButtonElement;
+  revealBtn.addEventListener('click', () => {
+    if (destroyed || !canAnswer(ctrl.snapshot())) return;
+    revealed = true;
+    render(ctrl.snapshot());
+  });
+  const cardEl = h('div', { 'data-ui': 'card', class: 'card' }, [frontEl, revealBtn, backEl]);
 
   const gradeButtons = GRADE_BUTTONS.map((spec) => {
     const b = h(
@@ -158,16 +174,23 @@ export function mountBattleScreen(
     if (destroyed) return;
     const snap = ctrl.snapshot();
     if (snap.fight) stage.frame(snap.fight.state, snap.fight, tMs);
-    frameHandle = raf ? raf(loop) : null;
+    // destroy 可能发生在 frame 回调内：此时不得再用新句柄覆盖 null（否则永不被 cancel）。
+    frameHandle = !destroyed && raf ? raf(loop) : null;
   };
 
   /* ------------------------------------------------------------ 渲染与脉冲 */
   let primed = false; // 首帧只对齐：挂载时已有的历史战报不重放（T4 FX_UNPRIMED 同口径）
   let seenLogLen = 0;
-  let lastGraded: FightView['current'] = null;
+
+  /** 当前显示的是哪张卡：换卡即重置翻面态（答案永远只属于它自己那张 front）。 */
+  let shownCardId: string | null = null;
+  /** 本卡是否已翻面（两段式：看答案 → 自评）。 */
+  let revealed = false;
   let fightPool: readonly string[] | null = null;
   let lastNotice: string | null = null;
   let bannerOff: (() => void) | null = null;
+  /** 未消失的 toast 的 dismiss：unmount/destroy 时一并调用，避免定时器漂到组件外。 */
+  let toastOff: (() => void) | null = null;
 
   /** 只把"本次快照新增的战报条目"当事件；回退（新一局的 log 更短）时全量视为新。 */
   function newEvents(log: readonly BattleEvent[]): readonly BattleEvent[] {
@@ -185,22 +208,32 @@ export function mountBattleScreen(
     return fresh;
   }
 
+  /** 卡面渲染：**只画当前这张卡**——front 常显，back 仅在玩家翻面后显示。 */
   function renderCard(snap: ControllerSnapshot): void {
     const fight = snap.fight;
     const current = fight?.current ?? null;
     frontEl.textContent = current ? current.front : fight ? '本局结束' : '未在战斗中';
-    setHidden(backEl, lastGraded === null);
-    if (lastGraded) {
-      backEl.textContent = `答案：${lastGraded.back}`;
-    }
+    // 翻面属于"当前这张卡"的状态：换卡即收回答案（T5 首版用 lastGraded 把上一张卡的
+    // back 挂在下一张卡的 front 上，真实同步快照链路上整局错配——评审 Important）。
+    const mine = current !== null && shownCardId === current.id;
+    setHidden(backEl, !(mine && revealed));
+    if (mine && revealed) backEl.textContent = `答案：${current.back}`;
+    setHidden(revealBtn, !(current && !(mine && revealed)));
   }
 
   function render(snap: ControllerSnapshot): void {
     const fight = snap.fight;
-    // 换局（池子对象变了）就把上一局的答案确认收掉；fight 清空时也收。
+    // 换局（池子对象变了）就把翻面态收掉；fight 清空时也收。
     if ((fight?.state.pool ?? null) !== fightPool) {
       fightPool = fight?.state.pool ?? null;
-      lastGraded = null;
+      shownCardId = null;
+      revealed = false;
+    }
+    // 换卡（idx 前进）⇒ 新卡从"未翻面"开始：答案永远只属于它自己那张 front。
+    const currentId = fight?.current?.id ?? null;
+    if (currentId !== shownCardId) {
+      shownCardId = currentId;
+      revealed = false;
     }
 
     const fresh = fight ? newEvents(fight.state.log) : ((seenLogLen = 0), EMPTY_EVENTS);
@@ -235,13 +268,15 @@ export function mountBattleScreen(
     if (snap.notice) {
       if (snap.notice !== lastNotice) {
         lastNotice = snap.notice;
-        showToast(screen, snap.notice, { ms: deps.toastMs });
+        toastOff?.(); // 上一条仍在屏上则先撤，避免叠成一摞
+        toastOff = showToast(screen, snap.notice, { ms: deps.toastMs });
       }
     } else {
       lastNotice = null;
     }
 
-    setEnabled(!pending && canAnswer(snap));
+    // 两段式：未翻面不给评分（否则玩家在看不到答案的情况下自评，等同盲打分）。
+    setEnabled(!pending && canAnswer(snap) && revealed);
   }
 
   function setEnabled(on: boolean): void {
@@ -261,14 +296,14 @@ export function mountBattleScreen(
     pending = true;
     snapshotAtClick = snap;
     setEnabled(false);
-    // ② 作答即确认答案：把这张卡的背面显示出来（front 保持到下一快照）。
-    lastGraded = snap.fight?.current ?? null;
+    // ② 作答后本卡保持"已翻面"，直到新快照带来下一张卡（render 内按 id 重置）。
+    revealed = true;
     renderCard(snap);
 
     const unlock = (): void => {
       if (destroyed) return;
       pending = false;
-      setEnabled(canAnswer(ctrl.snapshot()));
+      setEnabled(canAnswer(ctrl.snapshot()) && revealed);
     };
 
     try {
@@ -304,6 +339,10 @@ export function mountBattleScreen(
     if (bannerOff) {
       bannerOff();
       bannerOff = null;
+    }
+    if (toastOff) {
+      toastOff(); // 撤掉在屏 toast 并清它的定时器（否则定时器会漂到组件之外）
+      toastOff = null;
     }
     stage.destroy();
     screen.remove();
