@@ -380,20 +380,27 @@ describe('mountBattleScreen —— 答案归属（跨卡错配的回归钉）', 
     expect(text(hs.root, 'card-back')).toContain('a-c1');
   });
 
-  it('R#2 作答后新快照换卡：答案立刻收回，绝不能把上一张的 back 挂在新 front 上', () => {
+  it('R#2 作答后新快照换卡（**同一 pool 引用**）：答案立刻收回，绝不把上一张的 back 挂在新 front 上', () => {
     const hs = setup();
     mountBattleScreen(hs.root, hs.ctrl, hs.deps);
+    // 判别力关键（二轮评审指出）：旧实现的重置条件是 pool **引用**变化，而真实链路
+    // （battleFlow 的 toView 原样透传 view.pool）整局同一引用。故本用例必须复用同一
+    // pool 换卡，才能在回退成旧逻辑时真的报警——用 makeFight 重建 pool 会让旧实现也绿。
+    const f0 = makeFight(0, []);
+    hs.ctrl.push(makeSnap({ fight: f0 }));
     reveal(hs.root);
-    expect(text(hs.root, 'card-back')).toContain('a-c1'); // 旧实现：这张的答案会一直挂着
+    expect(text(hs.root, 'card-back')).toContain('a-c1');
 
     btn(hs.root, 'good').click();
-    hs.ctrl.push(makeSnap({ fight: makeFight(1, [{ kind: 'damage', cardId: 'c1', amount: 12 }]) }));
+    const f1: FightView = {
+      ...f0,
+      state: { ...f0.state, idx: 1, log: [{ kind: 'damage', cardId: 'c1', amount: 12 }] },
+      current: f0.pool[1] ?? null,
+    };
+    hs.ctrl.push(makeSnap({ fight: f1 }));
 
-    // 关键断言：front 已是 c2，back 必须隐藏（旧实现此处在整局里持续显示 a-c1）
     expect(text(hs.root, 'card-front')).toContain('q-c2');
-    expect(hidden(hs.root, 'card-back')).toBe(true);
-    // 隐藏后文本内容不参与可见性判断，故只钉 hidden（内容残留无害，重挂时会重写）
-    expect(text(hs.root, 'card-front')).not.toContain('答案');
+    expect(hidden(hs.root, 'card-back')).toBe(true); // 旧实现：这里仍显示「答案：a-c1」
   });
 
   it('R#3 同一张卡内翻面状态稳定：快照重放不会把答案收回（只按卡 id 重置）', () => {
