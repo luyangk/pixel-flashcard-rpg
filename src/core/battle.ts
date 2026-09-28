@@ -12,7 +12,8 @@
  * 【N-8】'ready' 相位已删除，BattlePhase 收窄为 'answering'|'won'|'lost'。理由：
  * createBattle 自 Plan 2 起即直落 'answering'，全仓无任何读/写 'ready' 的路径——它是死分支
  * 成员，留着会让上层（src/app/battleFlow）误以为存在"待开始"中间态而写出永不成立的分支。
- * 会话层的阶段机（sessionTypes.Phase：menu/preparing/fighting/result）才是"未开战"的表达位。
+ * 会话层的屏位（controllerTypes.ControllerScreen）才是"未开战"的表达位——
+ * T3 起 sessionTypes.Phase 已删除（零消费死类型，由 ControllerScreen 取代）。
  * createBattle 行为不变（校验、初始 state 逐字同前）。
  *
  * 【N-9】answer 新增可选尾参 asserts：dev 断言回调（默认 undefined ⇒ 零开销、零行为变化）。

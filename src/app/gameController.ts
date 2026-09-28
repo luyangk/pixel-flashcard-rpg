@@ -16,16 +16,15 @@
  * 只读态（D29）：任一写入面抛 SaveReadOnlyError 都被捕获，转为快照 readOnly=true + notice；
  * 调用方（UI）据此常驻横幅。**游戏流程不中断**——玩家可以继续看题，只是不再落盘。
  */
-import type { Grade } from '@core/sm2';
+import { GRADES, type Grade } from '@core/sm2';
 import type { SaveFile } from '@core/types';
 import type { BattleState } from '@core/battle';
 import type { Rng } from '@core/rng';
-import type { PlayerStats } from '@core/stats';
 import type { FightView } from './battleFlow';
 import { answerCurrent, startFight } from './battleFlow';
 import type { Coordinator } from './persist';
 import { playerStatsFor, levelFromExp, settleFight } from './growth';
-import { recordRun, buildRunInput } from './results';
+import { recordRun } from './results';
 import { backupReminderDue } from './backup';
 import type {
   ControllerSnapshot,
@@ -36,6 +35,17 @@ import type {
 } from './controllerTypes';
 
 /** 控制器依赖（全部注入，测试可控；生产由 src/main.ts 装配）。 */
+/**
+ * startFight 失败面（T7 备战屏消费）：
+ * - code 供程序分流（三码各有不同引导动作）；
+ * - message 是可直接上屏的大白话（battleFlow 提供，避免 UI 再拼一遍文案）。
+ */
+export type StartErrorCode = 'invalid-size' | 'no-cards' | 'insufficient-cards';
+export interface StartError {
+  readonly code: StartErrorCode;
+  readonly message: string;
+}
+
 export interface GameControllerDeps {
   readonly coord: Coordinator;
   /** 随机源：一条流贯穿建池与战斗（与 startFight 契约一致）。 */
@@ -58,20 +68,6 @@ function isSaveReadOnlyError(e: unknown): boolean {
   return e instanceof Error && e.name === 'SaveReadOnlyError';
 }
 
-/** 本局评分来源：控制器把"玩家对当前卡的自评"原样透传。 */
-function gradeSink(): { grade: Grade; set(g: Grade): void; get(): Grade } {
-  let current: Grade = 3 as Grade; // good 兜底：未作答过就调 settleFight 属调用方 bug
-  return {
-    get grade() {
-      return current;
-    },
-    set(g: Grade) {
-      current = g;
-    },
-    get: () => current,
-  };
-}
-
 export async function createGameController(deps: GameControllerDeps): Promise<GameController> {
   const { coord, rng, now, tzOffsetMin } = deps;
   const notices = { ...DEFAULT_NOTICE, ...(deps.noticeText ?? {}) };
@@ -79,7 +75,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
   let screen: ControllerScreen = 'menu';
   let fight: FightView | null = null;
   let lastResult: RunSummary | null = null;
-  let lastError: string | null = null;
+  let lastError: StartError | null = null;
   let notice: string | null = null;
   let readOnly = coord.readOnly();
   // 每局的自评记录：settleFight 需要"每张已作答卡当时的 grade"，而 FightView 不存评定。
@@ -126,7 +122,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
   async function settleToStorage(view: FightView): Promise<RunSummary> {
     const save = coord.snapshot();
     const result = settleFight(save.cards, view, {
-      gradeOf: (c) => grades.get(c.id) ?? (3 as Grade),
+      gradeOf: (c) => grades.get(c.id) ?? GRADES.good,
       nowMs: now(),
       tzOffsetMin,
       params: save.settings.sm2Params,
@@ -134,6 +130,12 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     const won = result.won;
     const levelBefore = levelFromExp(save.settings.progress.exp);
 
+    // 顺序说明（与 brief 字面 settleFight→recordRun→settleAndRecord 相反，语义等价且更稳）：
+    // 先落账（exp/plays/cards），再写榜单——recordRun 内部的 flushToClean 收口会把
+    // 前一步的脏一并落盘，且它的 level 取到**含本局 exp** 的等级（results.ts）。
+    // **不变量**：此处两步都不得自行 flush 之外的收口，flush 只由 recordRun 负责
+    // （若后续重构拆掉 recordRun 的 flushToClean，本链的"落盘完成"承诺随之失效——
+    // GC#6 的 exp>0/榜单 1 条/plays=1 三断言即该不变量的回归钉子）。
     await guardedWrite(async () => {
       await coord.settleAndRecord({ cards: result.cards, exp: result.exp, won });
     });
@@ -192,13 +194,13 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
             deckIds: i.deckIds,
             rng,
             nowMs: now(),
-            stats: playerStatsFor(save) as PlayerStats,
+            stats: playerStatsFor(save),
             difficulty: i.difficulty,
           },
         );
         if ('error' in res) {
-          // 失败是值不是异常：屏停留备战，分流文案交给 UI（T7 prepare 屏）。
-          lastError = res.message;
+          // 失败是值不是异常：屏停留备战；码供分流、文案供上屏（T7 prepare 屏消费）。
+          lastError = { code: res.error, message: res.message };
           screen = 'prepare';
           break;
         }
@@ -209,15 +211,23 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         break;
       }
       case 'answer': {
-        if (fight === null) break; // 无战可答：静默忽略（双击/迟到事件的幂等面）
+        if (fight === null) break; // 无战可答：静默忽略
+        // C-1：**相位守卫必须在此**——answerCurrent 只要有当前卡就造新 view（引用不等），
+        // 仅靠 `next === fight` 挡不住"终局后同帧再来一次 answer"（won 提前击杀与气血
+        // 归零型 lost 的 idx 都还在池内）⇒ 会二次结算 exp/plays/榜单并对已答卡重复
+        // applyReview（SRS 双推进=数据损坏）。守卫落在调用前，与 answerCurrent 的
+        // 空卡短路形成双保险。
+        if (fight.state.phase !== 'answering') break;
         const current = fight.pool[fight.state.idx];
         if (current === undefined) break;
         const next = answerCurrent(fight, i.grade, { rng });
-        if (next === fight) break; // 非 answering 态：幂等短路，不重复结算
+        if (next === fight) break; // 空卡/畸形视图：引用幂等短路（相位守卫之上的兜底）
         grades.set(current.id, i.grade);
         fight = next;
         if (next.state.phase === 'won' || next.state.phase === 'lost') {
           lastResult = await settleToStorage(next);
+          // 终局后 fight **刻意保留**：result 屏要展示终局棋盘与战报（controllerTypes
+          // 的快照注释随之澄清为"结算离场（finish/toMenu）后为 null"）。
           screen = 'result';
         }
         break;
@@ -257,12 +267,3 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     },
   };
 }
-
-/** 供 T5/T7 复用的派生工具：把 RunSummary 变成 result 屏的一行摘要文案素材。 */
-export function resultHeadline(r: RunSummary): string {
-  if (!r.won) return '这一局没打完混沌。';
-  return r.leveledUp ? `胜。修为进境，已至 ${r.levelAfter} 级。` : '胜。混沌又退了一尺。';
-}
-
-/** 备用：把 buildRunInput 暴露给需要"预览本局分数"的屏（T7 result 展示）。 */
-export { buildRunInput };

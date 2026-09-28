@@ -10,6 +10,7 @@
 import type { Grade } from '@core/sm2';
 import type { SaveFile } from '@core/types';
 import type { FightView } from './battleFlow';
+import type { StartError } from './gameController';
 
 /**
  * 会话屏幕位（brief verbatim 六值）。
@@ -36,14 +37,16 @@ export type RunSummary = Readonly<{
 
 /**
  * 控制器对外快照（每次 intent 完成后整体换新对象 ⇒ 订阅者浅比较可辨，无 mid-intent 中间态）。
- * - fight：当前战斗视图；不在战斗中（含已结算离场）为 null；
+ * - fight：当前战斗视图；**终局结算后仍保留**（result 屏要展示终局棋盘与战报），
+ *   仅 `finish` / `toMenu` 离场时清空；
  * - save：coord.snapshot() 的权威存档本体（活视图，展示用；改动仍须走 intent/mutate）；
  * - readOnly：SaveReadOnlyError 捕获闩锁位（D29 横幅的数据源，T5/T8 消费）；
  * - reminderDue：备份提醒闸门（backupReminderDue(meta.lastExportedAt, now())），每次快照重算；
  * - lastResult：最近一次终局摘要（finish 前留在 fight 屏供演出；回菜单后清空）；
  * - lastError / notice：两个**互斥用途**的消息位——
- *   lastError：startFight 失败的分流文案（按错误码取 message，屏停留 prepare）；下一次
- *     startFight 成功即清空；answer/toMenu 不清（它是备战屏的错误，不是全局 toast）；
+ *   lastError：startFight 失败面 {code,message}——**屏停留 prepare**，码供程序分流、
+ *     文案供直接上屏；下一次 startFight 成功即清空；answer/toMenu 不清（它是备战屏的
+ *     错误，不是全局 toast）；
  *   notice：一次性 toast 消息位（如只读保护提示）。intent 边界统一清旧值再按需置新值，
  *     UI 消费后可经 toMenu 等自然路径清掉。
  */
@@ -54,7 +57,7 @@ export type ControllerSnapshot = Readonly<{
   readOnly: boolean;
   reminderDue: boolean;
   lastResult: RunSummary | null;
-  lastError: string | null;
+  lastError: StartError | null;
   notice: string | null;
 }>;
 

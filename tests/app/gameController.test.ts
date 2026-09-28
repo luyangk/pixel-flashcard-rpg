@@ -114,7 +114,8 @@ describe('gameController —— 快照链与意图', () => {
     const s = ctrl.snapshot();
     expect(s.screen).toBe('prepare');
     expect(s.fight).toBeNull();
-    expect(s.lastError).toContain('设置');
+    expect(s.lastError?.code).toBe('invalid-size'); // 码供 T7 分流，文案供上屏
+    expect(s.lastError?.message).toContain('设置');
   });
 
   it('GC#4 空库 → lastError 含"还没有卡片"（与 invalid-size 分流），且不抛', async () => {
@@ -122,14 +123,25 @@ describe('gameController —— 快照链与意图', () => {
     const { ctrl } = await makeController([], clock);
     await ctrl.intent({ type: 'startFight', size: 15 });
     const s = ctrl.snapshot();
-    expect(s.lastError).toContain('还没有卡片');
+    expect(s.lastError?.code).toBe('no-cards');
+    expect(s.lastError?.message).toContain('还没有卡片');
+  });
+
+  it('GC#4b 序章管道：skipPrologue / seenPrologue 均落到 menu（屏逻辑归 T6，类型位已建）', async () => {
+    const clock = fakeClock(NOW);
+    const { ctrl } = await makeController([makeCard('c0')], clock);
+    await ctrl.intent({ type: 'skipPrologue' });
+    expect(ctrl.snapshot().screen).toBe('menu');
+    await ctrl.intent({ type: 'seenPrologue' });
+    expect(ctrl.snapshot().screen).toBe('menu'); // T6 前的 no-op 语义
   });
 
   it('GC#5 deckIds 指向空集合 → insufficient-cards 文案报缺口', async () => {
     const clock = fakeClock(NOW);
     const { ctrl } = await makeController([makeCard('c0'), makeCard('c1')], clock);
     await ctrl.intent({ type: 'startFight', size: 5, deckIds: ['nope'] });
-    expect(ctrl.snapshot().lastError).toContain('还差');
+    expect(ctrl.snapshot().lastError?.code).toBe('insufficient-cards');
+    expect(ctrl.snapshot().lastError?.message).toContain('还差');
   });
 });
 
@@ -159,6 +171,10 @@ describe('gameController —— 一局的落库义务（R-T4-d 端到端第三�
     expect(advanced.length).toBeGreaterThan(0);
     expect(snap.lastResult?.misses).toBe(0);
     expect(snap.lastResult?.poolLen).toBe(3);
+    // 等级三字段（T7 result 屏显示"进境几级"的数据源）：L1 新号打完首胜通常不升级
+    expect(snap.lastResult?.levelBefore).toBe(1);
+    expect(snap.lastResult?.levelAfter).toBeGreaterThanOrEqual(1);
+    expect(snap.lastResult?.leveledUp).toBe(snap.lastResult!.levelAfter > snap.lastResult!.levelBefore);
   });
 
   it('GC#7 打输（全 again）→ exp 恒 0、榜单仍记账（kind/lost）、摘要 won=false', async () => {
@@ -209,6 +225,36 @@ describe('gameController —— 一局的落库义务（R-T4-d 端到端第三�
     expect(coord.snapshot().settings.leaderboard).toHaveLength(0);
   });
 
+  it('GC#9b 终局同帧两次 answer：第二次被相位守卫拦下，exp/plays/榜单只记一次（C-1 回归钉）', async () => {
+    const clock = fakeClock(NOW);
+    const cards = [makeCard('c0'), makeCard('c1'), makeCard('c2')];
+    const { ctrl, coord } = await makeController(cards, clock);
+    await ctrl.intent({ type: 'startFight', size: 3 });
+    // 打到终局（won 提前击杀：idx 停在池内，正是旧守卫失效的形状）
+    while (ctrl.snapshot().screen === 'fight') {
+      await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    }
+    const after = {
+      exp: coord.snapshot().settings.progress.exp,
+      plays: coord.snapshot().meta.plays,
+      runs: (coord.snapshot().settings.leaderboard ?? []).length,
+      reps: JSON.stringify(coord.snapshot().cards.map((c) => c.srs.reps)),
+    };
+    // 同帧再来两次 answer：必须完全是 no-op（相位守卫 + answerCurrent 空卡短路双保险）
+    await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    const now2 = {
+      exp: coord.snapshot().settings.progress.exp,
+      plays: coord.snapshot().meta.plays,
+      runs: (coord.snapshot().settings.leaderboard ?? []).length,
+      reps: JSON.stringify(coord.snapshot().cards.map((c) => c.srs.reps)),
+    };
+    expect(now2).toEqual(after);
+    // 反向证明这条用例真能抓 C-1：终局 idx 确实还在池内（否则守卫是多余的）
+    const f = ctrl.snapshot().fight!;
+    expect(f.state.idx).toBeLessThan(f.pool.length);
+  });
+
   it('GC#10 无战可答的 answer intent 静默忽略（双击/迟到事件的幂等面）', async () => {
     const clock = fakeClock(NOW);
     const { ctrl } = await makeController([makeCard('c0')], clock);
@@ -219,30 +265,66 @@ describe('gameController —— 一局的落库义务（R-T4-d 端到端第三�
 });
 
 describe('gameController —— 只读态（D29 数据源）', () => {
-  it('GC#11 只读 coordinator：写路径被翻成快照位，游戏流程不中断、异常不外逃', async () => {
+  /**
+   * 只读 Coordinator 的**受控 fake**（评审 I-2 指出：坏档路线只能造出空种子档，
+   * 永远走不到"有卡却在只读态"的 settle 拒绝面）。接口注入使这条路可达，且比坏档
+   * 更贴真实故障场景（磁盘中途变成只读）——所有写面按 persist 契约抛同名错误。
+   */
+  function makeReadOnlyFake(cards: Card[]): { coord: Coordinator; writes: () => number } {
+    let writes = 0;
+    const save = makeSave(cards);
+    const throwRO = (): never => {
+      const e = new Error('存档不可写（只读态测试夹具）');
+      e.name = 'SaveReadOnlyError';
+      throw e;
+    };
+    const coord: Coordinator = {
+      mutate: async () => throwRO(),
+      flush: async () => false,
+      flushDetailed: async () => ({ ok: false, reason: 'read-only' }),
+      dirty: () => true,
+      lastSavedAt: () => null,
+      snapshot: () => save,
+      markDirty: throwRO,
+      readOnly: () => true,
+      settleAndRecord: async () => {
+        writes += 1;
+        throwRO();
+      },
+      markExported: async () => false,
+    } as unknown as Coordinator;
+    return { coord, writes: () => writes };
+  }
+
+  it('GC#13 只读 + 有卡：整局可打（流程不中断），但 settle 链被拒 → notice 提示、exp/榜单零变化', async () => {
     const clock = fakeClock(NOW);
-    // 造一个不可恢复的坏档（schemaVersion:2）⇒ coordinator 只读闩锁（Plan 3 C-1 机制）。
-    const store = createMemoryStorage();
-    await store.save({ schemaVersion: 2 } as unknown as SaveFile);
-    const coord: Coordinator = await createCoordinator(store, { now: clock.now });
-    expect(coord.readOnly()).toBe(true);
+    const cards = [makeCard('c0'), makeCard('c1'), makeCard('c2')];
+    const { coord, writes } = makeReadOnlyFake(cards);
+    const ctrl = await createGameController({ coord, rng: mulberry32(7), now: clock.now, tzOffsetMin: TZ });
 
-    const ctrl = await createGameController({ coord, rng: mulberry32(3), now: clock.now, tzOffsetMin: TZ });
-    const s0 = ctrl.snapshot();
-    expect(s0.readOnly).toBe(true);
-    expect(s0.notice).toBeNull(); // 初始不弹提示，等第一次写被拒才提示
-
-    // 坏档下种子档接管 ⇒ 空库：startFight 走 no-cards 分流，同样不抛
-    await ctrl.intent({ type: 'startFight', size: 15 });
-    expect(ctrl.snapshot().lastError).toContain('还没有卡片');
     expect(ctrl.snapshot().readOnly).toBe(true);
+    await ctrl.intent({ type: 'startFight', size: 3 });
+    expect(ctrl.snapshot().screen).toBe('fight'); // 只读不影响建战（纯内存视图）
 
-    // 直接派一个会触发写入的意图（手工塞卡后开打并答到底），验证异常被吞成 notice
-    await ctrl.intent({ type: 'startFight', size: 1 });
-    expect(ctrl.snapshot().readOnly).toBe(true); // 仍只读，无未捕获异常
+    while (ctrl.snapshot().screen === 'fight') {
+      await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    }
+    const snap = ctrl.snapshot();
+    // ① 异常被折成快照位而非逃逸：屏照常推进到 result，notice 有可上屏提示
+    expect(snap.screen).toBe('result');
+    expect(snap.readOnly).toBe(true);
+    expect(snap.notice).toBe('存档无法读取，本次进度不会保存。');
+    // ② 写路径被 guardedWrite 的只读早退拦住（未触及 coordinator 写面）……或抛后被捕获；
+    //    两种实现都合规，故这里只钉"数据零变化"这一唯一硬事实。
+    expect(snap.lastResult?.won).toBe(true); // 结算摘要仍产出（内存态可玩）
+    expect(coord.snapshot().settings.progress.exp).toBe(0);
+    expect(coord.snapshot().settings.leaderboard ?? []).toHaveLength(0);
+    expect(coord.snapshot().meta.plays).toBe(0);
+    // ③ 写面最多被触及一次（若实现改为"先试写再捕获"），绝不反复重试
+    expect(writes()).toBeLessThanOrEqual(1);
   });
 
-  it('GC#12 只读态下 settle 链被拒：notice 提示、exp/榜单零变化、store 内容逐字节不变', async () => {
+  it('GC#12（非只读对照）可写会话下同一局正常落库——与 GC#13 构成对照', async () => {
     const clock = fakeClock(NOW);
     const store = createMemoryStorage();
     const good = makeSave([makeCard('c0')]);
@@ -251,14 +333,12 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     await coord.flush();
     const before = JSON.stringify(await store.load());
 
-    // 载入后强行标记只读（模拟运行期磁盘故障）：走 markDirty 会抛，故直接构造只读控制器场景
     const ctrl = await createGameController({ coord, rng: mulberry32(5), now: clock.now, tzOffsetMin: TZ });
     await ctrl.intent({ type: 'startFight', size: 20, deckIds: ['deck-a'] });
     for (let i = 0; i < 3; i++) {
       if (ctrl.snapshot().screen !== 'fight') break;
       await ctrl.intent({ type: 'answer', grade: GRADES.good });
     }
-    // 非只读会话：正常落库（本例用来对照 GC#11 的只读行为，确保测试自身不误报）
     expect(ctrl.snapshot().readOnly).toBe(false);
     expect(JSON.stringify(await store.load())).not.toBe(before); // 有写入发生
   });
