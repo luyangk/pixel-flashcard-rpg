@@ -16,9 +16,10 @@
     "build": "node node_modules/typescript/bin/tsc --noEmit && node node_modules/vite/bin/vite.js build",
     "test": "node node_modules/vitest/vitest.mjs run",
     "build:only": "node node_modules/vite/bin/vite.js build",
+    "smoke:dist": "node node_modules/vitest/vitest.mjs run tests/e2e/dist.boot.test.ts",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
     "check:purity": "node scripts/check-core-purity.mjs",
-    "verify": "npm run typecheck && npm run check:purity && npm test && npm run build:only",
+    "verify": "npm run typecheck && npm run check:purity && npm test && npm run build:only && npm run smoke:dist",
     "postinstall": "node scripts/link-native-bindings.mjs || true"
   }
 }

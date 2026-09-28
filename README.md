@@ -7,7 +7,11 @@
 ## 现在就能玩
 
 **手机浏览器直接打开：<https://luyangk.github.io/pixel-flashcard-rpg/>**
-（GitHub Pages，main 分支推送后自动发布；加到主屏即可当独立 App 用，第二次打开不联网也能玩。）
+（GitHub Pages，main 分支推送后自动发布。）
+
+想当 App 用：在浏览器菜单里选「添加到主屏幕」——之后从图标启动是全屏无地址栏的，
+而且**第二次打开不需要联网**（Service Worker 会把页面、脚本、样式与全部素材缓存下来；
+存档一直在本机 IndexedDB，从不上传）。首次打开建议连着 Wi-Fi 等它加载完再看一眼。
 
 技术底座是四层分离：`src/core/` 纯 TypeScript 逻辑核（零 DOM、零平台 API、时间与随机全部入参化）、
 `src/platform/` 平台能力抽象（IndexedDB / 内存存储、时钟、时区、随机播种、图片与文件口）、
@@ -57,10 +61,10 @@ L1 攻 12 ⇒ 十击约 120 点；首败会把卡推到 `mastered`（每击 18 �
 
 [![CI](https://github.com/luyangk/pixel-flashcard-rpg/actions/workflows/ci.yml/badge.svg)](https://github.com/luyangk/pixel-flashcard-rpg/actions/workflows/ci.yml)
 
-一条命令跑完三段门禁，**全绿才允许 commit**（CI 在 push / PR 上跑同一条命令）：
+一条命令跑完五段门禁，**全绿才允许 commit**（CI 与部署流水线跑的都是这一条）：
 
 ```bash
-npm run verify        # = typecheck && check:purity && test && build:only
+npm run verify        # = typecheck && check:purity && test && build:only && smoke:dist
 ```
 
 | 段 | 命令 | 把什么变成机器检查 |
@@ -69,6 +73,7 @@ npm run verify        # = typecheck && check:purity && test && build:only
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
 | 测试 | `npm test` | Vitest 全量（当前 **51 文件 / 814 用例**），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
+| 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
 发布走 `.github/workflows/deploy.yml`：main 推送 ⇒ 同一套 verify ⇒ `dist/` 上传为 Pages artifact ⇒ 发布。
 **部署不会再跑一遍额外的检查**（verify 就是唯一的门禁），所以本地绿 ≠ 一定能发，但本地红一定发不出去。
