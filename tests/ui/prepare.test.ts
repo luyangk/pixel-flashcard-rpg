@@ -185,6 +185,20 @@ describe('mountPrepare —— 开局失败分流（兑现 T2 deferred）', () =>
     expect(ui(root, 'error-go-decks').hidden).toBe(true);
   });
 
+  it('PR#6d insufficient-cards 与 no-cards 同支（两个码都要给「去卡组」引导）', () => {
+    const root = makeRoot();
+    const nav: string[] = [];
+    const few: StartError = { code: 'insufficient-cards', message: '这个领域的卡不够凑一局。' };
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWithDecks(), lastError: few }));
+    mountPrepare(root, ctrl, { onNav: (t) => nav.push(t) });
+
+    expect(ui(root, 'error-go-decks').hidden).toBe(false);
+    click(ui(root, 'error-go-decks'));
+    expect(nav).toEqual(['decks']);
+    // 引导语是"多攒几张卡"，不是 no-cards 的"先去加几张或导入备份"
+    expect(ui(root, 'start-error').textContent).toContain('多攒几张');
+  });
+
   it('PR#6c 无错误时错误区隐藏（脉冲式，不留残影）', () => {
     const root = makeRoot();
     const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWithDecks(), lastError: noCards }));

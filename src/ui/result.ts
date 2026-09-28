@@ -16,16 +16,22 @@
  *   - **零数值后果**（LORE 明令）：本屏不写任何 SRS/计数；唯一写口是碎片游标回传
  *     （`onBeatDrawn` → 宿主写 `settings.story.beatIndex`），那是叙事进度不是数值。
  *
- * ## 为什么碎片回传只做一次
+ * ## 为什么碎片回传只做一次，且只对胜局做
  * 订阅会因任何快照变化重放本屏；若每次 render 都抽一句并回传，玩家每点一次按钮就会
  * 连跳好几句（且落盘写口会被无意义地反复唤醒）。故本屏实例内**只在首次拿到
  * lastResult 时抽一次**，之后不再抽。
+ * **只胜局抽**（T7 评审判 I-1）：LORE §5.2 / PRD §9 都是"每场**胜利**后 1–2 句"，
+ * 败局该给的是假记忆演出。败局也抽的实现会静默吃掉叙事库存（含低频暗线前奏）。
+ *
+ * ## 演出何时起（T7 评审判 M-5）
+ * 起演出的判据放在 **render 内**（`staged` 一次性闸门），而不是挂载时判一次快照：
+ * 挂载时 lastResult 还是 null、稍后才推入败局快照的路径（宿主先挂屏再结算）也必须能起
+ * 演出——否则画面卡在"闪现拍"，只剩「跳过演出」能到终态。
  */
 import type { BeatEntry } from './beats';
 import { nextBeat } from './beats';
 import type { FakeCard } from '../app/fakeMemory';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
-import { storyOf } from '../app/storyState';
 import { h, setHidden } from './dom';
 
 export interface ResultDeps {
@@ -89,6 +95,8 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
   let stage: FakeStage = { idx: 0, revealed: false, done: false };
   let beatDrawn = false;
   let replaying = false;
+  /** 假记忆演出是否已起过（一次性闸门；见文件头"演出何时起"）。 */
+  let staged = false;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const outcomeEl = h('div', { 'data-ui': 'outcome', class: 'outcome' });
@@ -215,12 +223,22 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
     }
     renderFake(res !== null && !res.won);
 
-    if (!beatDrawn && res !== null && beats.length > 0) {
+    // 只胜局抽碎片（LORE §5.2；败局的叙事面是假记忆演出）
+    if (!beatDrawn && res !== null && res.won && beats.length > 0) {
       beatDrawn = true; // 先置位：onBeatDrawn 抛错/重入都不该让下一次 render 再抽一句
-      const draw = nextBeat(beats, storyOf(snap.save).beatIndex);
+      // 游标兜底读法（与菜单同口径）：story 是必填位、validateSave 已保证在场，
+      // 但渲染层不该因为一次脏快照而炸掉整屏。
+      const cursor = snap.save?.settings?.story?.beatIndex ?? 0;
+      const draw = nextBeat(beats, cursor);
       beatEl.textContent = draw.text;
       setHidden(beatEl, draw.text === '');
       if (draw.text !== '') deps.onBeatDrawn?.(draw.next);
+    }
+
+    // 败局 + 有素材 + 还没起过 ⇒ 起演出（挂载时判与后续推快照两条路共用）
+    if (!staged && res !== null && !res.won && fakes.length > 0) {
+      staged = true;
+      scheduleNext();
     }
 
     replayBtn.disabled = replaying;
@@ -245,14 +263,11 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
 
   const unsubscribe = ctrl.subscribe(() => {
     if (destroyed) return;
+    replaying = false; // 新快照 = 会话动了（重开成功或换屏）；按钮若还在屏上应解禁
     render();
   });
 
   render();
-  // 挂载时若已是败局有素材，立刻起演出（不用等第一次快照变化）。
-  if (stage.idx === 0 && !stage.done && fakes.length > 0 && ctrl.snapshot().lastResult?.won === false) {
-    scheduleNext();
-  }
 
   function destroy(): void {
     if (destroyed) return;

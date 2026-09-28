@@ -27,6 +27,7 @@
  */
 import type { Card, Deck } from '@core/types';
 import type { Sm2Params } from '@core/types';
+import { MAX_TIME_MS } from '@core/saveMigrate';
 import { createInitialSRS } from '@core/sm2';
 import type { Coordinator } from './persist';
 
@@ -58,6 +59,29 @@ const READ_ONLY_LIBRARY_REASON = '存档没法读取（只读保护中）：现�
 /** 写口统一的失败面：reason 是可直接上屏的大白话。 */
 export type LibraryResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
+/**
+ * 落盘自检的**时间域**与 `saveMigrate.requireTimestamp` 同界（有限且 |v| ≤ MAX_TIME_MS）。
+ * 为什么必须在这里先挡（T7 评审判 I-2）：`srs.due` / `source.createdAt` 都会把这个值
+ * 写进权威档，而落盘自检是**整包**拒的——一个 NaN 会让 dirty 永久为真、此后**任何**
+ * 改动都写不进存储，而 UI 却刚提示过"已加入卡库"。同仓先例：transfer.exportBackupText
+ * 对"设备时间读数异常"专门设闸。
+ */
+function isUsableTime(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_TIME_MS;
+}
+
+/** 标签消毒：只接受字符串数组（validateSave 的 tags 是 string[]，非字符串会整包拒）。 */
+function usableTags(v: unknown): string[] | null {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) return null;
+  const out: string[] = [];
+  for (const t of v) {
+    if (typeof t !== 'string') return null;
+    out.push(t);
+  }
+  return out;
+}
+
 /** 空白串（含全角空格）判定：只判"没有可见内容"，不做任何规范化改写。 */
 function isBlank(s: unknown): boolean {
   return typeof s !== 'string' || s.trim().length === 0;
@@ -84,6 +108,11 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
   if (isBlank(input.back)) return { ok: false, reason: '背面不能是空的——写一句答案吧。' };
   if (isBlank(input.id)) return { ok: false, reason: '加卡失败：卡片编号缺失。' };
   if (isBlank(input.deckId)) return { ok: false, reason: '先选一个领域，再把这题加进去。' };
+  if (!isUsableTime(input.nowMs)) {
+    return { ok: false, reason: '加卡失败：设备时间读数异常，这张卡没有写进存档。' };
+  }
+  const tags = usableTags(input.tags);
+  if (tags === null) return { ok: false, reason: '加卡失败：标签只能是一串文字。' };
   if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
 
   const save = coord.snapshot();
@@ -102,7 +131,7 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
     back: input.back,
     source: { type: 'manual', createdAt: input.nowMs },
     srs: createInitialSRS(input.nowMs, input.sm2Params),
-    tags: Array.isArray(input.tags) ? [...input.tags] : [],
+    tags,
   };
 
   // 走到这里说明判断放行了；闩锁仍会在 mutate 内再拒一次（fail-closed 的第二道）。

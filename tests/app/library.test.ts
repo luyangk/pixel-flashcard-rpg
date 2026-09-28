@@ -6,7 +6,10 @@
  * - LB#1 走完整落库链：mutate 写进存档 → flush → store.load 读回来仍是合法档（validateSave 通过），
  *   且新卡的 SRS 是 `createInitialSRS` 的口径（stability='new'、due=nowMs）；
  * - LB#2 全部拒绝面**不触存储**：cards 长度不变、写次数为 0（用写计数 spy 取证）；
- * - LB#3 只读态（坏档接管）下写口抛 SaveReadOnlyError，绝不静默失败。
+ * - LB#3 只读态（坏档接管）下写口**回大白话拒绝**（不是抛异常）且零写入；第二道闩锁
+ *   （mutate 抛 SaveReadOnlyError）由 LB#3b 用"readOnly() 说谎"的协调器单独取证。
+ * - LB#5 时间域与 tags 域也在 mutate **之前**守住：NaN 时刻或非字符串标签若放进去，
+ *   落盘自检会整包拒 ⇒ dirty 永久为真、此后任何改动都写不进（T7 评审判 I-2）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SaveFile } from '@core/types';
@@ -140,6 +143,39 @@ describe('addCard —— 拒绝面（不触存储）', () => {
       expect(writes()).toBe(0);
     });
   }
+
+  it('LB#5 脏时刻（NaN/Infinity/超界）→ ok:false 且零写入（否则整档永久写不进）', async () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 1e300]) {
+      const { coord, writes } = await makeCoord(seed());
+      const res = await addCard(coord, { front: 'f', back: 'b', deckId: 'deck-a', id: 'x', nowMs: bad });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.reason).toContain('时间');
+      expect(writes()).toBe(0);
+      // 关键取证：档还没被毒化——补一张合法卡仍能落盘
+      const good = await addCard(coord, { front: 'f', back: 'b', deckId: 'deck-a', id: 'ok', nowMs: NOW });
+      expect(good.ok).toBe(true);
+      expect(await coord.flush()).toBe(true);
+    }
+  });
+
+  it('LB#5b 非字符串标签 → ok:false 零写入；缺省则是空数组', async () => {
+    const { coord, writes } = await makeCoord(seed());
+    const bad = await addCard(coord, {
+      front: 'f',
+      back: 'b',
+      deckId: 'deck-a',
+      id: 'x',
+      nowMs: NOW,
+      // 类型层拦不住运行期脏值（JSON 反序列化/绕过类型），写口必须自己守
+      tags: ['历史', 123] as unknown as string[],
+    });
+    expect(bad.ok).toBe(false);
+    expect(writes()).toBe(0);
+
+    const res = await addCard(coord, { front: 'f', back: 'b', deckId: 'deck-a', id: 'y', nowMs: NOW });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.tags).toEqual([]);
+  });
 
   it('LB#2b 重复 id 拒绝（重复 id 会让落盘自检整包拒，必须在这里挡住）', async () => {
     const { coord, writes } = await makeCoord(seed());

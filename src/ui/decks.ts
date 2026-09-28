@@ -165,7 +165,11 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
 
   function renderList(cards: readonly Card[], decks: readonly Deck[]): void {
     const shown = Math.min(visible, cards.length);
-    const key = `${cards.length}|${shown}|${decks.map((d) => d.id).join(',')}`;
+    // 指纹必须**带内容**（T7 评审判 I-3）：只按条数与领域 id 判缓存时，"导入一份同规模的
+    // 另一份备份"（换汤不换药：条数/领域都不变）会让屏上继续显示旧卡 —— 把权威存档显示错
+    // 比显示得慢更糟。front/back 都进指纹，卡面文案改了也会刷新。
+    const content = cards.map((c) => `${c.id}\u0001${c.front}\u0001${c.back}\u0001${c.deckId}`).join('\u0002');
+    const key = `${cards.length}|${shown}|${decks.map((d) => d.id).join(',')}|${content}`;
     if (key !== listKey) {
       listKey = key;
       listEl.replaceChildren();
@@ -178,20 +182,25 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   }
 
   function renderDeckOptions(decks: readonly Deck[], cards: readonly Card[]): void {
-    // 领域集合变了才重建 select（否则玩家选中的项会被每次快照重置）
-    const fingerprint = decks.map((d) => d.id).join('\u0000');
-    if (deckSelect.getAttribute('data-decks') === fingerprint) return;
-    deckSelect.setAttribute('data-decks', fingerprint);
     const counts = new Map<string, number>();
     for (const c of cards) counts.set(c.deckId, (counts.get(c.deckId) ?? 0) + 1);
-    deckSelect.replaceChildren();
-    for (const d of decks) {
-      deckSelect.appendChild(
-        h('option', { value: d.id }, `${d.name}（${counts.get(d.id) ?? 0}）`),
-      );
+
+    // 领域集合变了才**重建** option 节点（否则玩家选中的项会被每次快照重置）；
+    // 但文案（领域名与计数）每次 render 都刷新——重建与否不影响"显示对不对"
+    // （T7 评审判 I-3：加卡后下拉曾一直显示旧计数）。
+    const fingerprint = decks.map((d) => d.id).join('\u0000');
+    if (deckSelect.getAttribute('data-decks') !== fingerprint) {
+      deckSelect.setAttribute('data-decks', fingerprint);
+      deckSelect.replaceChildren();
+      for (const d of decks) deckSelect.appendChild(h('option', { value: d.id }, d.name));
+      // 空库时不要让 select 悬空：给一个不可提交的占位项，玩家会看到"先新建领域"
+      if (decks.length === 0) deckSelect.appendChild(h('option', { value: '' }, '（先新建一个领域）'));
     }
-    // 空库时不要让 select 悬空：给一个不可提交的占位项，玩家会看到"先新建领域"
-    if (decks.length === 0) deckSelect.appendChild(h('option', { value: '' }, '（先新建一个领域）'));
+    const options = Array.from(deckSelect.children) as HTMLOptionElement[];
+    decks.forEach((d, i) => {
+      const option = options[i];
+      if (option) option.textContent = `${d.name}（${counts.get(d.id) ?? 0}）`;
+    });
   }
 
   function render(snap: ControllerSnapshot): void {
@@ -239,6 +248,8 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
       } else {
         toast(res.reason);
       }
+    } catch (e) {
+      toast(`加卡失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       busy = false;
       if (!destroyed) render(ctrl.snapshot());
@@ -257,6 +268,8 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
       } else {
         toast(res.reason);
       }
+    } catch (e) {
+      toast(`新建领域失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       busy = false;
       if (!destroyed) render(ctrl.snapshot());
@@ -271,9 +284,11 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
       const res = await deps.exportBackup();
       if (res.text) {
         // FFW-p3-b：只要有文本就先交到用户手里——哪怕 ok:false（见文件头）。
-        deps.saveTextFile(res.text, backupFileName(now(), tzOffsetMin));
+        deps.saveTextFile?.(res.text, backupFileName(now(), tzOffsetMin));
       }
       toast(res.ok ? '备份已导出。' : (res.reason ?? '导出没能完成。'));
+    } catch (e) {
+      toast(`导出没能完成：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       busy = false;
       if (!destroyed) render(ctrl.snapshot());
@@ -282,13 +297,18 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
 
   async function onImport(): Promise<void> {
     if (destroyed || busy || !deps.importBackup || !deps.pickBackupText) return;
-    const text = await deps.pickBackupText();
-    if (destroyed || text === null) return; // 用户取消：不当成错误，也不弹 toast
+    // busy 必须在**开文件选择器之前**置位（T7 评审判 M-2）：否则连点会开出两个选择器
     busy = true;
     render(ctrl.snapshot());
     try {
+      const text = await deps.pickBackupText();
+      if (destroyed || text === null) return; // 用户取消：不当成错误，也不弹 toast
       const res = await deps.importBackup(text);
-      toast(res.ok ? '备份已导入。' : (res.reason ?? '导入没能完成。'));
+      if (!destroyed) toast(res.ok ? '备份已导入。' : (res.reason ?? '导入没能完成。'));
+    } catch (e) {
+      // 写口在只读闩锁下会真 reject（SaveReadOnlyError）——必须收成一句提示，
+      // 绝不让 rejection 逃到事件处理器（D29 的"全捕获可见"）。
+      if (!destroyed) toast(`导入没能完成：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       busy = false;
       if (!destroyed) render(ctrl.snapshot());

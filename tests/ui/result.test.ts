@@ -104,6 +104,22 @@ describe('mountResult —— 战报碎片', () => {
     expect(drawn).toEqual([1]); // 也不重复回传游标
   });
 
+  it('RS#3c 败局**不**抽碎片（LORE §5.2 / PRD §9 都是"每胜一场"；败局的叙事面是假记忆）', () => {
+    const root = makeRoot();
+    const drawn: number[] = [];
+    const ctrl = makeCtrl(snapWith(summary({ won: false, expGained: 0 })));
+    mountResult(root, ctrl, { beats: ['甲句', '乙句'], onBeatDrawn: (c) => drawn.push(c) });
+    expect(ui(root, 'beat').hidden).toBe(true);
+    expect(drawn).toEqual([]);
+
+    // 同一实例里胜负不会"补抽"：再推一个胜局快照才允许抽（且只抽一次）
+    ctrl.push(snapWith(summary({ won: true })));
+    expect(ui(root, 'beat').hidden).toBe(false);
+    expect(drawn).toEqual([1]);
+    ctrl.push(snapWith(summary({ won: true }), 1));
+    expect(drawn).toEqual([1]);
+  });
+
   it('RS#3b 空池不抽、不显示碎片（也不回传游标）', () => {
     const root = makeRoot();
     const drawn: number[] = [];
@@ -195,6 +211,21 @@ describe('mountResult —— 假记忆战败演出（LORE §5.5）', () => {
     }
   });
 
+  it('RS#4c 先挂屏后推败局快照也能起演出（挂载时判一次的实现在此必红）', () => {
+    const root = makeRoot();
+    const sched = makeScheduler();
+    const ctrl = makeCtrl(snapWith(null)); // 挂载时还没有结果
+    mountResult(root, ctrl, { fakes: twoFakes, ...sched });
+    expect(sched.pending()).toBe(0);
+
+    ctrl.push(snapWith(summary({ won: false, expGained: 0 })));
+    expect(sched.pending()).toBe(1); // 已起"闪现"拍
+    expect(ui(root, 'fake-card').getAttribute('data-revealed')).toBe('false');
+
+    sched.fire();
+    expect(ui(root, 'fake-cross').hidden).toBe(false); // 揭示拍也照常推进
+  });
+
   it('RS#6b 拆除时清表：unmount 后手动调度器无待触发任务', () => {
     const root = makeRoot();
     const sched = makeScheduler();
@@ -219,6 +250,18 @@ describe('mountResult —— 再来一场', () => {
     click(btn);
     expect(replay).toBe(1);
     expect(btn.disabled).toBe(true);
+  });
+
+  it('RS#8c 点过之后若有新快照（会话动了）按钮解禁——不留死在禁用态', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(snapWith(summary()));
+    mountResult(root, ctrl, { onReplay: () => undefined });
+    const btn = ui(root, 'replay') as HTMLButtonElement;
+    click(btn);
+    expect(btn.disabled).toBe(true);
+
+    ctrl.push(snapWith(summary())); // 重开成功 / 换屏都会带来新快照
+    expect((ui(root, 'replay') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('RS#8b 无 onReplay 时按钮隐藏（不显示点了没反应的入口）', () => {

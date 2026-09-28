@@ -245,3 +245,110 @@ describe('mountDecks —— 拆除', () => {
     expect(all(root, '[data-card-id]')).toHaveLength(0);
   });
 });
+
+/* ------------------------------------------------------------------ 刷新指纹与防连点（T7 评审修复） */
+
+describe('mountDecks —— 刷新指纹带内容（评审判 I-3）', () => {
+  it('DK#8 同条数、同领域的另一批卡（导入备份的真实路径）→ 列表必须刷新', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ save: saveWithCards(3) }));
+    mountDecks(root, ctrl, {});
+    expect(all(root, '[data-card-id]').map((r) => r.querySelector('.card-front')?.textContent)).toEqual([
+      '问0',
+      '问1',
+      '问2',
+    ]);
+
+    // 换汤不换药：条数一样、领域一样、id 相同，只有内容变了
+    const swapped = saveWithCards(3);
+    swapped.cards = swapped.cards.map((c, i) => ({ ...c, front: `新问${i}`, back: `新答${i}` }));
+    ctrl.push(makeSnap({ save: swapped }));
+    expect(all(root, '[data-card-id]').map((r) => r.querySelector('.card-front')?.textContent)).toEqual([
+      '新问0',
+      '新问1',
+      '新问2',
+    ]);
+  });
+
+  it('DK#8b 加卡后下拉里的领域计数跟着刷新（只按领域指纹早退的实现必红）', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ save: saveWithCards(3) }));
+    mountDecks(root, ctrl, {});
+    const optionText = (): string => (ui(root, 'add-deck').children[0] as HTMLOptionElement).textContent ?? '';
+    expect(optionText()).toBe('生活常识（3）');
+
+    ctrl.push(makeSnap({ save: saveWithCards(4) }));
+    expect(optionText()).toBe('生活常识（4）');
+  });
+});
+
+describe('mountDecks —— 防连点（RF#3 的卡组页面）', () => {
+  it('DK#9 写口未回来前再点「加入卡库」不会重复调用（删掉 busy 守卫的实现必红）', async () => {
+    const root = makeRoot();
+    let addCalls = 0;
+    let release: () => void = () => undefined;
+    const ctrl = makeCtrl(makeSnap({ save: saveWithCards(0) }));
+    mountDecks(root, ctrl, {
+      newId: () => 'new-id',
+      toastMs: 0,
+      addCard: () => {
+        addCalls += 1; // 只数**写口**被调了几次——"点了几次"不是重点
+        return new Promise((resolve) => {
+          release = () => resolve({ ok: true, value: makeCard('x') });
+        });
+      },
+    });
+
+    click(ui(root, 'add-submit'));
+    await flushMicrotasks();
+    expect(addCalls).toBe(1);
+    expect((ui(root, 'add-submit') as HTMLButtonElement).disabled).toBe(true);
+    click(ui(root, 'add-submit')); // 第二次点击必须被 busy 吃掉
+    await flushMicrotasks();
+    expect(addCalls).toBe(1);
+    release();
+    await flushMicrotasks();
+    expect((ui(root, 'add-submit') as HTMLButtonElement).disabled).toBe(false); // 回执后解禁
+  });
+
+  it('DK#9b 文件选择未回来前再点「导入备份」只开一个选择器（busy 在 await 之前置位）', async () => {
+    const root = makeRoot();
+    let picks = 0;
+    let release: (v: string | null) => void = () => undefined;
+    const ctrl = makeCtrl(makeSnap({ save: saveWithCards(1) }));
+    mountDecks(root, ctrl, {
+      toastMs: 0,
+      pickBackupText: () => {
+        picks += 1;
+        return new Promise<string | null>((resolve) => {
+          release = resolve;
+        });
+      },
+      importBackup: () => Promise.resolve({ ok: true }),
+    });
+
+    click(ui(root, 'import'));
+    await flushMicrotasks();
+    click(ui(root, 'import'));
+    await flushMicrotasks();
+    expect(picks).toBe(1);
+
+    release(null);
+    await flushMicrotasks();
+    expect((ui(root, 'import') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('DK#9c 写口 reject（只读闩锁）→ 变成 toast，不逃逸成未处理 rejection', async () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ save: saveWithCards(0) }));
+    mountDecks(root, ctrl, {
+      newId: () => 'x',
+      toastMs: 0,
+      addCard: () => Promise.reject(new Error('存档无法读取（已进入只读保护）')),
+    });
+
+    click(ui(root, 'add-submit'));
+    await flushMicrotasks();
+    expect(ui(root, 'toast').textContent).toContain('只读保护');
+  });
+});
