@@ -7,7 +7,7 @@
  * - grade < good → miss 事件、零伤害、敌人不反击（答错仅空转）；
  * - idx 恒 +1；idx === pool.length 时 enemyHp ≤ 0 → won，否则 lost；
  * - enemyHp 先归零 → 立即 won（剩余卡作废，log 记 end）；
- * - 玩家掉血路径本版不存在，但保留 playerHp 字段（假记忆演出与后续机制预留）。
+ * - D28：玩家掉血路径已存在——每回合敌反击 max(1, enemyPower−def)×float，气血归零判负。
  *
  * 【N-8】'ready' 相位已删除，BattlePhase 收窄为 'answering'|'won'|'lost'。理由：
  * createBattle 自 Plan 2 起即直落 'answering'，全仓无任何读/写 'ready' 的路径——它是死分支
@@ -32,6 +32,7 @@ import { GRADES, damageMultiplier, type Grade } from './sm2';
 import type { Rng } from './rng';
 import { uniform } from './rng';
 import type { PlayerStats } from './stats';
+import { enemyPowerFor } from './stats';
 
 /** N-8：无 'ready' 成员——建战即出第一张题卡。 */
 export type BattlePhase = 'answering' | 'won' | 'lost';
@@ -45,11 +46,15 @@ export interface BattleState {
   readonly maxPlayerHp: number;
   /** 建战时快照的玩家攻击力：answer 只拿 BattleState，damage 公式需要 attack。 */
   readonly atk: number;
+  /** D28：建战快照的防御力——反击 `max(1, enemyPower − def)` 的消费端。 */
+  readonly def: number;
+  /** D28：敌人每回合反击强度（enemyPowerFor(difficulty) 的建战快照，battle 不感知难度）。 */
+  readonly enemyPower: number;
   readonly log: readonly BattleEvent[];
 }
 
 export interface BattleEvent {
-  readonly kind: 'damage' | 'miss' | 'end';
+  readonly kind: 'damage' | 'miss' | 'retaliate' | 'end';
   readonly cardId?: string;
   readonly amount?: number;
 }
@@ -64,13 +69,16 @@ export type BattlePlayerStats = PlayerStats;
 
 /**
  * 建战：校验池并落初始态。
- * RF#2：重复 cardId → throw Error('duplicate-card')；空池 → throw Error('empty-pool')。
+ * RF#2：重复 cardId → throw Error('duplicate-card')；空池 → throw Error('empty-pool').
+ * D28：`enemyPower` 缺省取遭遇战档（enemyPowerFor('encounter')=7）——既有调用点
+ * 零改动即兼容；Boss 档由上层（battleFlow T3 接 difficulty 后）显式传入。
  */
 export function createBattle(
   poolCards: readonly Card[],
   enemyHp: number,
   playerStats: BattlePlayerStats,
   _rng: Rng, // 初始态无随机消耗；形参保留以固定调用签名（seed 由上层持有贯穿战斗）
+  enemyPower: number = enemyPowerFor('encounter'),
 ): BattleState {
   if (poolCards.length === 0) throw new Error('empty-pool');
   const seen = new Set<string>();
@@ -86,6 +94,8 @@ export function createBattle(
     playerHp: playerStats.maxHp,
     maxPlayerHp: playerStats.maxHp,
     atk: playerStats.atk,
+    def: playerStats.def,
+    enemyPower,
     log: [],
   };
 }
@@ -132,19 +142,37 @@ export function answer(
     enemyHp = state.enemyHp - damage;
     events.push({ kind: 'damage', cardId: card.id, amount: damage });
   } else {
-    // 空转：零伤害且敌人不反击（本版玩家掉血路径不存在）。
+    // 空转：对敌零输出（答错仅空转红线，PRD §2.3）——但 D28 起敌人照常反击。
     events.push({ kind: 'miss', cardId: card.id });
   }
 
   let phase: BattlePhase = state.phase;
+  let playerHp = state.playerHp;
   if (enemyHp <= 0) {
-    // enemyHp 先归零 → 立即 won（含池尽同时归零的情形），剩余卡作废。
+    // enemyHp 先归零 → 立即 won（含池尽同时归零的情形），剩余卡作废；
+    // **won 优先于承伤**（D28 phase 顺序 verbatim）：击杀回合不再结算反击。
     phase = 'won';
     events.push({ kind: 'end' });
-  } else if (idx === state.pool.length) {
-    // 卡池耗尽而敌人尚存 → lost。
-    phase = 'lost';
-    events.push({ kind: 'end' });
+  } else {
+    // D28 反击段（PRD §6.5 第四红线 verbatim）：每回合玩家行动后结算，miss 不免除。
+    // damageToPlayer = round(max(1, enemyPower − def) × uniform(rng,0.9,1.1))。
+    // max(1,·) 下钳保证"高防也掉血、气血条永远在动"（CB#14 钉）；enemyPower/def
+    // 为建战快照（createBattle），battle 层不感知难度换算（那是 stats.enemyPowerFor）。
+    const retaliation = Math.round(
+      Math.max(1, state.enemyPower - state.def) * uniform(rng, 0.9, 1.1),
+    );
+    playerHp = state.playerHp - retaliation;
+    events.push({ kind: 'retaliate', amount: retaliation });
+    if (playerHp <= 0) {
+      // 气血归零当回合即判 lost（idx 未到池尽也算；CB#16 钉死败因是气血不是池尽）。
+      playerHp = 0; // 恰好归零语义：不留负数
+      phase = 'lost';
+      events.push({ kind: 'end' });
+    } else if (idx === state.pool.length) {
+      // 卡池耗尽而敌人尚存且人还活着 → lost。
+      phase = 'lost';
+      events.push({ kind: 'end' });
+    }
   }
 
   return {
@@ -152,6 +180,7 @@ export function answer(
     phase,
     idx,
     enemyHp,
+    playerHp,
     log: [...state.log, ...events],
   };
 }

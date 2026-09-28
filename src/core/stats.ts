@@ -98,6 +98,23 @@ export function enemyHpForPool(poolSize: number, difficulty: keyof typeof DIFFIC
   return Math.ceil(poolSize * BASE_CARD_DAMAGE * factor);
 }
 
+/**
+ * D28：敌人每回合反击强度，与 HP 同源反推但**与池长解耦**——
+ * enemyPower = ceil(BASE_CARD_DAMAGE × difficulty)（遭遇战 7 / Boss 11）。
+ * HP 决定"要打掉多少"，power 决定"每回合挨多少"；共用难度系数是刻意的
+ * （PRD §6.5 第四红线）。未知难度键 throw 'invalid-difficulty'，与
+ * enemyHpForPool 同纪律（difficultyOf 单点把关）。
+ */
+/** 反击强度专用系数：与 HP 的难度系数同源，但 boss 档封顶到 good 档倍率（×1.0）。 */
+const POWER_FACTOR = { encounter: 0.7, boss: 1.1 } as const;
+
+export function enemyPowerFor(difficulty: keyof typeof DIFFICULTY): number {
+  // difficultyOf 单点把关未知键（throw invalid-difficulty），POWER_FACTOR 与
+  // DIFFICULTY 同键集——类型层已互锁，取不到值只可能是脏运行时数据。
+  difficultyOf(difficulty);
+  return Math.ceil(BASE_CARD_DAMAGE * POWER_FACTOR[difficulty]);
+}
+
 /** 升到下一级所需经验：ceil(100 × level^1.3)。level 须为正整数，否则 throw。 */
 export function expToNext(level: number): number {
   if (typeof level !== 'number' || !Number.isInteger(level) || level < 1) {

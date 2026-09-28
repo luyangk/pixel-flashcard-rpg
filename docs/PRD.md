@@ -197,7 +197,7 @@ interface Deck {            // v2：卡组即领域
 - **等级→属性**：每级 力量+2（攻）/ 体质+2（防）/ 气血+10，线性；基础值 攻10 防5 血100。
 - **属性映射**：体力 = 已入脑卡数（review+mastered）、精神 = 合格自建卡数（§6.4 口径）；防御 = 基础防 + 等级×2 + floor(体力/10)，攻击 = 基础攻 + 等级×2 + floor(精神/8)。单卡伤害 = 攻击 × damageMultiplier(stability) × uniform(0.9,1.1)。
 - **装配层三条口径红线（Plan 2 终审 N-1/N-2/N-3）**：① 生产代码的体力/精神一律按**全库**统计派生，禁止照抄数值模拟器的池内简化口径（会系统性压低战力）；② victoryExp 接线时传**实际释放**的卡子集，不用池内计数（提前 won 会虚高 ≤5×作废 mastered）；③ 导入旧档链路中 migrateSave 的调用时机由导入 UI 决定并显式提示用户。
-- **装配层第四红线（v2.2，Plan 4 spec 决策 D28）**：`deriveStats` 的 `def`/`maxHp` 必须进入战斗结算——敌人伤害 `damageToPlayer = max(1, enemyPower − def) × uniform(0.9,1.1)`，每回合在玩家行动后结算（miss 回合不免除），玩家气血归零即战败；答错仅空转的红线不变（错题对敌零输出，但敌人照常出手）。敌人强度与 HP 同源反推：`enemyPower = ceil(BASE_CARD_DAMAGE × difficulty)`（遭遇战 7 / Boss 11），HP 公式不变。性质变化如实申报：「全对必胜」不再无条件成立，改为「全对且够肉才必胜」。
+- **装配层第四红线（v2.2，Plan 4 spec 决策 D28）**：`deriveStats` 的 `def`/`maxHp` 必须进入战斗结算——敌人伤害 `damageToPlayer = max(1, enemyPower − def) × uniform(0.9,1.1)`，每回合在玩家行动后结算（miss 回合不免除），玩家气血归零即战败；答错仅空转的红线不变（错题对敌零输出，但敌人照常出手）。敌人强度与 HP 同源但**分档封顶**：`enemyPower = ceil(BASE_CARD_DAMAGE × POWER_FACTOR[d])`，POWER_FACTOR={encounter:0.7, boss:1.1}（遭遇战 7 / Boss 11；boss 档刻意不用 HP 系数 1.5——那会让 Boss 反击 15 超过 good 档基础输出 12，击穿「全对必胜」红线；封顶到 1.1 保证全对时净输出仍为正）。HP 公式不变。性质变化如实申报：「全对必胜」收窄为「全对且够肉才必胜」（薄血号在长池可能先死，属预期压力）。
 - **只读态红线（v2.2，Plan 4 spec 决策 D29）**：存档不可恢复损坏时 coordinator 进入只读闩锁（Plan 3 C-1 已实现机制），UI 必须三件套：常驻横幅「存档无法读取，本次进度不会保存」+ 坏档原文逐字节导出出口（人工抢救的最后机会）+ 写面抛 `SaveReadOnlyError` 全部捕获为可见提示，禁止静默吞掉。
 
 ---

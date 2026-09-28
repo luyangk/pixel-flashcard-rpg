@@ -12,6 +12,7 @@ import {
   applyExp,
   deriveStats,
   enemyHpForPool,
+  enemyPowerFor,
   expToNext,
   victoryExp,
 } from '@core/stats';
@@ -102,6 +103,28 @@ describe('enemyHpForPool —— 卡池反推（HP = ceil(poolSize × 10 × 难�
 
   it('EH#6 未知难度键（运行时脏数据）→ throw，不静默产出 NaN', () => {
     expect(() => enemyHpForPool(5, 'nightmare' as 'encounter')).toThrow();
+  });
+});
+
+// 来历：D28（PRD v2.2 / Plan 4 · T1）——enemyPower 与 HP 同源反推但独立成数：
+// ceil(BASE_CARD_DAMAGE × difficulty)，遭遇战 7 / Boss 11。它是反击公式的强度锚点。
+describe('enemyPowerFor —— 敌人反击强度反推（D28：ceil(10 × 难度系数)）', () => {
+  it('EP#1 两档锚点：encounter → ceil(10×0.7)=7、boss → ceil(10×1.5)=11（brief verbatim 7/11）', () => {
+    expect(enemyPowerFor('encounter')).toBe(7);
+    expect(enemyPowerFor('boss')).toBe(11);
+  });
+
+  it('EP#2 与池长解耦（性质而非巧合）：enemyPower 是每回合固定强度，enemyHp 才随池缩放', () => {
+    // enemyHpForPool(1,'encounter')===enemyPowerFor('encounter')===7 只是单卡池的交点；
+    // 15 张池 HP=105 而 power 恒 7——若实现误把 HP 当 power 返回，此断言即红。
+    expect(enemyPowerFor('encounter')).toBe(7);
+    expect(enemyHpForPool(15, 'encounter')).toBe(105);
+    expect(enemyPowerFor('boss')).toBe(11);
+    expect(enemyHpForPool(15, 'boss')).toBe(225);
+  });
+
+  it('EP#3 未知难度键（运行时脏数据）→ throw invalid-difficulty，与 EH#6 同纪律', () => {
+    expect(() => enemyPowerFor('nightmare' as 'encounter')).toThrow(new Error('invalid-difficulty'));
   });
 });
 

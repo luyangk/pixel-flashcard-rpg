@@ -7,11 +7,19 @@
 import { describe, expect, it } from 'vitest';
 import type { Card, SRSState, Stability } from '@core/types';
 import { GRADES } from '@core/sm2';
-import type { Rng } from '@core/rng';
+import { mulberry32, type Rng } from '@core/rng';
 import { createBattle, answer, type BattlePhase, type BattleState } from '@core/battle';
-
+// 来历：D28——反击强度锚点（enemyPowerFor）属 stats.ts 的授权面，本组测试用它的真实值
+// （遭遇战 7 / Boss 11）而非硬编码常数，钉住"power 与 HP 同源反推"这条约束本身。
+import { enemyPowerFor } from '@core/stats';
 /** rng≡0.5 → uniform(0.9,1.1) 恰为 1.0，伤害无浮动，便于手算。 */
 const HALF: Rng = () => 0.5;
+
+/**
+ * 来历：D28（Plan 4 · T1）——反击公式同样吃 uniform(rng,0.9,1.1)，rng≡0 把浮动钉在
+ * 下界 0.9，用于"恰好归零"这类需要非整数期望的边界样本（round(2.2×0.9)=2）。
+ */
+const ZERO: Rng = () => 0;
 
 function makeCard(id: string, stability: Stability = 'review'): Card {
   const srs: SRSState = {
@@ -160,6 +168,8 @@ describe('answer —— dev 断言（N-9：card 必须等于 pool[idx]）', () =
   it('CB#11 终局态直调不带 asserts → 实测返回同一引用（phase 检查先于一切短路，主体不可达）', () => {
     // lost 经池尽达成：idx === pool.length。若真穿过 phase 检查进入主体，
     // idx+1 与 end 事件都会造出新对象——实测同引用，即该路径不存在。
+    // 来历：D28——此处的 again 三回合各承 1 点反击（def=7 vs power=7），共 3 点 ≪ maxHp=100，
+    // lost 的成因仍是池尽；玩家死亡路径由 CB#16 单独钉。
     let lost = createBattle(pool(3), 999, STATS_10, HALF);
     for (const c of pool(3)) lost = answer(lost, c, GRADES.again, HALF);
     expect(lost.phase).toBe('lost');
@@ -195,12 +205,15 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
       expect(s.phase).toBe('answering');
       s = answer(s, c, GRADES.good, HALF);
     }
-    // 7−7=0 → 第 3 张打出后 enemyHp 归零且池同时耗尽 → won
-    expect(s.phase).toBe('won');
-    expect(s.enemyHp).toBe(0);
-    expect(s.idx).toBe(3);
-    expect(s.playerHp).toBe(100); // 玩家掉血路径本版不存在
-    expect(s.log.map((e) => e.kind)).toEqual(['damage', 'damage', 'damage', 'end']);
+    // 来历：D28——本例的击杀发生在第 3 击（enemyHp 与池同时归零），前两回合各承一次反击。
+    // def=7 vs encounter power=7 ⇒ round(max(1,0)×1.0)=1/回合，两回合共 2 点，未致死；
+    // 末回合反击被"won 优先于承伤"吞掉。若把 def 调低（薄血）此局即转败——
+    // "全对必胜"自 D28 起改为"全对且够肉才必胜"（PRD §6.5 第四红线）。
+    // 旧断言 playerHp 恒满属过时口径，此处按新语义更新。
+    expect(s.playerHp).toBe(98);
+    expect(s.log.map((e) => e.kind)).toEqual([
+      'damage', 'retaliate', 'damage', 'retaliate', 'damage', 'end',
+    ]);
   });
 
   it('AN#1b 同参数下 atk=10：HP=池数×10 亦恰好 won（公式 verbatim 的自洽锚点）', () => {
@@ -209,7 +222,10 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     for (const c of cards) s = answer(s, c, GRADES.good, HALF);
     expect(s.phase).toBe('won');
     expect(s.enemyHp).toBe(0);
-    expect(s.log.map((e) => e.amount)).toEqual([10, 10, 10, undefined]);
+    // 来历：D28——STATS_10 的 def=7、encounter power=7 ⇒ 每非击杀回合承 1 点；
+    // 第三击击杀不承伤。事件序列多出两个 retaliate(amount:1)。
+    expect(s.log.map((e) => e.amount)).toEqual([10, 1, 10, 1, 10, undefined]);
+    expect(s.playerHp).toBe(98);
   });
 
   it('AN#2 damage = attack × damageMultiplier(stability) × uniform(rng,0.9,1.1)，round 后扣血', () => {
@@ -251,8 +267,12 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     s2 = answer(s2, card, GRADES.good, HALF);
     expect(s2.enemyHp).toBe(5);
     expect(s2.log[0]).toEqual({ kind: 'damage', cardId: 'n1', amount: 0 });
-    expect(s2.phase).toBe('lost'); // 池耗尽且 enemyHp>0
-    expect(s2.log.map((e) => e.kind)).toEqual(['damage', 'end']);
+    // 来历：D28——旧断言 `phase==='lost'` 的理由是「池耗尽且 enemyHp>0」，该理由在本夹具
+    // 下仍然成立（def=7 vs power=7 ⇒ 单回合仅承 1 点，playerHp=99 远未归零），故 phase
+    // 期望不变；但事件序列多出发还击项，log 形状按新语义更新。
+    expect(s2.phase).toBe('lost'); // 池耗尽且 enemyHp>0（非气血归零）
+    expect(s2.playerHp).toBe(99);
+    expect(s2.log.map((e) => e.kind)).toEqual(['damage', 'retaliate', 'end']);
   });
 
   it('AN#4 hard 档低于 good ⇒ 走空转（brief verbatim「grade ≥ GRADES.good」才命中）', () => {
@@ -260,8 +280,12 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     let s = createBattle([card], 7, STATS_7, HALF);
     s = answer(s, card, GRADES.hard, HALF);
     expect(s.log[0]).toEqual({ kind: 'miss', cardId: 'h1' });
-    expect(s.enemyHp).toBe(7); // 零伤害、敌人不反击
-    expect(s.phase).toBe('lost'); // 池尽且敌人尚存
+    expect(s.enemyHp).toBe(7); // 零伤害——对敌输出仍为零（D28：错题惩罚不变）
+    // 来历：D28——"敌人不反击"的旧口径已被 D28 取代：miss 回合**照常承伤**。
+    // def=7、encounter power=enemyPowerFor('encounter')=7 ⇒ round(max(1,0)×1.0)=1。
+    expect(s.log[1]).toEqual({ kind: 'retaliate', amount: 1 });
+    expect(s.playerHp).toBe(99);
+    expect(s.phase).toBe('lost'); // 池尽且敌人尚存（气血尚余 99，非被反击打死）
     expect(s.idx).toBe(1);
   });
 
@@ -270,19 +294,24 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     let s = createBattle([card], 7, STATS_7, HALF);
     s = answer(s, card, GRADES.easy, HALF);
     expect(s.log[0]).toEqual({ kind: 'damage', cardId: 'e1', amount: 7 });
+    // 来历：D28——击杀发生在这一击 → won 优先于承伤，本回合无 retaliate 事件。
+    expect(s.log.map((e) => e.kind)).toEqual(['damage', 'end']);
+    expect(s.playerHp).toBe(100);
     expect(s.phase).toBe('won');
   });
 
 });
 
 describe('answer —— 空转路径（grade < good）', () => {
-  it('MS#1 miss 事件、零伤害、敌人不反击，且不产生负向事件之外的状态变化', () => {
+  it('MS#1 miss 事件、零伤害，敌人仍回击（D28：miss 回合不免除反击）', () => {
     const cards = pool(2);
     const s0 = createBattle(cards, 14, STATS_10, HALF);
     const s1 = answer(s0, cards[0], GRADES.again, HALF);
-    expect(s1.log).toEqual([{ kind: 'miss', cardId: 'c0' }]);
+    // 来历：D28——旧断言"敌人不反击、playerHp 恒满"是 D28 前的口径。def=7、
+    // power=enemyPowerFor('encounter')=7 ⇒ max(1,0)×1.0=1 点/回合，错题的对敌零输出不变。
+    expect(s1.log).toEqual([{ kind: 'miss', cardId: 'c0' }, { kind: 'retaliate', amount: 1 }]);
     expect(s1.enemyHp).toBe(14);
-    expect(s1.playerHp).toBe(100);
+    expect(s1.playerHp).toBe(99);
     expect(s1.maxPlayerHp).toBe(100);
     expect(s1.pool).toEqual(s0.pool);
     expect(s1.idx).toBe(1);
@@ -298,6 +327,227 @@ describe('answer —— 空转路径（grade < good）', () => {
     expect(s.phase).toBe('lost');
     expect(s.enemyHp).toBe(7);
     expect(s.idx).toBe(3);
+    // 来历：D28——此局三回合皆承伤（def=7 vs power=7 ⇒ 各 1 点），
+    // lost 的成因仍是"池尽敌存"而非气血归零（100−3=97）。
+    expect(s.playerHp).toBe(97);
+    expect(s.log.map((e) => e.kind)).toEqual([
+      'damage', 'retaliate', 'miss', 'retaliate', 'damage', 'retaliate', 'end',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D28（PRD v2.2 / Plan 4 · T1）：敌人反击进结算——def/maxHp 不再是摆设。
+// verbatim：damageToPlayer = max(1, enemyPower − def) × uniform(rng,0.9,1.1)，round 后扣血；
+// enemyPower = ceil(BASE_CARD_DAMAGE × difficulty)（遭遇战 7 / Boss 11，见 stats.enemyPowerFor）；
+// 每回合玩家行动后结算（miss 不免除）；phase 顺序：敌≤0→won（当回合不承伤）→ 反击 →
+// 己≤0→lost → 池尽→lost。答错仅空转的红线不变（对敌零输出，但敌人照常出手）。
+// ---------------------------------------------------------------------------
+describe('answer —— 敌人反击（D28）', () => {
+  /** brief Step 1 的手算夹具：def=5 ⇒ 遭遇战单回合应承 round(max(1,7−5)×float)=2×float。 */
+  const DEF_5 = { level: 1, vit: 0, spi: 0, atk: 10, def: 5, maxHp: 100 };
+
+  it('CB#13 反击公式与事件形状：def=5、power=enemyPowerFor("encounter")=7、rng≡0.5 → 每回合 2 点', () => {
+    const cards = pool(3);
+    let s = createBattle(cards, 999, DEF_5, HALF);
+    s = answer(s, cards[0], GRADES.good, HALF);
+    // 命中伤 = round(10×1.0×1.0)=10；反击 = round(max(1,7−5)×1.0)=2
+    expect(s.log).toEqual([
+      { kind: 'damage', cardId: 'c0', amount: 10 },
+      { kind: 'retaliate', amount: 2 },
+    ]);
+    expect(s.enemyHp).toBe(989);
+    expect(s.playerHp).toBe(98);
+    expect(s.phase).toBe('answering');
+    s = answer(s, cards[1], GRADES.good, HALF);
+    expect(s.playerHp).toBe(96); // 逐回合累加，非一次性
+    expect(s.maxPlayerHp).toBe(100); // 上限不动，只扣当前值
+  });
+
+  it('CB#13b 浮动区间：rng≡0 → ×0.9、rng→1⁻ → ×1.1，均 round 后入账（与伤害同 float 语义）', () => {
+    const near: Rng = () => 0.999999;
+    const cards = pool(2);
+    // def=5、power=7 ⇒ 基数 2：下界 round(2×0.9)=round(1.8)=2；上界 round(2×1.1⁻)=2
+    let a = createBattle(cards, 999, DEF_5, ZERO);
+    a = answer(a, cards[0], GRADES.again, ZERO);
+    expect(a.log[1]).toEqual({ kind: 'retaliate', amount: 2 });
+    expect(a.playerHp).toBe(98);
+    let b = createBattle(cards, 999, DEF_5, near);
+    b = answer(b, cards[0], GRADES.again, near);
+    expect(b.log[1].amount).toBe(2);
+    // def=0 ⇒ 基数 7：下界 round(6.3)=6、上界 round(7.7)=8 —— 浮动真实生效
+    const NO_DEF = { level: 1, vit: 0, spi: 0, atk: 10, def: 0, maxHp: 100 };
+    let c = createBattle(cards, 999, NO_DEF, ZERO);
+    c = answer(c, cards[0], GRADES.again, ZERO);
+    expect(c.log[1].amount).toBe(6);
+    let d = createBattle(cards, 999, NO_DEF, near);
+    d = answer(d, cards[0], GRADES.again, near);
+    expect(d.log[1].amount).toBe(8);
+  });
+
+  it('CB#14 def ≥ power 时保底 1 点：max(1, …) 的下钳（高防也掉血，气血条永远在动）', () => {
+    const TANK = { level: 9, vit: 0, spi: 0, atk: 10, def: 40, maxHp: 100 };
+    const cards = pool(2);
+    let s = createBattle(cards, 999, TANK, HALF);
+    s = answer(s, cards[0], GRADES.good, HALF);
+    // max(1, 7−40) = 1 ⇒ round(1×1.0)=1（若漏掉 max(1,…) 这里会是 0）
+    expect(s.log[1]).toEqual({ kind: 'retaliate', amount: 1 });
+    expect(s.playerHp).toBe(99);
+  });
+
+  it('CB#14b Boss 档经 createBattle 第 5 参接线：power=enemyPowerFor("boss")、def=5 → 每回合承 6', () => {
+    // 来历：D28 + EP#1 裁定 power 走封顶系数（ceil(10×1.1)=11，非 ceil(10×DIFFICULTY.boss)
+    // =15——后者会让 Boss 反击超过 mastered 倍率的基础输出，全对必胜红线被破）。
+    // 本例同时钉住「上层显式传 difficulty 换算值」这条接线面（T3 startFight 的真实用法）。
+    expect(enemyPowerFor('boss')).toBe(11);
+    const cards = pool(2);
+    let s = createBattle(cards, 9999, DEF_5, HALF, enemyPowerFor('boss'));
+    s = answer(s, cards[0], GRADES.good, HALF);
+    // 命中伤 round(10×1.0×1.0)=10；反击 round(max(1,11−5)×1.0)=6
+    expect(s.log[1]).toEqual({ kind: 'retaliate', amount: 6 });
+    expect(s.playerHp).toBe(94);
+    const TANK10 = { level: 1, vit: 0, spi: 0, atk: 10, def: 10, maxHp: 100 };
+    let t = createBattle(cards, 9999, TANK10, HALF, enemyPowerFor('boss'));
+    t = answer(t, cards[0], GRADES.again, HALF);
+    expect(t.log[1].amount).toBe(1); // max(1, 11−10) 下钳在 Boss 档同样生效
+  });
+
+  it('CB#15 miss 回合仍反击（D28 verbatim：miss 不免除）', () => {
+    // 来历：D28 接管修正——原池仅 2 张：第二问无论怎么答 idx 都到池尽（good 击杀会
+    // won+end、非 good 空转则 lost+end），"slice(2)==['damage','retaliate']"永远多一条
+    // end。扩池到 3 张让两回合都留在 answering 态，断言才表达本意（两回合皆反击）。
+    const cards = pool(3);
+    let s = createBattle(cards, 999, DEF_5, HALF);
+    s = answer(s, cards[0], GRADES.again, HALF);
+    expect(s.log.map((e) => e.kind)).toEqual(['miss', 'retaliate']);
+    expect(s.enemyHp).toBe(999); // 对敌零输出：错题惩罚红线未动
+    expect(s.playerHp).toBe(98); // 但敌人照常出手
+    // 来历：D28 接管修正——原第二问用 hard 且池仅 2 张：hard 为空转 ⇒ idx=2=池尽
+    // ⇒ lost+end，旧断言 slice(2)==['miss','retaliate'] 自相矛盾（漏算了必然的 end）。
+    // 改 good 续跑：既保留"两回合皆反击"意图，又避开终局干扰。
+    s = answer(s, cards[1], GRADES.good, HALF);
+    expect(s.log.slice(2).map((e) => e.kind)).toEqual(['damage', 'retaliate']);
+    expect(s.playerHp).toBe(96);
+  });
+
+  it('CB#16 气血归零当回合判 lost（idx 未到池尽也算），且 lost 优先于池尽分支', () => {
+    // 恰好归零样本：def=5、power=7 ⇒ 基数 2；rng≡0.9 → float=exactly 1.0 → 每回合承 2 点。
+    // （注意：JS Math.round 对 .5 向上取整，round(2×0.95)=round(1.9)=2 而非 1——用
+    //  rng≡0.9 把浮动钉成恒等，避免依赖半进位的巧合。）
+    const NINE: Rng = () => 0.9;
+    const cards = pool(6);
+    const THIN = { level: 1, vit: 0, spi: 0, atk: 10, def: 5, maxHp: 4 };
+    let s = createBattle(cards, 999, THIN, NINE);
+    s = answer(s, cards[0], GRADES.good, NINE);
+    expect(s.playerHp).toBe(2);
+    expect(s.phase).toBe('answering'); // 尚余 2 血，未死
+    s = answer(s, cards[1], GRADES.good, NINE);
+    expect(s.playerHp).toBe(0); // 恰好归零，不是负数
+    expect(s.idx).toBe(2);
+    expect(s.phase).toBe('lost'); // idx=2 < pool.length=6：败因是气血，不是池尽
+    expect(s.log[s.log.length - 1]).toEqual({ kind: 'end' });
+    expect(s.log.map((e) => e.kind)).toEqual([
+      'damage', 'retaliate', 'damage', 'retaliate', 'end',
+    ]);
+    // 终局后幂等：剩余卡作废，log 不再追加
+    const frozen = s;
+    expect(answer(frozen, cards[2], GRADES.easy, NINE)).toBe(frozen);
+    expect(frozen.log).toHaveLength(5);
+  });
+
+  it('CB#16b 反击可致死：rng≡0（下界 ×0.9）时基数 2 → round(1.8)=2，两回合磨穿 maxHp=4', () => {
+    // 来历：D28——JS Math.round 是 half-up，round(2×0.9)=round(1.8)→2、round(2×0.95)=2。
+    // 本例钉"下界浮动同样能打死人"，与 CB#16 的恒等浮动样本互补（两条 float 端点皆判负）。
+    const cards = pool(6);
+    const THIN = { level: 1, vit: 0, spi: 0, atk: 10, def: 5, maxHp: 4 };
+    let s = createBattle(cards, 999, THIN, ZERO);
+    s = answer(s, cards[0], GRADES.good, ZERO);
+    expect(s.playerHp).toBe(2);
+    s = answer(s, cards[1], GRADES.again, ZERO); // miss 回合也承伤
+    expect(s.playerHp).toBe(0);
+    expect(s.phase).toBe('lost');
+    expect(s.idx).toBe(2); // 池远未尽
+  });
+
+  it('CB#17 won 优先于承伤：最后一题击杀 → won 且 playerHp 不再扣（反击被胜负短路吞掉）', () => {
+    // 血量只剩 2、本回合必承 2 点——但同一击把敌人打死，胜负先判：不承伤、判 won。
+    const cards = pool(4);
+    const LOW_HP = { level: 1, vit: 0, spi: 0, atk: 10, def: 5, maxHp: 2 };
+    let s = createBattle(cards, 10, LOW_HP, HALF);
+    s = answer(s, cards[0], GRADES.good, HALF); // dmg 10 → enemyHp 0 → won（首击即杀）
+    expect(s.phase).toBe('won');
+    expect(s.playerHp).toBe(2); // 未承伤：若实现先扣血再判胜，这里会是 0 且误判 lost
+    expect(s.log.map((e) => e.kind)).toEqual(['damage', 'end']);
+    // 双杀局面（敌我同回合归零）同样判 won：同花顺局不该双双阵亡
+    const cards2 = pool(4);
+    const DYING = { level: 1, vit: 0, spi: 0, atk: 10, def: 5, maxHp: 1 };
+    let t = createBattle(cards2, 30, DYING, HALF);
+    t = answer(t, cards2[0], GRADES.good, HALF); // 承 2 > hp 1，但 enemyHp 尚存 → lost
+    expect(t.phase).toBe('lost');
+    let u = createBattle(cards2, 10, DYING, HALF);
+    u = answer(u, cards2[0], GRADES.good, HALF); // 同回合击杀 → won 优先
+    expect(u.phase).toBe('won');
+    expect(u.playerHp).toBe(1);
+  });
+
+  it('CB#18 确定性：同 seed 同序列 → 反击浮动逐位可复现（rng 消耗序是契约的一部分）', () => {
+    // 来历：D28——每回合的 rng 消耗序为「命中伤害 1 掷 + 反击 1 掷；miss 回合仅反击 1 掷」。
+    // 两条独立流跑同一作答序列必须逐字段全等；若实现漏掷或多掷，此断言即红。
+    const cards = pool(5); // 来历：D28 接管修正——4 张池在第 4 答后 idx===pool.length 追加 end，与本例"确定性消耗序"主题无关的终局噪声；扩到 5 张保持 answering
+    const seq = [GRADES.good, GRADES.again, GRADES.easy, GRADES.hard];
+    const runOnce = (): BattleState => {
+      const rng = mulberry32(7);
+      let s = createBattle(cards, 999, DEF_5, rng);
+      for (let i = 0; i < seq.length; i++) s = answer(s, cards[i], seq[i], rng);
+      return s;
+    };
+    const a = runOnce();
+    const b = runOnce();
+    expect(a).toEqual(b);
+    // mulberry32(7) 前 6 掷（一次性探针实测，非手算近似）：
+    //   r1..r6 = .011705 .061958 .976908 .699029 .521445 .405522
+    // 消耗序：good=dmg(r1)+retal(r2)，again=retal(r3)，easy=dmg(r4)+retal(r5)，
+    //         hard=retal(r6)。float=0.9+r×0.2 ⇒ 期望值如下（改序必红）。
+    expect(a.log.map((e) => e.kind)).toEqual([
+      'damage', 'retaliate', 'miss', 'retaliate', 'damage', 'retaliate', 'miss', 'retaliate',
+    ]);
+    // 来历：D28 接管修正——原断言按"每回合至多一掷"的旧模型估出累计承伤 8；反击段
+    // 实际消耗 dmg(r1)+retal(r2)+retal(r3)+dmg(r4)+retal(r5)+retal(r6)（miss 不掷），
+    // r2/r5 的 float≈0.924/0.976 使两回合承伤各为 1。逐位 amount 序列与 playerHp
+    // 一并钉死：改任何一掷的顺序或次数都会红。
+    // amount 含 damage/miss/retaliate/end 混合，miss/end 无 amount（undefined 保留位序）。
+    // good: dmg r1→9 + retal r2→2；again: miss(undef) + retal r3→2；easy: dmg r4→10 +
+    // retal r5→2；hard: miss(undef) + retal r6→2。累计承伤 8 ⇒ playerHp 92。
+    expect(a.log.map((e) => e.amount)).toEqual([9, 2, undefined, 2, 10, 2, undefined, 2]);
+    expect(a.playerHp).toBe(92);
+    expect(a.phase).toBe('answering');
+  });
+
+  it('CB#19 幂等与 mismatch 行为不受反击影响：终局同引用、mismatch 拒推进且不产生反击', () => {
+    const cards = pool(3);
+    const s = createBattle(cards, 999, DEF_5, HALF);
+    const msgs: string[] = [];
+    // mismatch：整段主体不可达 ⇒ 连反击都不该发生（playerHp 原样）
+    const rejected = answer(s, makeCard('c2'), GRADES.good, HALF, (m) => msgs.push(m));
+    expect(msgs).toEqual(['answer-card-mismatch']);
+    expect(rejected).toBe(s);
+    expect(rejected.playerHp).toBe(100);
+    // 终局态：反击路径同样不可达
+    const dead = answer(answer(s, cards[0], GRADES.again, HALF), cards[1], GRADES.again, HALF);
+    expect(dead.playerHp).toBe(96);
+    const won = { ...dead, phase: 'won' as BattlePhase };
+    expect(answer(won, cards[2], GRADES.easy, HALF)).toBe(won);
+  });
+
+  it('CB#20 不可变返回：反击写回新 state，旧 state 的 playerHp/log 不被改动', () => {
+    const cards = pool(2);
+    const s0 = createBattle(cards, 999, DEF_5, HALF);
+    const s1 = answer(s0, cards[0], GRADES.good, HALF);
+    expect(s0.playerHp).toBe(100);
+    expect(s0.log).toHaveLength(0);
+    expect(s1).not.toBe(s0);
+    expect(s1.playerHp).toBe(98);
+    expect(s1.log).toHaveLength(2);
   });
 });
 
@@ -338,12 +588,18 @@ describe('终局与幂等', () => {
     s = answer(s, cards[0], GRADES.good, HALF); // dmg 10 → hp10
     s = answer(s, cards[1], GRADES.again, HALF); // miss
     s = answer(s, cards[2], GRADES.easy, HALF); // dmg 10 → hp0 且池尽 → won+end
+    // 来历：D28——每回合的 retaliate 落在本回合 damage/miss 之后、end 之前。
+    // STATS_10 def=7 vs encounter power=enemyPowerFor('encounter')=7 ⇒ round(max(1,0)×1.0)=1；
+    // 第三击击杀 → won 优先，末回合无反击（"end 恒为最后事件"这条不变式不受影响）。
     expect(s.log.map((e) => `${e.kind}:${e.cardId ?? ''}:${e.amount ?? ''}`)).toEqual([
       'damage:c0:10',
+      'retaliate::1',
       'miss:c1:',
+      'retaliate::1',
       'damage:c2:10',
       'end::',
     ]);
+    expect(s.playerHp).toBe(98);
     expect(s.phase).toBe('won');
   });
 
@@ -370,6 +626,9 @@ describe('终局与幂等', () => {
       s = answer(s, cards[i], g, HALF);
       expect(s.idx).toBe(i + 1);
     }
+    // 来历：D28——atk=1 打不死敌人（enemyHp=1000），三回合各承 1 点反击（def=7 vs power=7），
+    // lost 的成因仍是"池尽敌存"；气血归零这条独立败北路径由 CB#16 钉。
     expect(s.phase).toBe('lost');
+    expect(s.playerHp).toBe(97);
   });
 });

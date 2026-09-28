@@ -109,6 +109,9 @@ function makeState(o: ViewOpts = {}): BattleState {
     playerHp: 100,
     maxPlayerHp: 100,
     atk: 12,
+    // 来历：D28——BattleState 扩 def/enemyPower 两字段（反击结算的消费端）。
+    def: 7,
+    enemyPower: 7,
     log: o.log ?? [],
   };
 }
