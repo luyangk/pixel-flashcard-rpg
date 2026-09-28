@@ -184,8 +184,10 @@ export function answerCurrent(
     return view;
   }
   const next = answer(view.state, card, grade, deps.rng, deps.asserts);
-  // 视图恒由 (next, pool) 重建：正确性不依赖 battle.answer 的返回引用同一性。
-  // （实测口径见 tests/core/battle.test.ts CB#11/CB#12：违规+mismatch 时同引用；
-  // 终局幂等短路依赖其 phase 检查调用序——非 answering 态先返回自身，主体不可达。）
+  // 视图**恒**由 (next, pool) 重建 —— 因此 `next === view` 只在"空卡早退"这一条路径
+  // 上成立（上方的 card == null 分支），**不能**用引用比较判断"是否终局/是否重复提交"：
+  // 终局态的 answer 调用会返回 phase 未变但引用全新的视图。调用方（gameController）
+  // 必须按 `state.phase !== 'answering'` 自行短路（C-1 修复，见 tests/app/GC#9b）。
+  // battle.answer 自身的引用同引口径见 tests/core/battle.test.ts CB#11/CB#12。
   return toView(next, view.pool, view.difficulty); // 难度跨回合保持（T3：boss 局全程同档）
 }

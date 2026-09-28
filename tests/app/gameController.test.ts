@@ -267,11 +267,17 @@ describe('gameController —— 一局的落库义务（R-T4-d 端到端第三�
 describe('gameController —— 只读态（D29 数据源）', () => {
   /**
    * 只读 Coordinator 的**受控 fake**（评审 I-2 指出：坏档路线只能造出空种子档，
-   * 永远走不到"有卡却在只读态"的 settle 拒绝面）。接口注入使这条路可达，且比坏档
-   * 更贴真实故障场景（磁盘中途变成只读）——所有写面按 persist 契约抛同名错误。
+   * 永远走不到"有卡却在只读态"的 settle 拒绝面）。接口注入使这条路可达。
+   *
+   * 关键设计（二轮评审修正）：启动态 `readOnly()` **返回 false**，写面才抛
+   * SaveReadOnlyError——模拟的是"磁盘中途变成只读"（唯一能走到 guardedWrite 的
+   * catch 分支的形状）。若夹具一开始就 readOnly=true，控制器的只读早退会让
+   * catch 分支永远不执行，等于没覆盖。
    */
   function makeReadOnlyFake(cards: Card[]): { coord: Coordinator; writes: () => number } {
     let writes = 0;
+    // 启动即"看起来可写"（readOnly()===false），只有真正写入时才暴露只读。
+    let roActive = (): boolean => false;
     const save = makeSave(cards);
     const throwRO = (): never => {
       const e = new Error('存档不可写（只读态测试夹具）');
@@ -286,7 +292,7 @@ describe('gameController —— 只读态（D29 数据源）', () => {
       lastSavedAt: () => null,
       snapshot: () => save,
       markDirty: throwRO,
-      readOnly: () => true,
+      readOnly: () => roActive(),
       settleAndRecord: async () => {
         writes += 1;
         throwRO();
@@ -296,13 +302,13 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     return { coord, writes: () => writes };
   }
 
-  it('GC#13 只读 + 有卡：整局可打（流程不中断），但 settle 链被拒 → notice 提示、exp/榜单零变化', async () => {
+  it('GC#13 有卡 + 写面抛 SaveReadOnlyError：catch 分支执行 → readOnly 翻真 + notice + 数据零变化', async () => {
     const clock = fakeClock(NOW);
     const cards = [makeCard('c0'), makeCard('c1'), makeCard('c2')];
     const { coord, writes } = makeReadOnlyFake(cards);
     const ctrl = await createGameController({ coord, rng: mulberry32(7), now: clock.now, tzOffsetMin: TZ });
 
-    expect(ctrl.snapshot().readOnly).toBe(true);
+    expect(ctrl.snapshot().readOnly).toBe(false); // 启动可写（见夹具注释）
     await ctrl.intent({ type: 'startFight', size: 3 });
     expect(ctrl.snapshot().screen).toBe('fight'); // 只读不影响建战（纯内存视图）
 
@@ -320,8 +326,9 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     expect(coord.snapshot().settings.progress.exp).toBe(0);
     expect(coord.snapshot().settings.leaderboard ?? []).toHaveLength(0);
     expect(coord.snapshot().meta.plays).toBe(0);
-    // ③ 写面最多被触及一次（若实现改为"先试写再捕获"），绝不反复重试
-    expect(writes()).toBeLessThanOrEqual(1);
+    // ③ catch 分支真被执行过：写面恰好被触及一次（settleAndRecord 抛 RO 后，
+    //    readOnly 已翻真 ⇒ 后续 recordRun 走早退不再触及写面），且无反复重试。
+    expect(writes()).toBe(1);
   });
 
   it('GC#12（非只读对照）可写会话下同一局正常落库——与 GC#13 构成对照', async () => {

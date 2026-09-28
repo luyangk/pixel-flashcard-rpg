@@ -32,20 +32,10 @@ import type {
   GameController,
   GameIntent,
   RunSummary,
+  StartError,
 } from './controllerTypes';
 
 /** 控制器依赖（全部注入，测试可控；生产由 src/main.ts 装配）。 */
-/**
- * startFight 失败面（T7 备战屏消费）：
- * - code 供程序分流（三码各有不同引导动作）；
- * - message 是可直接上屏的大白话（battleFlow 提供，避免 UI 再拼一遍文案）。
- */
-export type StartErrorCode = 'invalid-size' | 'no-cards' | 'insufficient-cards';
-export interface StartError {
-  readonly code: StartErrorCode;
-  readonly message: string;
-}
-
 export interface GameControllerDeps {
   readonly coord: Coordinator;
   /** 随机源：一条流贯穿建池与战斗（与 startFight 契约一致）。 */

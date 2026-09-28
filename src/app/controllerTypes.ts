@@ -10,7 +10,18 @@
 import type { Grade } from '@core/sm2';
 import type { SaveFile } from '@core/types';
 import type { FightView } from './battleFlow';
-import type { StartError } from './gameController';
+
+/**
+ * startFight 失败面（T7 备战屏消费；声明落在此而非 gameController，避免
+ * controllerTypes ⇄ gameController 的类型层环——本文件仍是唯一类型来源）。
+ * - code 供程序分流（三码各有不同引导动作）；
+ * - message 是可直接上屏的大白话（battleFlow 提供，UI 不必再拼文案）。
+ */
+export type StartErrorCode = 'invalid-size' | 'no-cards' | 'insufficient-cards';
+export interface StartError {
+  readonly code: StartErrorCode;
+  readonly message: string;
+}
 
 /**
  * 会话屏幕位（brief verbatim 六值）。

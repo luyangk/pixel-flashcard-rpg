@@ -19,7 +19,3 @@ export interface SessionCards {
   readonly cards: Card[];
 }
 
-/**
- * 会话阶段（PRD §2.2/§2.3 菜单→备战→战斗→结算）。
- * 本任务只实现 'fighting' 段的数据流（battleFlow.ts）；其余阶段的推进归 T3/T4/T7。
- */
