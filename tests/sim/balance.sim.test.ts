@@ -3,6 +3,9 @@
  * 模拟逻辑全部内联，跑在 vitest（node 环境）里。消费 buildPool → enemyHpForPool →
  * deriveStats → createBattle → answer 全链，把 PRD §6.5 的设计承诺变成锁死的回归性质。
  *
+ * D28 起 battle 有反击段：每回合命中 dmg+retal 两掷、miss 仅 retal 一掷——本文件的
+ * rng 消耗序注释与全部曲线数字已按新规则重录（Plan 4 · T2，数据见 task-2-report.md）。
+ *
  * 两条 RF#5 性质（口径按 controller 裁决 R-T7-b 落定，见文末注记）：
  * - 性质 A「全对必胜」：50 seed × 全 good 作答 → 断言 50/50 won。**硬闸**，任何常数
  *   漂移破坏它都会在这里红；
@@ -18,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { Card, SRSState, Stability } from '@core/types';
 import { mulberry32, uniform } from '@core/rng';
 import { GRADES, damageMultiplier, type Grade } from '@core/sm2';
-import { deriveStats, enemyHpForPool, victoryExp } from '@core/stats';
+import { deriveStats, enemyHpForPool, enemyPowerFor, victoryExp } from '@core/stats';
 import { buildPool } from '@core/deckBuild';
 import { createBattle, answer, type BattleState } from '@core/battle';
 
@@ -84,6 +87,9 @@ interface SimResult {
   readonly expPool: number;
   /** victoryExp 实际释放口径（只算已作答的前缀，R-T5-b 差异量化用）。 */
   readonly expReleased: number;
+  /** D28（T2 re-baseline）：终局剩余气血与败因区分（死亡 vs 池尽）。 */
+  readonly hpLeft: number;
+  readonly died: boolean;
 }
 
 /**
@@ -99,7 +105,14 @@ function simulate(seed: number, missRate: number, cards: Card[], size = POOL_SIZ
   // HP 按实际池长反推（T6 顾虑③采纳）：降级场景 pool.length < size 时不得用请求 size。
   const enemyHp = enemyHpForPool(pool.length, 'encounter');
   const vitCount = pool.filter((c) => c.srs.stability === 'review' || c.srs.stability === 'mastered').length;
-  let state = createBattle(pool, enemyHp, deriveStats(PLAYER_LEVEL, vitCount, SPIRIT_COUNT), rng);
+  // D28：反击强度经 createBattle 第 5 参显式接线（与 T3 startFight 的真实用法同形）。
+  let state = createBattle(
+    pool,
+    enemyHp,
+    deriveStats(PLAYER_LEVEL, vitCount, SPIRIT_COUNT),
+    rng,
+    enemyPowerFor('encounter'),
+  );
   let turns = 0;
   while (state.phase === 'answering') {
     const card = pool[state.idx];
@@ -118,6 +131,8 @@ function simulate(seed: number, missRate: number, cards: Card[], size = POOL_SIZ
     voided: pool.length - turns,
     expPool: victoryExp(pool, 'encounter'),
     expReleased: victoryExp(pool.slice(0, turns), 'encounter'),
+    hpLeft: state.playerHp,
+    died: state.playerHp <= 0,
   };
 }
 
@@ -154,7 +169,7 @@ describe('balance sim —— 语料与静态锚点', () => {
 });
 
 describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
-  it('SIM#A 50 seed 全 good → 50/50 won（设计承诺锁死）', () => {
+  it('SIM#A 50 seed 全 good → 50/50 won 且全员存活（D28 re-baseline：survived&&won 双断言）', () => {
     const results = SEEDS.map((seed) => simulate(seed, 0, CORPUS));
     const losers = results.filter((r) => !r.won).map((r) => `${r.phase}`);
     // 一旦红：先查 sim 自身（rng 消耗序 / pool[idx] 取卡错位），再怀疑常数被动。
@@ -163,6 +178,13 @@ describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
     // 余量佐证：中位 13 回合打满 105 血（HP 基准 105），平均留 ~2 张冗余卡。
     expect(median(results.map((r) => r.turns))).toBe(13);
     for (const r of results) expect(r.dealt).toBeGreaterThanOrEqual(r.enemyHp);
+    // 来历：D28——反击入规则后「必胜」升级为「必胜且不阵亡」。def=7≥power=7 ⇒
+    // 承伤被 max(1,·) 下钳到 1/回合，中位剩血 88；死亡数恒 0 是这条红线的机器证明。
+    for (const r of results) {
+      expect(r.died).toBe(false);
+      expect(r.hpLeft).toBeGreaterThan(0);
+    }
+    expect(median(results.map((r) => r.hpLeft))).toBe(88);
   });
 
   it('SIM#A2 降级场景：小语料按实际池长反推 HP 仍必胜（T6 顾虑③）', () => {
@@ -178,15 +200,16 @@ describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
 });
 
 describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬断言）', () => {
-  it('SIM#B miss∈{0.3,0.4} 最小失败率为回归基线（当前 70%）', () => {
+  it('SIM#B miss∈{0.3,0.4} 最小失败率为回归基线（D28 重录：当前 72%）', () => {
     const lossRates = [0.3, 0.4].map((mr) => {
       const wins = SEEDS.map((seed) => simulate(seed, mr, CORPUS)).filter((r) => r.won).length;
       return 1 - wins / SEEDS.length;
     });
     const minLoss = Math.min(...lossRates);
     // 「B 大概率跑出未败」的实测兑现：miss=0.40 仍有 7/50 翻盘（好池+坏运气组合）。
-    // 判据取下界：失败率不得低于基线 0.60——常数被调松（伤害↑/HP↓）会击穿它。
-    expect(minLoss).toBeGreaterThanOrEqual(0.6);
+    // 判据取下界：失败率不得低于基线 0.72（D28 re-baseline：反击不改变 miss 主通道，
+    // 曲线仅由长尾池微移；旧值 0.60 已上收）——常数被调松（伤害↑/HP↓）会击穿它。
+    expect(minLoss).toBeGreaterThanOrEqual(0.72);
     // 上界同样钉住（防"调过头"方向漂移）：B 不是必败性质，胜率不该归零。
     expect(minLoss).toBeLessThan(1);
   });
@@ -232,7 +255,52 @@ describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬�
  * 实测（本文件 SIM#B/SIM#C）：miss=0.40 胜率 14%（7/50 翻盘），B 作为「必败」硬断言不成立。
  * 这与 brief Step 1 自己的预告一致（"B 大概率跑出未败……是 §6.5 常数决定的规格属性"），
  * 也与预期裁决方向一致（"锁死 A + 记录 B 实测值作为回归基线"）。故本文件落法：
- *   A → 硬断言（50/50 won）；B → 双向界定的回归基线（minLoss ∈ [0.60, 1)），
+ *   A → 硬断言（50/50 won && survived）；B → 双向界定的回归基线（minLoss ∈ [0.72, 1)），
  *   并保留 {0.3,0.4} 扫描与最小失败率计算本身——判据形式不变，只是从"必败"降为"基线"。
  * 未私调任何 spec 常数（BASE_CARD_DAMAGE/DIFFICULTY/浮动区间原样）。
  */
+
+// ---------------------------------------------------------------------------
+// D28 · T2 新增：Boss 档分钉（难度分档真实生效 + 既有产品事实申报）
+// ---------------------------------------------------------------------------
+describe('balance sim —— Boss 档（D28 · SIM#E2）', () => {
+  /** boss 画像复用 simulate 的 encounter 路径不可行——此处直接内联 boss 接线。 */
+  function simBoss(seed: number): SimResult & { hpMax: number } {
+    const rng = mulberry32(seed);
+    const pool = buildPool(CORPUS, { size: POOL_SIZE, rng, nowMs: SIM_NOW });
+    const enemyHp = enemyHpForPool(pool.length, 'boss');
+    const vitCount = pool.filter((c) => c.srs.stability === 'review' || c.srs.stability === 'mastered').length;
+    let state = createBattle(
+      pool, enemyHp, deriveStats(PLAYER_LEVEL, vitCount, SPIRIT_COUNT), rng, enemyPowerFor('boss'),
+    );
+    let turns = 0;
+    while (state.phase === 'answering') {
+      state = answer(state, pool[state.idx], GRADES.good, rng);
+      turns += 1;
+    }
+    return {
+      won: state.phase === 'won', phase: state.phase, poolLen: pool.length, enemyHp,
+      turns, dealt: enemyHp - Math.max(0, state.enemyHp), voided: pool.length - turns,
+      expPool: victoryExp(pool, 'boss'), expReleased: victoryExp(pool.slice(0, turns), 'boss'),
+      hpLeft: state.playerHp, died: state.playerHp <= 0, hpMax: state.maxPlayerHp,
+    };
+  }
+
+  it('SIM#E2 L1 全对打 Boss：无人阵亡但 50/50 池尽而败——败因是输出不足，且承伤显著高于遭遇战', () => {
+    const rs = SEEDS.map(simBoss);
+    // ① 反击分档生效：def=7、boss power=11 ⇒ 每回合承 round(4×float)≈4，远大于遭遇战的 1；
+    //    剩余血带 = 100 − 承伤×回合数，实测带 [36,44]（浮动与回合数决定），必低于 encounter 的 85+。
+    for (const r of rs) {
+      expect(r.died).toBe(false); // 产品红线：L1 全对不会被打死，只是打不死 Boss
+      expect(r.hpLeft).toBeLessThan(60); // 与 encounter 中位 88 的分档差被钉住
+    }
+    expect(Math.min(...rs.map((r) => r.hpLeft))).toBeGreaterThanOrEqual(36);
+    // ② 既有产品事实（Plan 2 起即成立，非 D28 引入）：boss HP=ceil(15×10×1.5)=225 >
+    //    最大输出 15×12=180 ⇒ L1 新号全对也输。正确打法=领域掌握度堆 atk / 缩池练习关。
+    //    若未来调 boss HP 系数走 PRD 修订，此断言随之更新——它的存在就是让该决策有账可查。
+    expect(rs.every((r) => r.phase === 'lost')).toBe(true);
+    expect(rs.every((r) => r.turns === r.poolLen)).toBe(true);
+    // ③ exp 释放口径在 boss 档同样不虚高（全答完 released==pool）。
+    for (const r of rs.slice(0, 3)) expect(r.expReleased).toBe(r.expPool);
+  });
+});
