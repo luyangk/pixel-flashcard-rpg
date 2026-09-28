@@ -118,6 +118,7 @@ function makeState(o: ViewOpts = {}): BattleState {
     // 来历：D28——BattleState 扩 def/enemyPower 两字段（反击结算的消费端）。
     def: 7,
     enemyPower: 7,
+    mode: 'fight',
     log: o.log ?? [],
   };
 }

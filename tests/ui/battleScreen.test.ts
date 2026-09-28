@@ -75,6 +75,7 @@ function makeFight(idx: number, log: BattleEvent[], phase: BattleState['phase'] 
     atk: 12,
     def: 3,
     enemyPower: 7,
+    mode: 'fight',
     log,
   };
   return { state, pool, current: phase === 'answering' ? pool[idx] ?? null : null };

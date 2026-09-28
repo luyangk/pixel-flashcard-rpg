@@ -35,8 +35,23 @@ import { uniform } from './rng';
 import type { PlayerStats } from './stats';
 import { enemyPowerFor } from './stats';
 
-/** N-8：无 'ready' 成员——建战即出第一张题卡。 */
-export type BattlePhase = 'answering' | 'won' | 'lost';
+/**
+ * N-8：无 'ready' 成员——建战即出第一张题卡。
+ *
+ * Plan 7 · T1 扩位：**`'cleared'`** = 木桩练功打完池子（见 `BattleMode`）。它与 won/lost
+ * 是并列的第三种终局：练功**不判胜负**，所以绝不复用 won（木桩血不降，照 fight 的判定
+ * 会给出 lost ⇒ 误触发败局演出与假记忆）。
+ */
+export type BattlePhase = 'answering' | 'won' | 'lost' | 'cleared';
+
+/**
+ * 战斗形态（Plan 7 · D46）：
+ * - `'fight'` —— 正常遭遇战 / Boss 战（有反击、有胜负）；
+ * - `'drill'` —— **木桩练功**：敌血锁定（`enemyHp` 永不下降，屏上飘字照旧）、
+ *   敌人**不反击**（气血不掉）、打完池子即 `'cleared'`。参数仍取遭遇战档，
+ *   变的只是这三条终局规则。
+ */
+export type BattleMode = 'fight' | 'drill';
 
 export interface BattleState {
   readonly phase: BattlePhase;
@@ -51,6 +66,8 @@ export interface BattleState {
   readonly def: number;
   /** D28：敌人每回合反击强度（enemyPowerFor(difficulty) 的建战快照，battle 不感知难度）。 */
   readonly enemyPower: number;
+  /** 战斗形态（Plan 7 · T1）：缺省 `'fight'`，`'drill'` = 木桩练功。 */
+  readonly mode: BattleMode;
   readonly log: readonly BattleEvent[];
 }
 
@@ -80,6 +97,7 @@ export function createBattle(
   playerStats: BattlePlayerStats,
   _rng: Rng, // 初始态无随机消耗；形参保留以固定调用签名（seed 由上层持有贯穿战斗）
   enemyPower: number = enemyPowerFor('encounter'),
+  mode: BattleMode = 'fight',
 ): BattleState {
   if (poolCards.length === 0) throw new Error('empty-pool');
   const seen = new Set<string>();
@@ -97,6 +115,7 @@ export function createBattle(
     atk: playerStats.atk,
     def: playerStats.def,
     enemyPower,
+    mode,
     log: [],
   };
 }
@@ -140,7 +159,8 @@ export function answer(
     const damage = Math.round(
       state.atk * damageMultiplier(card.srs) * uniform(rng, 0.9, 1.1),
     );
-    enemyHp = state.enemyHp - damage;
+    // drill 锁血：伤害事件照常产出（屏上要飘字，玩家需要"打到了"的反馈），但敌血不动
+    enemyHp = state.mode === 'drill' ? state.enemyHp : state.enemyHp - damage;
     events.push({ kind: 'damage', cardId: card.id, amount: damage });
   } else {
     // 空转：对敌零输出（答错仅空转红线，PRD §2.3）——但 D28 起敌人照常反击。
@@ -149,6 +169,16 @@ export function answer(
 
   let phase: BattlePhase = state.phase;
   let playerHp = state.playerHp;
+  // drill：既不判胜负也不反击 —— 池尽即"练完"，气血全程不动（D46）。
+  // 注意这段**必须放在 enemyHp <= 0 之前**：木桩血永不归零，但把判定顺序写死能让
+  // "以后有人给 drill 也调血"时仍然走 cleared 这条路。
+  if (state.mode === 'drill') {
+    if (idx === state.pool.length) {
+      phase = 'cleared';
+      events.push({ kind: 'end' });
+    }
+    return { ...state, phase, idx, enemyHp, playerHp, log: [...state.log, ...events] };
+  }
   if (enemyHp <= 0) {
     // enemyHp 先归零 → 立即 won（含池尽同时归零的情形），剩余卡作废；
     // **won 优先于承伤**（D28 phase 顺序 verbatim）：击杀回合不再结算反击。
