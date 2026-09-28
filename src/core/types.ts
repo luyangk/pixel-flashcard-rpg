@@ -109,6 +109,29 @@ export interface StorySettings {
   arcSeen: number;
 }
 
+/**
+ * 作答模式（Plan 6 · D41）：`'choice'` = 选择题（默认）、`'qa'` = 问答模式（LLM 判定）。
+ *
+ * 【落位说明】类型在 Plan 6 · T4 先落（`app/quota` 与后续 UI 都要用它），
+ * 存档侧的三段式（validateSave 在场严检 + migrateSave 补默认）在 T5 落地 ——
+ * 类型先行不会改变任何存档行为（它此时还没有任何消费者写盘）。
+ */
+export type AnswerMode = 'choice' | 'qa';
+
+/**
+ * LLM 每日额度（Plan 6 · D45）：`day` = 本地日界字符串（`core/reviewLedger.localDayString`），
+ * `cards` = 当天已生成的新知识卡数（**采新卡与 AI 辅建卡合并记账**），
+ * `judges` = 当天问答判定次数（上限 300，到顶回落玩家自评）。
+ *
+ * 三段式同 leaderboard：types 可选 + validateSave 在场严检 + migrateSave 为缺席档补零
+ * （Plan 6 · T5）。存在存档里 ⇒ 会随备份走（本地自用；如实登记）。
+ */
+export interface LlmQuota {
+  day: string;
+  cards: number;
+  judges: number;
+}
+
 /** 玩家设置。 */
 export interface Settings {
   bossThresholdTier: 15 | 30 | 50;
