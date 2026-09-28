@@ -17,5 +17,21 @@ export declare function stripComments(src: string): string;
 /** 递归收集 dir 下全部 .ts 文件。 */
 export declare function collectTs(dir: string, acc?: string[]): string[];
 
-/** 扫描给定 .ts 文件，返回结构化命中列表；空数组即纯净。 */
-export declare function scanFiles(files: readonly string[], rootDir: string): PurityHit[];
+/** 一条黑名单规则。 */
+export interface PurityRule {
+  readonly name: string;
+  readonly re: RegExp;
+}
+
+/** core 的黑名单（DOM/平台 API/时钟/随机/CommonJS）。 */
+export declare const FORBIDDEN: readonly PurityRule[];
+
+/** app（编排层）的黑名单：禁 DOM 与平台单例（含 Date.now/Math.random），但允许 setTimeout/fetch。 */
+export declare const APP_FORBIDDEN: readonly PurityRule[];
+
+/** 扫描给定 .ts 文件，返回结构化命中列表；空数组即纯净。`forbidden` 缺省用 core 的黑名单。 */
+export declare function scanFiles(
+  files: readonly string[],
+  rootDir: string,
+  forbidden?: readonly PurityRule[],
+): PurityHit[];

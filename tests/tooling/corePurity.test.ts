@@ -8,10 +8,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // d.ts 与 mjs 同名相邻放置即可被解析；bundler 模式下需显式去掉 .mjs 扩展
-import { stripComments, scanFiles } from '../../scripts/check-core-purity';
+import { APP_FORBIDDEN, stripComments, scanFiles } from '../../scripts/check-core-purity';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const coreDir = join(root, 'src', 'core');
+const appDir = join(root, 'src', 'app');
 
 function collectTs(dir: string, acc: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -29,6 +30,37 @@ describe('check-core-purity', () => {
     const files = collectTs(coreDir);
     expect(files.length).toBeGreaterThan(0);
     expect(scanFiles(files, root)).toEqual([]);
+  });
+
+  it('真实 src/app 全部 .ts 零命中：编排层不直接碰 DOM/平台单例（T11 终审自查补的守卫）', () => {
+    const files = collectTs(appDir);
+    expect(files.length).toBeGreaterThan(0);
+    // 用 app 的黑名单（比 core 宽松：允许 setTimeout/fetch，但禁 DOM 与平台单例）
+    expect(scanFiles(files, root, APP_FORBIDDEN)).toEqual([]);
+  });
+
+  it('app 黑名单有牙：document./requestAnimationFrame/Date.now( 都必须被检出', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'appurity-'));
+    writeFileSync(
+      join(dir, 'bad-app.ts'),
+      [
+        '// document. 在注释里不该报',
+        'export function f() { return document.getElementById("x"); }',
+        'export const raf = requestAnimationFrame(() => {});',
+        'export const t = Date.now();',
+        'export const s = window.localStorage;',
+      ].join('\n'),
+    );
+    const hits = scanFiles([join(dir, 'bad-app.ts')], root, APP_FORBIDDEN);
+    const names = hits.map((h) => h.blacklisted).sort();
+    expect(names).toContain('document.');
+    expect(names).toContain('requestAnimationFrame');
+    expect(names).toContain('Date.now(');
+    expect(names).toContain('localStorage');
+    // 注释里的字面不误报
+    expect(hits.every((h) => !h.text.includes('在注释里'))).toBe(true);
   });
 
   it('平台 API 字面被检出、注释字面不误报（反例）', async () => {
