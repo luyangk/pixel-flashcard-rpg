@@ -15,6 +15,7 @@
  */
 import { rankRuns, type RunRecord } from '@core/leaderboard';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import { levelFromExp, playerStatsFor } from '../app/growth';
 import { h } from './dom';
 
 /** 屏内导航目标（宿主壳的切屏词表；'prepare' 也走 host，控制器不替宿主决定何时开局）。 */
@@ -39,7 +40,10 @@ const REMINDER_TEXT = '已经 7 天没备份了。建议现在导出一份存档
 
 /** 四入口（顺序即屏上顺序；文案大白话）。 */
 const ENTRIES: ReadonlyArray<{ readonly target: MenuTarget; readonly label: string }> = [
-  { target: 'prepare', label: '开始修炼' },
+  // 「开始复习」而不是「开始修炼」（终审 Minor）：LORE §8 明令"全局武侠化 UI 术语一律不进
+  // 功能界面"，menu.ts 文件头也自认这里是功能文本轨。而且"复习=伤害"正是本作的核心循环，
+  // 大白话反而更准。
+  { target: 'prepare', label: '开始复习' },
   { target: 'decks', label: '卡组' },
   { target: 'codex', label: '藏书阁' },
   { target: 'settings', label: '设置' },
@@ -86,6 +90,28 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
   };
   for (const b of navButtons) b.addEventListener('click', navHandler);
 
+  /**
+   * 六维面板（终审 I-3）：PRD §2.1/§8-2 的核心体验承诺是"强度增长直接来自记忆水平"，
+   * 但此前**没有任何屏显示 atk/def/体力/精神/气血**——玩家看不出自己为什么变强。
+   * 数据全部来自 app 层已导出的派生函数（本屏不自己算，口径与战斗同源）：
+   * 等级 = levelFromExp(exp)，其余六维 = playerStatsFor(save)（全体按全库口径，N-1）。
+   */
+  const statEls = new Map<string, HTMLElement>();
+  const statDefs: ReadonlyArray<{ key: string; label: string }> = [
+    { key: 'level', label: '等级' },
+    { key: 'atk', label: '攻击' },
+    { key: 'def', label: '防御' },
+    { key: 'vit', label: '体力' },
+    { key: 'spi', label: '精神' },
+    { key: 'maxHp', label: '气血' },
+  ];
+  const statsEl = h('dl', { 'data-ui': 'stats-panel', class: 'stats-panel' });
+  for (const def of statDefs) {
+    const dd = h('dd', { 'data-stat': def.key, class: 'stat-value' }, '—');
+    statEls.set(def.key, dd);
+    statsEl.appendChild(h('div', { class: 'stat' }, [h('dt', { class: 'stat-label' }, def.label), dd]));
+  }
+
   const rankEl = h('ol', { 'data-ui': 'leaderboard', class: 'leaderboard' });
   const rankEmptyEl = h(
     'p',
@@ -117,6 +143,7 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
   const screen = h('div', { 'data-ui': 'menu-screen', class: 'menu-screen' }, [
     titleEl,
     reminderEl,
+    statsEl,
     navEl,
     boardEl,
   ]);
@@ -140,6 +167,19 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
   }
 
   function render(snap: ControllerSnapshot): void {
+    // 六维：等级取 exp 派生，其余取全库口径的属性快照（与战斗入口同一函数）
+    const stats = playerStatsFor(snap.save);
+    const level = levelFromExp(snap.save?.settings?.progress?.exp ?? 0);
+    const values: Record<string, number> = {
+      level,
+      atk: stats.atk,
+      def: stats.def,
+      vit: stats.vit,
+      spi: stats.spi,
+      maxHp: stats.maxHp,
+    };
+    for (const [key, el] of statEls) el.textContent = String(values[key] ?? '—');
+
     const all = snap.save?.settings?.leaderboard;
     renderRank(Array.isArray(all) ? all : EMPTY_RECORDS);
     // 提醒横幅：闸门为真**且**这一实例里没被压掉。只读态横幅归 T8（D29），此处不重复。

@@ -116,7 +116,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   const replayBtn = h('button', { 'data-ui': 'replay-prologue', class: 'replay-btn', type: 'button' }, '重看序章') as HTMLButtonElement;
   const storyEl = h('section', { 'data-ui': 'story-group', class: 'settings-group' }, [
     h('h3', { class: 'field-title' }, '序章'),
-    h('p', { class: 'field-hint' }, '下次回到菜单时会重新演出一次（可跳过）。'),
+    h('p', { class: 'field-hint' }, '点了会**马上**重演一次（可跳过）。'),
     replayBtn,
   ]);
 

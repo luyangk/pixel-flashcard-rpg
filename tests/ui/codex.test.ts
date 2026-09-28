@@ -174,6 +174,16 @@ describe('mountCodex —— 历史战报（T8 评审 I-1 的补齐）', () => {
     expect(all(root, '[data-beat]').map((li) => li.textContent)).toEqual(expected);
   });
 
+  it('CX#7e 脏大游标（1e9）不卡死：回放封顶（终审 Minor）——不封顶的实现会在这个用例里超时', () => {
+    const root = makeRoot();
+    const base = saveWith([], [], 0);
+    const save = { ...base, settings: { ...base.settings, story: { ...base.settings.story, beatIndex: 1e9 } } };
+    const started = Date.now();
+    mountCodex(root, makeCtrl(makeSnap({ save })), { acts: ACTS, beats: ['甲句', '乙句'] });
+    expect(Date.now() - started).toBeLessThan(1000); // 不封顶 ⇒ 十亿次循环必然超时
+    expect(all(root, '[data-beat]').length).toBeLessThanOrEqual(500);
+  });
+
   it('CX#7d 快照推进（又抽了一句）⇒ 历史跟着长一条', () => {
     const root = makeRoot();
     const pool = ['甲句', '乙句', '丙句'];

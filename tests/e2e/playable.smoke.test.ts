@@ -224,11 +224,9 @@ describe('E2E#2 首战（引导域）→ 结算屏', () => {
     clickThroughPrologue(h.root);
     await settle();
 
-    // 让规则引擎有活干：把一张卡的答案改成含数字（真内容里迟早会有数字型卡）；
-    // 否则 tamperNumber/tamperWord 都无解，pickFakes 产出 0 张（演出"有素材才演"是对的）
-    await h.coord.mutate((save) => {
-      save.cards[0].back = '光每秒约 300000 公里';
-    });
+    // 这里**不再**为了逼出演出而临时改卡（终审 I-1 抓的正是这一点）：预置内容本身必须
+    // 含可篡改的答案（ASCII 数字或词表词），否则玩家最可能的第一场败局看不到 LORE §5.5
+    // 的叙事钩子。演出是否出现由真实内容决定 —— 下面的断言就是这条内容的回归钉。
 
     (h.root.querySelector('[data-nav="prepare"]') as HTMLElement).click();
     expect(h.root.querySelector('[data-ui="prepare-screen"]')).not.toBeNull();
@@ -249,7 +247,7 @@ describe('E2E#2 首战（引导域）→ 结算屏', () => {
     // 战败演出（LORE §5.5）：闪现 → 打叉揭示；纯演出，零数值后果
     expect((h.root.querySelector('[data-ui="outcome"]') as HTMLElement).textContent).toBe('败');
     expect((h.root.querySelector('[data-ui="fake-memory"]') as HTMLElement).hidden).toBe(false);
-    expect((h.root.querySelector('[data-ui="fake-back"]') as HTMLElement).textContent).not.toBe('光每秒约 300000 公里');
+    expect((h.root.querySelector('[data-ui="fake-back"]') as HTMLElement).textContent).not.toBe('');
     (h.root.querySelector('[data-ui="fake-skip"]') as HTMLElement).click();
     expect((h.root.querySelector('[data-ui="fake-cross"]') as HTMLElement).hidden).toBe(false);
     expect((h.root.querySelector('[data-ui="fake-reveal-text"]') as HTMLElement).textContent).toBe('假的。幸好你没记住它。');

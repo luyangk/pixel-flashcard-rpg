@@ -128,7 +128,6 @@ export interface Coordinator {
   /** flush 的详细结果面（boolean 面由 `=== true` 比较即可判别）。 */
   flushDetailed(): Promise<FlushResult>;
   /**
-   /**
     * 坏档抢救出口（Plan 4 · T8，D29 三件套之一）：把**存储里当前那份值**序列化成文本，
     * 供只读态一键导出（文件名 `zx-xia-corrupt-<YYYY-MM-DD>.json`）。
     *

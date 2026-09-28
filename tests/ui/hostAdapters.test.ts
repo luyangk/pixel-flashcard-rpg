@@ -303,6 +303,12 @@ describe('assembleHost —— 导出与抢救口', () => {
     expect(added?.ok).toBe(true);
     if (added?.ok) expect(added.value.source?.createdAt).toBe(NOW);
 
+    // 新卡吃玩家调过的 SM-2 参数（终审 Minor）：改设置后再加一张，ease 必须跟着变
+    expect(await rig.assembly.adapters.setParams?.({ initialEase: 2.9, minEase: 1.4, firstInterval: 1, secondInterval: 5 })).toEqual({ ok: true });
+    const second = await rig.assembly.adapters.addCard?.({ front: 'f2', back: 'b2', deckId: 'deck-a', id: 'new-2' });
+    expect(second?.ok).toBe(true);
+    if (second?.ok) expect(second.value.srs.ease).toBe(2.9);
+
     expect(await rig.assembly.adapters.setTier?.(15)).toEqual({ ok: true });
     expect(rig.coord.snapshot().settings.bossThresholdTier).toBe(15);
     const named = await rig.assembly.adapters.setBossName?.('deck-a', '荒原卷灵');

@@ -10,8 +10,9 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RunRecord } from '@core/leaderboard';
+import { levelFromExp, playerStatsFor } from '../../src/app/growth';
 import { mountMenu, type MenuTarget } from '../../src/ui/menu';
-import { all, click, makeCtrl, makeRoot, makeSave, makeSnap, ui } from './support';
+import { all, click, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, makeSrs, ui } from './support';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -48,12 +49,52 @@ describe('mountMenu —— 四入口', () => {
     expect(ui(root, 'menu-title').textContent).toBe('知识侠客');
     const entries = all(root, '[data-nav]');
     expect(entries.map((e) => e.getAttribute('data-nav'))).toEqual(['prepare', 'decks', 'codex', 'settings']);
+    expect(entries.map((e) => e.textContent)).toEqual(['开始复习', '卡组', '藏书阁', '设置']); // LORE §8：功能界面用大白话
     for (const e of entries) click(e);
     expect(nav).toEqual(['prepare', 'decks', 'codex', 'settings']);
   });
 });
 
 describe('mountMenu —— 本地榜 Top10', () => {
+  it('MN#7 六维面板（终审 I-3）：等级与攻/防/体力/精神/气血全部可见，且与 app 层派生同源', () => {
+    const root = makeRoot();
+    // 造一份"练过"的档：2 张 mastered 卡 + 1 张自建 review 卡 + 若干经验
+    const base = makeSave();
+    const cards = [
+      makeCard('c1', { srs: makeSrs({ stability: 'mastered', interval: 30, reps: 6 }) }),
+      makeCard('c2', { srs: makeSrs({ stability: 'mastered', interval: 30, reps: 6 }) }),
+      makeCard('c3', {
+        srs: makeSrs({ stability: 'review' }),
+        source: { type: 'manual', createdAt: 0 },
+      }),
+    ];
+    const save = {
+      ...base,
+      cards,
+      decks: [makeDeck('deck-a', '生活常识')],
+      settings: { ...base.settings, progress: { exp: 1234 } },
+    };
+    const expected = playerStatsFor(save);
+    const ctrl = makeCtrl(makeSnap({ save }));
+    mountMenu(root, ctrl, { onNav: () => undefined });
+
+    const stat = (k: string): string => (root.querySelector(`[data-stat="${k}"]`) as HTMLElement).textContent ?? '';
+    expect(stat('level')).toBe(String(levelFromExp(1234)));
+    expect(stat('atk')).toBe(String(expected.atk));
+    expect(stat('def')).toBe(String(expected.def));
+    expect(stat('vit')).toBe(String(expected.vit));
+    expect(stat('spi')).toBe(String(expected.spi));
+    expect(stat('maxHp')).toBe(String(expected.maxHp));
+    expect(expected.vit).toBe(3); // 口径自检：stability ≥ review 的卡都计入体力（2 mastered + 1 review）
+    expect(expected.spi).toBe(1); // 一张合格自建卡（manual + review + lapses≤2）计入精神
+
+    // 快照一变（又练熟一张）面板跟着变——写死一次的实现在这条上红
+    const more = { ...save, cards: [...cards, makeCard('c4', { srs: makeSrs({ stability: 'mastered', interval: 30, reps: 6 }) })] };
+    ctrl.push(makeSnap({ save: more }));
+    expect(stat('atk')).toBe(String(playerStatsFor(more).atk));
+    expect(stat('vit')).toBe('4'); // 再加一张 mastered ⇒ 体力 +1
+  });
+
   it('MN#2 12 条记录只上 10 行，且最高分在首行', () => {
     const root = makeRoot();
     const ctrl = makeCtrl(makeSnap({ save: saveWithLeaderboard(12) }));

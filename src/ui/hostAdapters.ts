@@ -114,7 +114,10 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     toastMs: deps.toastMs,
 
     /* ---- 卡库 / 设置写口（全部经 app 层，视图零存储） ---- */
-    addCard: (input) => addCard(coord, { ...input, nowMs: now() }),
+    // 手写新卡用**玩家自己调的 SM-2 参数**建初始 SRS（终审 Minor）：不传就会落到
+    // core 的 FALLBACK_PARAMS，于是"设置页改了 initialEase"对新手写卡毫无效果。
+    addCard: (input) =>
+      addCard(coord, { ...input, nowMs: now(), sm2Params: coord.snapshot().settings.sm2Params }),
     addDeck: (input) => addDeck(coord, input),
     setBossName: (deckId, raw) => setBossName(coord, deckId, raw),
     setTier: (tier) => setBossThresholdTier(coord, tier),

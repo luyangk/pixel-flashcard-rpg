@@ -54,6 +54,9 @@ export interface CodexHandle {
   unmount(): void;
 }
 
+/** 行记最多回放多少条（见 renderBeatHistory 的上限说明）。 */
+const HISTORY_SCAN_MAX = 500;
+
 /** 净化条目（新者前；purifiedAt 相同则按存档顺序——排序稳定，不引入随机）。 */
 export interface CodexEntry {
   readonly deck: Deck;
@@ -197,7 +200,11 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
    * 回放出的空句（脏游标/脏模板）直接跳过——它们是"没内容"，不该在行记里占一行。
    */
   function renderBeatHistory(cursor: number): void {
-    const wanted = Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
+    // 回放上限（Plan 4 终审 Minor）：游标是外部存档来的，`beatIndex=1e9` 的脏档会让
+    // 这里循环十亿次当场卡死藏书阁。行记本来也只当"最近的战报"读，故封顶到
+    // HISTORY_SCAN_MAX 次回放（超出部分不显示，绝不为了显示历史而冻结界面）。
+    const raw = Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
+    const wanted = Math.min(raw, HISTORY_SCAN_MAX);
     const key = `${wanted}|${beats.length}|${historyLimit}`;
     if (key === historyKey) return;
     historyKey = key;

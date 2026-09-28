@@ -47,12 +47,21 @@ export const FLASH_WINDOW_MS = 180;
 /** 脚底基线（逻辑像素）：侠客与怪物的 y 对齐点，保证"站在地上"。 */
 const GROUND_Y = 178;
 
-/** 侠客目标高与**右缘**（素材非方形时左缘随宽高比漂移，故以右缘定位）；boss 比杂兵大一圈。 */
+/**
+ * 角色缩放（终审 I-7）：**只允许整数倍**。
+ *
+ * PRD §7 明令"禁止非整数缩放导致的像素扭曲"。首版用目标高 76/60/88 去等比拉图，
+ * 对 32×32 素材就是 2.375×、对 64×64 是 1.375×——像素被拉成不均匀的方块（虽然
+ * 逻辑画布本身是整数倍放大到屏幕的，也救不回画内的失真）。现在改为按素材固有尺寸
+ * 取整数倍：杂兵/侠客（32²）用 2×，卷灵（64²）用 2×。
+ */
+const HERO_SCALE = 2;
+const MOB_SCALE = 2;
+const BOSS_SCALE = 2;
+
+/** 各角色的**右缘**（素材非方形时左缘随宽高比漂移，故以右缘定位）。 */
 const HERO_RIGHT = 84;
-const HERO_H = 76;
-const MOB_H = 60;
 const MOB_RIGHT = 236;
-const BOSS_H = 88;
 const BOSS_RIGHT = 240;
 
 /** 顶部血条几何：玩家在左、敌人在右，各占一半减边距。 */
@@ -82,17 +91,21 @@ function spriteSize(img: StageImage | undefined): { w: number; h: number } {
   return { w: Math.max(1, Math.round(w || 1)), h: Math.max(1, Math.round(h || 1)) };
 }
 
-/** 按目标高摆放素材：等比出宽（像素取整），底边贴 GROUND_Y。 */
+/**
+ * 按**整数倍**摆放素材：w/h 恒为素材固有尺寸 × `scale`（不改宽高比、不插值），
+ * 底边贴 GROUND_Y、右缘对齐给定 x。素材尺寸取不到（stub/未解码）时退回 1×1，仍不 NaN。
+ */
 function placeSprite(
   img: StageImage | undefined,
-  targetH: number,
+  scale: number,
   rightEdge: number,
   footY: number,
   dx = 0,
 ): { x: number; y: number; w: number; h: number } {
   const s = spriteSize(img);
-  const h = Math.max(1, Math.round(targetH));
-  const w = Math.max(1, Math.round((h * s.w) / s.h));
+  const k = Number.isInteger(scale) && scale > 0 ? scale : 1;
+  const h = Math.max(1, Math.round(s.h) * k);
+  const w = Math.max(1, Math.round(s.w) * k);
   const y = Math.round(footY - h);
   const x = Math.round(rightEdge - w + dx);
   return { x, y, w, h };
@@ -109,6 +122,26 @@ function blit(
 ): void {
   if (!img) return;
   ctx.drawImage(img as CanvasImageSource, x, y, w, h);
+}
+
+/**
+ * 背景平铺：以素材固有尺寸为步长铺满逻辑画布（1:1 绘制，绝不缩放）。
+ * 素材尺寸取不到时退回"铺满一次"（与旧行为同形，避免测试 stub 下什么都不画）。
+ */
+function tileBackground(ctx: CanvasRenderingContext2D, img: StageImage | undefined): void {
+  if (!img) return;
+  const s = spriteSize(img);
+  const tw = Math.max(1, Math.round(s.w));
+  const th = Math.max(1, Math.round(s.h));
+  if (tw >= LOGICAL_W || th >= LOGICAL_H) {
+    blit(ctx, img, 0, 0, LOGICAL_W, LOGICAL_H); // 素材比画布还大：交回给一次 blit
+    return;
+  }
+  for (let y = 0; y < LOGICAL_H; y += th) {
+    for (let x = 0; x < LOGICAL_W; x += tw) {
+      blit(ctx, img, x, y, tw, th);
+    }
+  }
 }
 
 /** 环境光遮蔽式的地面阴影：让角色"踩"在背景上，不额外吃素材。 */
@@ -266,11 +299,14 @@ export function drawFrame(
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
 
-  // 1) 背景铺满逻辑画布。
-  blit(ctx, sprites?.bg, 0, 0, LOGICAL_W, LOGICAL_H);
+  // 1) 背景**按素材原尺寸平铺**铺满逻辑画布（终审 I-7）：单次拉伸 64→320×240 是
+  //    5×/3.75× 的非整数缩放（竖直方向会糊），而素材本身是按"可无缝平铺"做的
+  //    （见 assets/README.md 与素材契约的接缝用例）。平铺既是 1:1 绘制，也终于让
+  //    文档里那句话成为事实。右/下边多出的部分被画布自然裁掉。
+  tileBackground(ctx, sprites?.bg);
 
   // 2) 侠客（玩家）——闪红表示被反击。
-  const hero = placeSprite(sprites?.hero, HERO_H, HERO_RIGHT, GROUND_Y);
+  const hero = placeSprite(sprites?.hero, HERO_SCALE, HERO_RIGHT, GROUND_Y);
   drawShadow(ctx, hero.x + hero.w / 2, GROUND_Y, hero.w);
   blit(ctx, sprites?.hero, hero.x, hero.y, hero.w, hero.h);
   if (hitHero) {
@@ -286,7 +322,7 @@ export function drawFrame(
   // 3) 怪物（boss 档换图、换尺寸）+ 受击闪白。
   const isBoss = view?.difficulty === 'boss';
   const mobImg = isBoss ? sprites?.boss : sprites?.mob;
-  const mob = placeSprite(mobImg, isBoss ? BOSS_H : MOB_H, isBoss ? BOSS_RIGHT : MOB_RIGHT, GROUND_Y, mobShake);
+  const mob = placeSprite(mobImg, isBoss ? BOSS_SCALE : MOB_SCALE, isBoss ? BOSS_RIGHT : MOB_RIGHT, GROUND_Y, mobShake);
   drawShadow(ctx, mob.x + mob.w / 2, GROUND_Y, mob.w);
   blit(ctx, mobImg, mob.x, mob.y, mob.w, mob.h);
   if (hitMob) {

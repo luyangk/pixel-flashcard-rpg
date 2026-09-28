@@ -209,6 +209,41 @@ h1 {
   padding: 0.9rem;
 }
 
+.stats-panel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.35rem 0.6rem;
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.stat-label {
+  color: var(--paper-dim);
+}
+
+.stat-value {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.quit-btn {
+  align-self: flex-start;
+  min-height: 2.2rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+}
+
 .board {
   margin-top: auto;
 }

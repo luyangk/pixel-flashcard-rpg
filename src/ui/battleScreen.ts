@@ -39,6 +39,8 @@ const GRADE_BUTTONS: ReadonlyArray<{ readonly key: string; readonly grade: Grade
 
 const DEFAULT_BANNER_TEXT = '只读模式：存档当前不可写，本局的改动不会保存';
 const MISS_HINT_TEXT = '空转 —— 这题没想起来，怪物纹丝不动';
+/** 战斗中唯一的退出口（终审 I-2：此前拒战只能刷新页面）。文案是功能轨大白话。 */
+const QUIT_TEXT = '退出本局';
 
 /** resize 监听只需要这么点面：够注入假 window，也够真 window 直接喂进来。 */
 export interface BattleScreenWindow {
@@ -142,9 +144,23 @@ export function mountBattleScreen(
     return b;
   });
   const gradesEl = h('div', { 'data-ui': 'grades', class: 'grades' }, gradeButtons);
+  // 退出本局：控制器早就有 toMenu（未终局不落账）——此前 UI 层没有任何生产者，
+  // 玩家误选领域后只能刷新页面（终审 I-2）。这里补齐这个生产者。
+  const quitBtn = h('button', { 'data-ui': 'quit', class: 'quit-btn', type: 'button' }, QUIT_TEXT) as HTMLButtonElement;
+  quitBtn.addEventListener('click', () => {
+    if (destroyed || pending) return;
+    pending = true;
+    setEnabled(false);
+    try {
+      void Promise.resolve(ctrl.intent({ type: 'toMenu' })).catch(() => undefined);
+    } catch {
+      pending = false;
+    }
+  });
 
   const screen = h('div', { 'data-ui': 'battle-screen', class: 'battle-screen' }, [
     hpEl,
+    quitBtn,
     stageHost,
     fxEl,
     missEl,
@@ -163,10 +179,21 @@ export function mountBattleScreen(
   let destroyed = false;
   let frameHandle: number | null = null;
 
-  /** 视口尺寸 → stage 重算整数缩放/居中。stage 内部对 host 尺寸不敏感，故传视口。 */
+  /**
+   * 尺寸 → stage 重算整数缩放/居中。
+   *
+   * **优先用 canvas 宿主自己的盒子，而不是视口**（终审 J-3）：canvas 是绝对定位在
+   * `.stage-host`（`overflow:hidden`）里的，按视口算 letterbox 的居中偏移会把画布
+   * 平移到容器之外裁掉——竖屏恰好放得下所以看不出来，一横屏/平板就破。
+   * 宿主量不到（happy-dom 里 clientWidth 恒 0）时退回视口，保持既有测试口径。
+   */
   const onResize = (): void => {
     if (destroyed || !win) return;
-    stage.onResize(win.innerWidth, win.innerHeight);
+    const hostW = stageHost.clientWidth;
+    const hostH = stageHost.clientHeight;
+    const w = typeof hostW === 'number' && hostW > 0 ? hostW : win.innerWidth;
+    const h = typeof hostH === 'number' && hostH > 0 ? hostH : win.innerHeight;
+    stage.onResize(w, h);
   };
 
   /** 每帧：拿当前快照画一帧，tMs 用 rAF 的 timestamp（本层绝不自己读钟）。 */

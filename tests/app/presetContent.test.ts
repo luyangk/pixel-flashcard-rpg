@@ -136,6 +136,16 @@ describe('真实内容文件（assets/content/preset.json）', () => {
     const guide = checked.content.decks.find((d) => d.id === 'preset-life');
     expect(guide?.cards.length).toBeGreaterThanOrEqual(8);
   });
+
+  it('PC#3b 引导域至少有 3 张卡含 ASCII 数字（假记忆演出的素材来源；终审 I-1）', () => {
+    const checked = validateContent(presetJson);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const guide = checked.content.decks.find((d) => d.id === 'preset-life');
+    const withDigit = (guide?.cards ?? []).filter((c) => /\d/.test(c.back));
+    // fakeMemory.tamperNumber 只认 ASCII 数字：一张都没有 ⇒ 玩家最可能的首败看不到演出
+    expect(withDigit.length, '引导域没有可数字篡改的答案').toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe('installPresetContent —— 只在空库灌', () => {

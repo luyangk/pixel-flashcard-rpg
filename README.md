@@ -34,9 +34,14 @@ npm run dev -- --host 127.0.0.1
 ```
 
 首次启动会自动灌入 4 个预置领域（成语典故 / 英语词根 / 生活常识 / 唐诗，共 30 张手写卡）。
-**玩法要点**：新卡（stability `new`）每击只造成 `atk × 0.1` 伤害，首战几乎必败——这是刻意的
+**玩法要点**：新卡（stability `new`）每击只造成 `atk × 0.1` 伤害，**首战必败**——这是刻意的
 "苦修"循环：先输、背卡、卡片稳定度晋升到 `review` 后每击 `atk × 1.0`，打赢几场遭遇战攒经验升级，
 再回头挑战卷灵 Boss。战败不是白输：败局会演出"假记忆注入"（LORE §5.5，纯演出、零数值后果）。
+
+**两处必败要提前知道**（都是数值设计的可推结果，不是 bug；见 PRD D33/D34）：
+① 第一场遭遇战：全 `new` 卡打不掉 70 点敌血；
+② **第一头卷灵首战也打不过**——引导域 10 张卡 ⇒ Boss 池 150 点，刚攒够 15 次复习时卡是 `review`、
+L1 攻 12 ⇒ 十击约 120 点；首败会把卡推到 `mastered`（每击 18 点），**第二次挑战即可净化**。
 
 ## 质量门禁：`npm run verify`
 
@@ -45,14 +50,15 @@ npm run dev -- --host 127.0.0.1
 一条命令跑完三段门禁，**全绿才允许 commit**（CI 在 push / PR 上跑同一条命令）：
 
 ```bash
-npm run verify        # = npm run typecheck && npm run check:purity && npm test
+npm run verify        # = typecheck && check:purity && test && build:only
 ```
 
 | 段 | 命令 | 把什么变成机器检查 |
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **49 文件 / 789 用例**），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **51 文件 / 814 用例**），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 
 单跑某一部分：`npm test -- tests/e2e/playable.smoke.test.ts`、`npm run build`（typecheck + Vite 构建）。
 
