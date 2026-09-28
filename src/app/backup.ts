@@ -32,8 +32,10 @@
  *   `backupReminderDue` 的入参来源由**调用方**决定，口径钉死如下：
  *     - `null` = 从未导出过（唯一合法缺省，缺席即"从未导出"）；
  *     - 数值 = 最近一次**成功导出**的时刻（与信封 exportedAt 同源同值）；
- *     - 非有限值一律按 null 处理（fail-open：宁可多提醒一次，不可静默永不提醒）。
- *   UI 触发与持久位落地归 Plan 4（T8 的冒烟只消费本模块的纯函数往返）。
+ *     - 非有限值一律按 null 处理（fail-open：宁可多提醒一次，不可静默永不提醒）；
+ *       `nowMs` 非有限同理 fail-open（T6 捎带 item 3，见 backupReminderDue）。
+ *   UI 触发与持久位落地归 **T7 兑现**（R-T5-p3-a：`meta.lastExportedAt?: number` 按三段式
+ *   在 core/types 声明 + core/saveMigrate 严格校验；本任务只消费本模块的纯函数往返）。
  *
  * **装配层硬契约（R-T4-p3-d）**：凡"我的改动此刻已持久"的语义，必须用
  * `flush() && !dirty()` 收口，不得只信 `flush()` 的 boolean——它只承诺"被认领的那批
@@ -101,6 +103,9 @@ function describeValue(v: unknown): string {
   if (v === undefined) return 'undefined';
   if (Array.isArray(v)) return 'array';
   if (typeof v === 'string') return `"${v}"`;
+  // number/boolean 回实际值而非 typeof（T6 捎带，T5 评审 Minor item 2）：
+  // "实际为 number" 对用户毫无对号入座的价值；1e300 / 1.5 / true 才是他文件里看得见的东西。
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   return typeof v;
 }
 
@@ -143,7 +148,9 @@ export function exportBackup(save: SaveFile, nowMs: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * 解析一份导入文本。永不抛异常——所有失败都收敛为 `{ok:false, reason}`（可读大白话）。
+ * 解析一份导入文本。**可预期**的失败一律不抛异常——都收敛为 `{ok:false, reason}`（可读大白话）；
+ * 唯一的例外是迁移器内部的真 bug（非迁移前缀的异常），此类**原样上抛**不伪装成"存档坏了"
+ * （T6 捎带，T5 评审 Minor item 4）。
  *
  * 分层判定（reason 前缀即层标）：
  * - **信封层**：JSON 语法、顶层形状、format 缺失/不符、version 缺失/非 1/来自更新版本、
@@ -177,7 +184,9 @@ export function parseBackup(text: string, nowMs: number): BackupParseResult {
   }
   if (root.version !== BACKUP_VERSION) {
     // 来自更新版本的备份：能读懂"更新"这件事，但不敢猜它的字段语义——拒并指路升级。
-    if (typeof root.version === 'number' && root.version > BACKUP_VERSION) {
+    // 门槛是 `>= 2` 而非 `> 1`（T6 捎带，T5 评审 Minor item 1）：1.5 这类非整数是**畸形值**
+    // 而非"下一代格式"，指路升级会让用户去等一个不存在的版本；故落入通用畸形文案。
+    if (typeof root.version === 'number' && Number.isInteger(root.version) && root.version >= 2) {
       return envelopeError(
         `version 应为 ${BACKUP_VERSION}，实际为 ${root.version}——这份备份来自更新的版本，请先升级应用再导入`,
       );
@@ -205,8 +214,14 @@ export function parseBackup(text: string, nowMs: number): BackupParseResult {
     save = migrateSave(root.save);
   } catch (e) {
     const detail = errorText(e);
-    const stripped = detail.startsWith(MIGRATE_ERROR_PREFIX) ? detail.slice(MIGRATE_ERROR_PREFIX.length) : detail;
-    return { ok: false, reason: `${SAVE_ERROR_PREFIX}${stripped}` };
+    // 只有 migrateSave 自己包过的迁移失败才是"用户的存档内容有问题"（T6 捎带，item 4）：
+    // 其余异常是内部 bug（validateSave 刻意 rethrow 非 ValidationSignal 正是为此），
+    // 伪装成 SAVE 层会让用户以为自己的文件坏了、甚至去删档重来。故告警后原样上抛（fail-closed）。
+    if (!detail.startsWith(MIGRATE_ERROR_PREFIX)) {
+      console.warn('[backup] migrateSave 抛出非迁移异常，原样上抛（不吞真 bug）：', e);
+      throw e;
+    }
+    return { ok: false, reason: `${SAVE_ERROR_PREFIX}${detail.slice(MIGRATE_ERROR_PREFIX.length)}` };
   }
 
   return { ok: true, save, sinceLastBackupDays: daysBetween(root.exportedAt, nowMs) };
@@ -231,7 +246,7 @@ function daysBetween(exportedAt: number, nowMs: number): number {
  *
  * - `lastExportedAt === null` → true（从未导出，正是最该提醒的人）；
  * - 距今 < periodDays → false；≥ periodDays → true（边界闭区间：正好第 7 天即提醒）；
- * - 非有限值按"从未导出"处理（fail-open）；
+ * - `lastExportedAt` 或 `nowMs` 非有限值 → true（fail-open：读数坏掉时宁可多提醒一次）；
  * - 时钟回拨（lastExportedAt 晚于 nowMs）→ false，不因负差值误判；
  * - `periodDays` 参数化的目的是可测（brief verbatim 其默认值为 7）；
  *   传入非法值（0/负/NaN）时回落默认 7 天，不把闸门永久打开或永久关死。
@@ -244,6 +259,9 @@ export function backupReminderDue(
   periodDays: number = DEFAULT_REMINDER_PERIOD_DAYS,
 ): boolean {
   if (lastExportedAt === null || !Number.isFinite(lastExportedAt)) return true;
+  // nowMs 非有限同样 fail-open（T6 捎带，T5 评审 Minor item 3）：修复前 `NaN - t >= period` 恒 false
+  // = 静默永不提醒，正好违背本模块"宁可多提醒一次，不可静默永不提醒"的自述口径。
+  if (!Number.isFinite(nowMs)) return true;
   const period = Number.isFinite(periodDays) && periodDays > 0 ? periodDays : DEFAULT_REMINDER_PERIOD_DAYS;
   return nowMs - lastExportedAt >= period * MS_PER_DAY;
 }

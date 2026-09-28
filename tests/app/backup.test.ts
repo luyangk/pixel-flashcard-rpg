@@ -35,6 +35,28 @@ import {
 } from '../../src/app/backup';
 import { createCoordinator } from '../../src/app/persist';
 
+/**
+ * T6 捎带 item 4 的**唯一 mock 面**（真实内部 bug 无法由 JSON 文本构造：parseBackup 只吃
+ * 字符串，migrateSave 的入参必然是 JSON 纯数据，validateSave 那条 "非校验信号原样上抛"
+ * 的路径在纯数据下不可达）。故用可触发的故障开关包一层：默认**透传真实现**，
+ * 只有置位的那一次抛非迁移前缀的异常——validateSave 等其余导出全部来自实际模块。
+ */
+let migrateFault: Error | null = null;
+vi.mock('@core/saveMigrate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@core/saveMigrate')>();
+  return {
+    ...actual,
+    migrateSave: (raw: unknown) => {
+      if (migrateFault !== null) {
+        const fault = migrateFault;
+        migrateFault = null; // 一次性：只污染被测那一次调用
+        throw fault;
+      }
+      return actual.migrateSave(raw);
+    },
+  };
+});
+
 // —— 仿真锚点：全部时间由测试显式注入 ——
 const NOW = Date.UTC(2026, 9, 26, 4, 0, 0);
 const DAY = 86_400_000;
@@ -197,7 +219,7 @@ function stagedStore(inner: GameStorage): {
 }
 
 /**
- * 备份时刻的持久位（T8/Plan 4 按三段式在 meta 落地；本任务只读不写生产字段）。
+ * 备份时刻的持久位（T7 按三段式在 meta 落地，R-T5-p3-a；本任务只读不写生产字段）。
  * 用例以该结构代表"导出成功后 coordinator 记录 lastExportedAt"这一步：
  * 缺席即"从未导出"（null），故读取侧对非数值一律回落 null。
  */
@@ -217,6 +239,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  migrateFault = null; // 故障开关不跨用例残留
 });
 
 // ---------------------------------------------------------------------------
@@ -306,7 +329,8 @@ describe('parseBackup 失败分层 —— 信封层错 vs 存档层错', () => {
     expectEnvelopeError(parseBackup('[]', NOW), '实际为 array');
     expectEnvelopeError(parseBackup('"zx-xia-backup"', NOW), '实际为 "zx-xia-backup"');
     expectEnvelopeError(parseBackup('null', NOW), '实际为 null');
-    expectEnvelopeError(parseBackup('42', NOW), '实际为 number');
+    // T6 捎带 item 2 更新：number 不再只回 typeof，而是保留实际值（'42' → 实际为 42）
+    expectEnvelopeError(parseBackup('42', NOW), '实际为 42');
   });
 
   it('BK#8 缺 format 标记 → 信封层', () => {
@@ -515,5 +539,62 @@ describe('装配集成 —— 导出即持久快照 / 导出时刻使 due 翻 fa
     if (!parsed.ok) return;
     expect(parsed.save.meta.plays).toBe(42);
     expect(parsed.save).toStrictEqual((await raw.load())!); // 导出的就是存储里那一份
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T6 捎带：T5 评审 Minor 五项（R-T5-p3-c 裁决）
+// ---------------------------------------------------------------------------
+
+describe('T6 捎带修复 —— T5 评审 Minor', () => {
+  it('BK#27 [item1] version 1.5 走通用畸形文案，不再误报"来自更新的版本，请先升级"', () => {
+    const r = parseBackup(envelopeText({ version: 1.5 }), NOW);
+    expectEnvelopeError(r, 'version');
+    // 1.5 不是"下一代格式"，是畸形值：指路升级会让用户白等一个不存在的版本
+    expect(reasonOf(r)).not.toContain('升级');
+    // 而真正的下一代（整数 2）仍必须指路升级——收紧不得误伤
+    expect(reasonOf(parseBackup(envelopeText({ version: 2 }), NOW))).toContain('升级');
+    expect(reasonOf(parseBackup(envelopeText({ version: 99 }), NOW))).toContain('升级');
+  });
+
+  it('BK#28 [item2] describeValue 保留 number/boolean 实际值（1e300 不再读成"number"）', () => {
+    // 可读 reason 的目的：用户能拿这句话去自己文件里对号入座
+    expectEnvelopeError(parseBackup(envelopeText({ exportedAt: 1e300 }), NOW), '实际为 1e+300');
+    expectEnvelopeError(parseBackup(envelopeText({ version: 1.5 }), NOW), '实际为 1.5');
+    expectEnvelopeError(parseBackup(envelopeText({ exportedAt: true }), NOW), '实际为 true');
+    // 原有对 null/undefined/数组/字符串的描述不变（本项只补 number/boolean）
+    expectEnvelopeError(parseBackup('[]', NOW), '实际为 array');
+    expectEnvelopeError(parseBackup('null', NOW), '实际为 null');
+    expectEnvelopeError(parseBackup('"x"', NOW), '实际为 "x"');
+  });
+
+  it('BK#29 [item3] nowMs 非有限（NaN/Infinity/undefined）→ true：闸门 fail-open，绝不静默永不提醒', () => {
+    // 修复前 NaN - t >= period 恒 false = 静默永不提醒，与模块自述"宁可多提醒一次"矛盾
+    expect(backupReminderDue(NOW, Number.NaN)).toBe(true);
+    expect(backupReminderDue(NOW, Number.POSITIVE_INFINITY)).toBe(true);
+    expect(backupReminderDue(NOW, undefined as unknown as number)).toBe(true);
+    // 正常时刻轴不受影响
+    expect(backupReminderDue(NOW, NOW)).toBe(false);
+    expect(backupReminderDue(NOW - 7 * DAY, NOW)).toBe(true);
+  });
+
+  it('BK#30 [item4] migrateSave 抛非迁移前缀异常 → console.warn + 原样上抛，不伪装成"存档内容有问题"', () => {
+    const bug = new TypeError('cannot read properties of undefined (reading "cards")');
+    migrateFault = bug;
+    expect(() => parseBackup(envelopeText({}), NOW)).toThrow(bug);
+    expect(console.warn).toHaveBeenCalled();
+
+    // 故障开关一次性：其后仍走真实现（mock 是透传包装，不是替代品）
+    expect(parseBackup(envelopeText({}), NOW).ok).toBe(true);
+    // 迁移前缀的正常失败仍收敛为存档层 + 可读 reason（收紧不得漏掉既有分层）
+    const orphan = makeSave([makeCard('orphan-t6', { deckId: 'nope' })]);
+    expectSaveError(parseBackup(envelopeText({ save: orphan }), NOW), 'cards[0].deckId');
+  });
+
+  it('BK#31 [item4 反面] 存档层 reason 永不暴露内部异常类名（fail-closed 且用户可读）', () => {
+    const orphan = makeSave([makeCard('orphan-t6b', { deckId: 'gone' })]);
+    const r = parseBackup(envelopeText({ save: orphan }), NOW);
+    expect(reasonOf(r)).not.toContain('TypeError');
+    expect(reasonOf(r)).not.toContain('Error:');
   });
 });
