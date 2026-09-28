@@ -14,7 +14,7 @@
  *   本文件把 miss∈{0.3,0.4} 的最小失败率钉为回归基线（下界断言），常数被动时立刻可见。
  *
  * 确定性契约：固定 seed 集（1..50）、固定仿真时钟 SIM_NOW、rng 显式注入——所有
- * buildPool 调用必须显式传 nowMs（R-T6-a）；同一次运行内复跑逐字段全等（SIM#4 钉）。
+ * buildPool 调用必须显式传 nowMs（R-T6-a）；同一次运行内复跑逐字段全等（SIM#D 钉）。
  * 本文件只 import core 模块，不触碰平台层（src/platform/*、DOM、Node API）。
  */
 import { describe, expect, it } from 'vitest';
@@ -179,12 +179,13 @@ describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
     expect(median(results.map((r) => r.turns))).toBe(13);
     for (const r of results) expect(r.dealt).toBeGreaterThanOrEqual(r.enemyHp);
     // 来历：D28——反击入规则后「必胜」升级为「必胜且不阵亡」。def=7≥power=7 ⇒
-    // 承伤被 max(1,·) 下钳到 1/回合，中位剩血 88；死亡数恒 0 是这条红线的机器证明。
+    // 承伤被 max(1,·) 下钳到恒 1/回合（round(1×float)≡1）；击杀回合因 won 优先于
+    // 承伤而免结反击 ⇒ 精确等式 hpLeft = 100 − (turns−1)。逐 seed 钉该等式才是
+    // 防御公式的机器证明（T2 评审 Minor⑤：旧 median(hpLeft)=88 实为回合中位数代理）。
     for (const r of results) {
       expect(r.died).toBe(false);
-      expect(r.hpLeft).toBeGreaterThan(0);
+      expect(r.hpLeft).toBe(100 - (r.turns - 1));
     }
-    expect(median(results.map((r) => r.hpLeft))).toBe(88);
   });
 
   it('SIM#A2 降级场景：小语料按实际池长反推 HP 仍必胜（T6 顾虑③）', () => {
@@ -207,8 +208,10 @@ describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬�
     });
     const minLoss = Math.min(...lossRates);
     // 「B 大概率跑出未败」的实测兑现：miss=0.40 仍有 7/50 翻盘（好池+坏运气组合）。
-    // 判据取下界：失败率不得低于基线 0.72（D28 re-baseline：反击不改变 miss 主通道，
-    // 曲线仅由长尾池微移；旧值 0.60 已上收）——常数被调松（伤害↑/HP↓）会击穿它。
+    // 判据取下界：失败率不得低于基线 0.72。**重录而非收紧**（T2 评审 I-3）：0.60→0.72
+    // 的来源是 D28 让每回合多掷一次浮动、seed→pool→hit 序列整体重排的噪声级位移，
+    // 难度本身未变。本闸容差极薄（≈±3 HP 点）：DIFFICULTY/BASE_CARD_DAMAGE/atk 任何
+    // 微调都会先在这里红——这是回归基线的职责，不是难度刻度。
     expect(minLoss).toBeGreaterThanOrEqual(0.72);
     // 上界同样钉住（防"调过头"方向漂移）：B 不是必败性质，胜率不该归零。
     expect(minLoss).toBeLessThan(1);
@@ -288,15 +291,18 @@ describe('balance sim —— Boss 档（D28 · SIM#E2）', () => {
 
   it('SIM#E2 L1 全对打 Boss：无人阵亡但 50/50 池尽而败——败因是输出不足，且承伤显著高于遭遇战', () => {
     const rs = SEEDS.map(simBoss);
-    // ① 反击分档生效：def=7、boss power=11 ⇒ 每回合承 round(4×float)≈4，远大于遭遇战的 1；
-    //    剩余血带 = 100 − 承伤×回合数，实测带 [36,44]（浮动与回合数决定），必低于 encounter 的 85+。
+    // ① 反击分档生效：def=7、boss power=11 ⇒ base=max(1,4)=4，round(4×U[0.9,1.1))≡4
+    //    （浮动域 [3.6,4.4) 恒取整为 4——退化单点，非区间）。Boss 局全部池尽而败，
+    //    lost 分支末回合仍结反击 ⇒ 承伤恒 15×4=60、hpLeft 恒 40；对照遭遇战 def≥power
+    //    的下钳 1/回合，分档差被精确钉死（T2 评审 I-2：旧注释 ∈{4,5} 与带 [36,44] 不实）。
     for (const r of rs) {
       expect(r.died).toBe(false); // 产品红线：L1 全对不会被打死，只是打不死 Boss
-      expect(r.hpLeft).toBeLessThan(60); // 与 encounter 中位 88 的分档差被钉住
+      expect(r.hpLeft).toBe(40); // 恒等式即分档证明（4/回合 × 15 回合）
     }
-    expect(Math.min(...rs.map((r) => r.hpLeft))).toBeGreaterThanOrEqual(36);
-    // ② 既有产品事实（Plan 2 起即成立，非 D28 引入）：boss HP=ceil(15×10×1.5)=225 >
-    //    最大输出 15×12=180 ⇒ L1 新号全对也输。正确打法=领域掌握度堆 atk / 缩池练习关。
+    // ② 既有产品事实（Plan 2 起即成立，非 D28 引入）：boss HP=ceil(15×10×1.5)=225 远超
+    //    本语料池的理论最大输出（按池内 stability 实算 131–169；跨 seed dealt 实测 114–155）
+    //    ⇒ L1 新号全对也输。翻盘门槛（T2 评审反事实校准）：atk≈18 才有 1/50 胜、atk≈20 才
+    //    23/50——正确打法=领域掌握度堆 atk / 缩池练习关，量化依据供 Plan 5 试玩校准。
     //    若未来调 boss HP 系数走 PRD 修订，此断言随之更新——它的存在就是让该决策有账可查。
     expect(rs.every((r) => r.phase === 'lost')).toBe(true);
     expect(rs.every((r) => r.turns === r.poolLen)).toBe(true);
