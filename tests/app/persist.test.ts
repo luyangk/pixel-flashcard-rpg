@@ -1505,3 +1505,67 @@ describe('rawDump —— 坏档抢救出口（D29 三件套之一）', () => {
     expect(coord.snapshot().settings.progress.exp).toBe(999); // 内存确实是 999，差别是真的
   });
 });
+
+/* ------------------------------------------------------------------ reload（T11 · T10 冒烟发现的接缝） */
+
+describe('reload —— 外部改过存储后的重载（导入备份的收口）', () => {
+  it('PD-T10#1 存储被外部替换 ⇒ reload 后内存档换成新档、dirty 归假', async () => {
+    const store = createMemoryStorage();
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    await coord.mutate((s) => {
+      s.meta.plays = 1;
+    });
+    expect(await coord.flush()).toBe(true);
+
+    // 模拟"别的写入者"（真实场景是 transfer.importBackupAndSave 直写 store）
+    const external = makeSave([]); // 该文件既有的合法档夹具
+    external.meta.plays = 42;
+    await store.save(external);
+    expect(coord.snapshot().meta.plays).toBe(1); // 内存档仍是旧的（reload 之前）
+
+    expect(await coord.reload()).toEqual({ ok: true });
+    expect(coord.snapshot().meta.plays).toBe(42);
+    expect(coord.dirty()).toBe(false);
+  });
+
+  it('PD-T10#2 只读态下 reload 到合法档即解锁（导入好备份是坏档玩家唯一的自救路径）', async () => {
+    const store = createMemoryStorage();
+    await store.save({ schemaVersion: 2, decks: [], cards: [], settings: {}, meta: {} } as unknown as SaveFile);
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    expect(coord.readOnly()).toBe(true);
+
+    await store.save(makeSave([]));
+    expect(await coord.reload()).toEqual({ ok: true });
+    expect(coord.readOnly()).toBe(false);
+    expect(coord.snapshot().schemaVersion).toBe(1);
+    // 解锁后可正常写
+    await coord.mutate((s) => {
+      s.meta.plays = 7;
+    });
+    expect(await coord.flush()).toBe(true);
+  });
+
+  it('PD-T10#3 存储为空 ⇒ 回种子档并解锁；存储里是坏档 ⇒ ok:false 且内存档不动', async () => {
+    const store = createMemoryStorage();
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    await coord.mutate((s) => {
+      s.meta.plays = 3;
+    });
+    expect(await coord.flush()).toBe(true);
+
+    await store.clear();
+    expect(await coord.reload()).toEqual({ ok: true });
+    expect(coord.snapshot().meta.plays).toBe(0); // 种子档
+
+    await coord.mutate((s) => {
+      s.meta.plays = 9;
+    });
+    expect(await coord.flush()).toBe(true);
+    await store.save({ schemaVersion: 2, decks: [], cards: [], settings: {}, meta: {} } as unknown as SaveFile);
+    const res = await coord.reload();
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBeTruthy();
+    expect(coord.readOnly()).toBe(true);
+    expect(coord.snapshot().meta.plays).toBe(9); // 坏档不覆盖内存里那份好档
+  });
+});

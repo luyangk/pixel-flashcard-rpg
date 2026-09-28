@@ -143,6 +143,22 @@ export interface Coordinator {
     */
    rawDump(): Promise<string | null>;
    /**
+    * 从存储**重新载入**权威档（Plan 4 · T11；T10 冒烟发现的接缝 bug）。
+    *
+    * 为什么需要：`transfer.importBackupAndSave` 走的是 `store.save`（core 侧的导入职责），
+    * 而本 coordinator 的内存存档是**构造期**载入的——导入成功后如果不重载，UI 会继续
+    * 显示导入前那份档（实测：导入一个 plays=5 的备份后，快照里仍是旧的 0，卡表也不会刷新），
+    * 玩家只能靠刷新页面看到结果。
+    *
+    * 语义：
+    * - 成功 ⇒ 内存权威档换成存储里那份（过 `migrateSave`，与构造期同一条路）、`dirty` 归假、
+    *   **并解除只读闩锁**——"导入一份好备份"正是坏档玩家唯一的自救路径，闩锁不解就等于
+    *   把他锁在只读态里（这是对 C-1"只读是终态"的一处**有意**放宽，见 R-T11-p4-b）。
+    * - 失败（存储读不出 / 载入的档过不了迁移）⇒ 进只读态并回 `{ok:false, reason}`，
+    *   内存档**保持原样**（不拿种子档覆盖，避免把一份好档换掉）。
+    */
+   reload(): Promise<{ ok: boolean; reason?: string }>;
+   /**
     * 只读态判别位（Final Fix Wave · C-1）：true = 载入时存档无法迁移/无法读取，内存由
    * 种子档接管且**所有写入面被闩锁拒绝**（见文件头"只读闩锁契约"）。UI 据此提示
    * "存档无法读取，请勿继续写"并给用户手动导出/抢救的出口。正常存档恒 false。
@@ -590,6 +606,26 @@ export async function createCoordinator(
     markExported,
     flushDetailed,
     readOnly: () => readOnly,
+    async reload(): Promise<{ ok: boolean; reason?: string }> {
+      try {
+        const loaded = await store.load();
+        if (loaded === null) {
+          // 存储空了（被 clear）：回到种子档并解除闩锁——这不是"坏档"，是"没有档"
+          save = seedSave(now());
+          dirty = false;
+          readOnly = false;
+          return { ok: true };
+        }
+        const next = migrateSave(loaded);
+        save = next;
+        dirty = false;
+        readOnly = false;
+        return { ok: true };
+      } catch (e) {
+        readOnly = true;
+        return { ok: false, reason: describeError(e) };
+      }
+    },
     async rawDump(): Promise<string | null> {
       try {
         // 直读 store（不走内存 save）：内存里此刻是**种子档**，把它导出去等于给用户

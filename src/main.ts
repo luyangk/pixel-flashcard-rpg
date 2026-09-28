@@ -129,7 +129,16 @@ async function boot(): Promise<void> {
     },
     // 导入 / 导出 / 抢救
     exportBackup: () => exportAndMark(coord, clockNow()),
-    importBackup: (text) => importBackupAndSave(text, store),
+    importBackup: async (text) => {
+      // 先把在途改动落净再导入：导入走的是 store.save（core 职责），而 coordinator 可能
+      // 还有一批 debounce 中的旧档——不等它写完就导入，一次陈旧的窗写会把导入结果覆盖掉。
+      await coord.flush();
+      const res = await importBackupAndSave(text, store);
+      // 导入走的是 store.save（core 职责），coordinator 的内存档必须重载才看得到
+      // （否则 UI 继续显示导入前那份；坏档玩家还能借此解除只读闩锁，见 Coordinator.reload）
+      if (res.ok) await coord.reload();
+      return res;
+    },
     pickBackupText: async () => {
       const picked = await pickTextFile();
       return picked.ok ? picked.text : null; // 取消与读失败都回 null，导入屏不弹提示

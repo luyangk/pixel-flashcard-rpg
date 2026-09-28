@@ -277,7 +277,12 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         await guardedWrite(async () => {
           await markPrologueSeen(coord);
         });
-        screen = 'menu';
+        // 只在"没有正在打的仗"时才回菜单（T10 冒烟暴露的竞态）：本分支是**异步**的，
+        // 它的写口 await 期间玩家可能已经开了下一局（宿主的序章屏一收尾就派本意图，
+        // 而 intent 的落库是 debounce 的）。无条件 `screen='menu'` 会让那局被这行代码
+        // 从战斗屏**踩回**菜单（快照序列实测：… fight:answering → menu:answering）。
+        // 语义不变：序章看完/跳过仍然是"回菜单"，只是不抢正在进行的会话。
+        if (fight === null) screen = 'menu';
         break;
       }
     }
