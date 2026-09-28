@@ -40,12 +40,20 @@ export const EGG_MAX = 200;
 /** 控制字符与"看起来像空白但不显示"的字符：一律剥掉（防屏上伪装/排版破坏）。 */
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\ufeff]/g;
 
-/** 清洗一段文本：剥控制字符 → 折叠内部空白 → 去首尾 → 截断到上限。 */
+/**
+ * 清洗一段文本：剥控制字符 → 折叠内部空白 → 去首尾 → 按**码点**截断到上限。
+ *
+ * 截断必须按码点（`[...s]`）而不是 `.slice()`：后者按 UTF-16 单元切，会把 emoji/生僻字
+ * 的**代理对劈成两半**，留下一个孤立代理字符写进存档（渲染成 "�"，且 `validateSave` 的
+ * 类型检查看不出来——它只关心是字符串）。长度上限的语义本来就是"多少个字"，
+ * 所以码点既是正确性也是口径。
+ */
 function clean(raw: unknown, max: number): string {
   if (typeof raw !== 'string') return '';
   const stripped = raw.replace(CONTROL_RE, ' ');
   const collapsed = stripped.replace(/[ \t\r\n]+/g, ' ').trim();
-  return collapsed.length > max ? collapsed.slice(0, max).trim() : collapsed;
+  const points = [...collapsed];
+  return points.length > max ? points.slice(0, max).join('').trim() : collapsed;
 }
 
 /**

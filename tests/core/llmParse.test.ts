@@ -103,6 +103,22 @@ describe('parseCards —— 卡片候选', () => {
     expect(strings.ok).toBe(false); // 字符串不是卡
   });
 
+  it('LP#6b 截断按**码点**：emoji 不会被劈成半个字符（`.slice` 实现必红）', () => {
+    const emojiField = '🐉'.repeat(300); // 300 个码点 / 600 个 UTF-16 单元
+    const got = parseCards(`[{"front":"f","back":"${emojiField}"}]`);
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    const back = got.value[0].back;
+    expect([...back].length).toBe(200); // 码点数被截到上限
+    // 没有被劈开的代理对：末尾不能是孤立的高代理
+    expect(/[\uD800-\uDBFF]$/.test(back)).toBe(false);
+    expect([...back].every((ch) => ch === '🐉')).toBe(true); // 每个字符都完整
+
+    // 称号同样按码点（30 个 emoji 才是上限，而不是 15 个）
+    const names = parseNames(JSON.stringify([{ name: '🐉'.repeat(40) }]));
+    if (names.ok) expect([...names.value[0].name].length).toBe(30);
+  });
+
   it('LP#7 脏键与原型污染尝试不影响结果、不抛', () => {
     const evil = '[{"front":"f","back":"b","__proto__":{"polluted":true},"constructor":{"x":1}}]';
     const got = parseCards(evil);
