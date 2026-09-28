@@ -4,6 +4,11 @@
 打穿一个知识领域的"卷灵"Boss，把学过的知识变成角色的等级与六维。纯前端、无后端、无账号——
 因此进度的唯一保全手段是**导出 JSON 备份**，离线也能玩。
 
+## 现在就能玩
+
+**手机浏览器直接打开：<https://luyangk.github.io/pixel-flashcard-rpg/>**
+（GitHub Pages，main 分支推送后自动发布；加到主屏即可当独立 App 用，第二次打开不联网也能玩。）
+
 技术底座是四层分离：`src/core/` 纯 TypeScript 逻辑核（零 DOM、零平台 API、时间与随机全部入参化）、
 `src/platform/` 平台能力抽象（IndexedDB / 内存存储、时钟、时区、随机播种、图片与文件口）、
 `src/app/` 编排层（会话控制器、Boss 净化、预置内容种子、导入导出）、`src/ui/` + `src/stage/`
@@ -17,7 +22,7 @@
 | 2 | SRS 调度与战斗循环：备战配池（80/20）、确定性回合制战斗、经验与 Boss 触发、headless 数值模拟 | PRD §2/§3/§6.3–6.5 | ✅ 已完成 |
 | 3 | 游戏装配层（App Wiring）：会话编排、全库口径属性派生、复习落账链、攒批持久化、7 天备份提醒、本地战绩榜、假记忆素材池 | PRD §2.2–2.4/§5/§6.1/§6.5、LORE §5.5 | ✅ 已完成 |
 | 4 | 界面层：DOM/Canvas 渲染与叙事呈现（序章→菜单→备战→战斗→结算→卡组→藏书阁→设置）、Boss 净化与图鉴、只读保护（D29）、像素素材集 | PRD §3/§7/§9、LORE §5/§6 | ✅ 已完成（LLM 管线移至 Plan 5，见下） |
-| 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | ⏳ 待立项 |
+| 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | 🚧 进行中：**离线 + Pages 已上线**；LLM 管线待做 |
 
 > 注 1：Plan 1 的原始路线图把"叙事系统"与"LLM 管线"单列为 Plan 3/4；实际执行时 Plan 3 改为
 > 装配层（数据流主干），这两块随渲染层并入 Plan 4。
@@ -25,7 +30,11 @@
 > 它们都需要"玩家自带 API Key + 网络"，属上线阶段；Plan 4 先立玩法闭环：自建领域的彩蛋显示
 > 「已净化」占位，不编造内容。
 
-## 玩一局（本地）
+## 玩一局（本地调试）
+
+> 手机上最省事的是直接用上面的线上地址；下面这套是**改代码时**用的。
+> 注意 dev server **不会**注册 Service Worker（`import.meta.env.PROD` 才注册），
+> 所以本机改一行立刻见效，不会被离线缓存挡住。
 
 ```bash
 npm install                       # 首次；/sdcard（noexec）上还需 node scripts/link-native-bindings.mjs
@@ -60,6 +69,9 @@ npm run verify        # = typecheck && check:purity && test && build:only
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
 | 测试 | `npm test` | Vitest 全量（当前 **51 文件 / 814 用例**），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
+
+发布走 `.github/workflows/deploy.yml`：main 推送 ⇒ 同一套 verify ⇒ `dist/` 上传为 Pages artifact ⇒ 发布。
+**部署不会再跑一遍额外的检查**（verify 就是唯一的门禁），所以本地绿 ≠ 一定能发，但本地红一定发不出去。
 
 单跑某一部分：`npm test -- tests/e2e/playable.smoke.test.ts`、`npm run build`（typecheck + Vite 构建）。
 

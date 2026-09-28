@@ -1,0 +1,51 @@
+# 部署到 GitHub Pages（Plan 5）：main 分支每次推送 ⇒ 门禁 + 打包 + 发布。
+#
+# 为什么部署前跑**完整 verify**：本项目的发布只有一个静态站点，没有回滚成本可言，
+# 但"发出去一个打不开的包"的代价很高（手机端白屏无从排查）。verify 里含
+# typecheck / 分层纯净 / 814 用例 / **真实打包**——尤其最后一项，它挡的是
+# "vitest 全绿但浏览器里模块解析失败"这一类只有真实构建才暴露的故障。
+#
+# 权限收敛到最小：读代码 + 写 Pages + OIDC（deploy-pages 需要 id-token）。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # 手动补发（例如只改了部署配置）
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时刻只跑一次部署；新推送取消旧的排队（正在跑的发布不打断）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run verify # 门禁 + 产出 dist/（含 assets 复制与 sw.js 注入）
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # dist 只含运行所需：index.html + bundle/ + assets/（工作文件已在构建期排除）
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

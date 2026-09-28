@@ -13,6 +13,20 @@
  */
 import './ui/styles.css';
 
+/**
+ * PWA：注册 Service Worker（Plan 5）。
+ *
+ * **只在生产构建里注册**：dev 下 SW 会把旧资源喂回浏览器，改一行代码看不到效果——
+ * 本机调试的麻烦事够多了，这里绝不添一件。判据用 `import.meta.env.PROD`（Vite 注入）。
+ * 注册失败（http 明文环境、隐私模式、iOS 老版本）静默忽略：SW 是增强，不是依赖，
+ * 游戏在没有它的情况下必须照常能玩。
+ */
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('./sw.js').catch(() => undefined);
+  });
+}
+
 import arcJson from '../assets/narrative/arc.json';
 import beatsJson from '../assets/narrative/beats.json';
 import eggsJson from '../assets/narrative/eggs.json';

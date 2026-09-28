@@ -18,7 +18,8 @@
  *
  * dev 侧无需处理：Vite 的静态中间件本来就服务仓库根下的文件，`/assets/...` 直接可读。
  */
-import { cpSync, existsSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -57,8 +58,50 @@ function copyAssets(): Plugin {
   };
 }
 
+/**
+ * Service Worker 注入（Plan 5 · PWA）：
+ * `src/sw.js` 里留了两个占位符——版本戳与预缓存清单。构建结束后扫一遍 `dist/`
+ * （除 sw.js 外全部资源）填进去，写到 `dist/sw.js`。这样 precache 永远与产物一致，
+ * 不需要手工维护文件列表（列表一旦漏项，离线就会缺素材——比漏更糟的是静默缺）。
+ */
+function injectServiceWorker(): Plugin {
+  let version = '';
+  return {
+    name: 'zx-xia:inject-sw',
+    apply: 'build',
+    buildStart() {
+      version = String(Date.now());
+    },
+    closeBundle() {
+      const src = `${ROOT}src/sw.js`;
+      const distDir = `${ROOT}dist`;
+      if (!existsSync(src) || !existsSync(distDir)) return;
+      const files: string[] = [];
+      const walk = (dir: string, rel: string): void => {
+        for (const e of readdirSync(dir)) {
+          const abs = join(dir, e);
+          const r = rel ? `${rel}/${e}` : e;
+          if (statSync(abs).isDirectory()) walk(abs, r);
+          else if (e !== 'sw.js') files.push(`./${r}`);
+        }
+      };
+      walk(distDir, '');
+      const code = readFileSync(src, 'utf8')
+        .replace('__ZX_XIA_SW_VERSION__', version)
+        .replace('__ZX_XIA_PRECACHE__', JSON.stringify(files));
+      writeFileSync(`${distDir}/sw.js`, code);
+      console.log(`✔ sw injected: ${files.length} 个预缓存项，版本 ${version}`);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [copyAssets()],
+  // **相对基址**：GitHub Pages 把项目发到 `/<仓库名>/` 子路径下。写死 `/bundle/...`
+  // 的绝对路径会在子路径里 404（Plan 5 上线前的已知缺口，终审 I 项登记过）。
+  // 相对 base 同时兼容"整个 dist 拷到任意子目录/本地 file:// 之外"的用法；
+  // 唯一代价是 SPA 深链不可用——本作是单页无路由，不受影响。
+  base: './',
+  plugins: [copyAssets(), injectServiceWorker()],
   resolve: { alias: ALIAS },
   build: {
     // 打包产物避开 dist/assets（那里归游戏素材，见文件头"命名避让"）

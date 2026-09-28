@@ -1,0 +1,15 @@
+{
+  "name": "知识侠客",
+  "short_name": "知识侠客",
+  "description": "像素风知识闪卡 RPG：答对一张卡就造成一次伤害，夺回被混沌夺走的记忆。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0e14",
+  "theme_color": "#10141c",
+  "icons": [
+    { "src": "./assets/sprites/hero.png", "sizes": "32x32", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/sprites/boss-1.png", "sizes": "64x64", "type": "image/png", "purpose": "any" }
+  ]
+}
