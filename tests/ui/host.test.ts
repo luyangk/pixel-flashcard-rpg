@@ -344,7 +344,7 @@ describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
         test: () => Promise.resolve({ ok: true, text: 'pong' }),
         presets: [],
       },
-      llmCards: () => Promise.resolve({ ok: true, value: [{ front: 'f', back: 'b', tags: [] }], truncated: false }),
+      llmCards: () => Promise.resolve({ ok: true, value: [{ front: 'f', back: 'b', tags: [], choices: ['x', 'y'] }], truncated: false }),
       llmNames: () => Promise.resolve({ ok: true, value: [{ name: '诗酒篇·卷灵' }], truncated: false }),
       llmEgg: () => Promise.resolve({ ok: true, text: '一段彩蛋。' }),
       setEgg: () => Promise.resolve({ ok: true }),

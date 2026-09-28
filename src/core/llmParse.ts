@@ -19,6 +19,19 @@ export interface CardCandidate {
   readonly front: string;
   readonly back: string;
   readonly tags: readonly string[];
+  /**
+   * 干扰项（Plan 6 · D41）：**模型在生成这张卡的那一刻**产出的错误选项，随卡存进存档。
+   * 复习时不再临时调模型 —— 这是"省额度"的关键，也是本字段存在的理由。
+   * 缺席（旧模型/旧档）⇒ `[]`，由 choices.ts 回落到同领域其他卡的背面。
+   */
+  readonly choices: readonly string[];
+}
+
+/** 判卷结果（Plan 6 · T2）：对/错 + 一句话理由 + 缺了哪些要点。 */
+export interface Verdict {
+  readonly match: boolean;
+  readonly reason: string;
+  readonly missing: readonly string[];
 }
 
 /** 一个候选称号。 */
@@ -36,6 +49,12 @@ export const TAGS_PER_CARD_MAX = 8;
 export const CARDS_MAX = 20;
 export const NAMES_MAX = 5;
 export const EGG_MAX = 200;
+/** 判卷理由/要点与卡片干扰项的条数、长度上限（Plan 6 · T2）。 */
+export const VERDICT_REASON_MAX = 120;
+export const VERDICT_MISSING_MAX = 5;
+export const VERDICT_MISSING_TEXT_MAX = 60;
+export const CHOICES_MAX = 5;
+export const CHOICE_TEXT_MAX = 200;
 
 /**
  * 不可见/可伪装字符的黑名单：**全仓唯一来源**（`app/codexFlow` 与 `app/bossFlow` 都从这里引）。
@@ -162,7 +181,16 @@ export function parseCards(text: string, opts: { max?: number } = {}): ParseResu
       if (tag.length > 0 && !tags.includes(tag)) tags.push(tag);
       if (tags.length >= TAGS_PER_CARD_MAX) break;
     }
-    return { front, back, tags };
+    // 干扰项（D41）：逐项净化 + **剔除与正确答案逐字相同者**（否则选项里会出现答案本身）
+    const choicesRaw = Array.isArray(o.choices) ? o.choices : [];
+    const choices: string[] = [];
+    for (const c of choicesRaw) {
+      const text = clean(c, CHOICE_TEXT_MAX);
+      if (text.length === 0 || text === back || choices.includes(text)) continue;
+      choices.push(text);
+      if (choices.length >= CHOICES_MAX) break;
+    }
+    return { front, back, tags, choices };
   });
 }
 
@@ -180,6 +208,38 @@ export function parseNames(text: string, opts: { max?: number } = {}): ParseResu
     const name = clean(o.name ?? o.title, 30);
     return name.length > 0 ? { name } : null;
   });
+}
+
+/**
+ * 解析判卷结果（Plan 6 · T2）。
+ *
+ * `match` **必须是布尔**：模型偶尔会回 `"true"` / `1` / `"yes"`，而这里刻意**不做**字符串嗅探
+ * ——判"答对"是一件会写进复习账本的事，宁可让它回落成"没判成，你自己定对错"，
+ * 也不能靠 `includes('true')` 把 `{"match":"not true"}` 读成答对。
+ * `missing` 只接受字符串数组（缺失/其它类型 ⇒ `[]`，不因此拒绝整条判定），
+ * 逐项去重、剔空、≤5 条、每条 ≤60 码点。**永不抛**。
+ */
+export function parseVerdict(text: string): { ok: true; value: Verdict } | { ok: false; reason: string } {
+  const fail = { ok: false as const, reason: '没能读懂模型的判定结果。' };
+  if (typeof text !== 'string') return fail;
+  const extracted = extractJson(text);
+  if (!extracted.ok) return fail;
+  const raw = extracted.value;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return fail;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.match !== 'boolean') return fail;
+
+  const reason = clean(o.reason, VERDICT_REASON_MAX);
+  const missing: string[] = [];
+  if (Array.isArray(o.missing)) {
+    for (const m of o.missing) {
+      const item = clean(m, VERDICT_MISSING_TEXT_MAX);
+      if (item.length === 0 || missing.includes(item)) continue;
+      missing.push(item);
+      if (missing.length >= VERDICT_MISSING_MAX) break;
+    }
+  }
+  return { ok: true, value: { match: o.match, reason, missing } };
 }
 
 /**

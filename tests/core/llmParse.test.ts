@@ -1,5 +1,5 @@
 /**
- * tests/core/llmParse.test.ts —— Plan 5 · T1：不可信模型输出的严格解析。
+ * tests/core/llmParse.test.ts —— Plan 5 · T1 + Plan 6 · T2：不可信模型输出的严格解析。
  *
  * 判别力（每条都对着"宽松实现会怎样红"写）：
  * - LP#2 前后废话/围栏：用贪婪正则取 JSON 的实现会把说明文字一起吃进去 ⇒ 解析失败 ⇒ 红；
@@ -10,11 +10,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   CARDS_MAX,
+  CHOICES_MAX,
+  CHOICE_TEXT_MAX,
   EGG_MAX,
   extractJson,
   parseCards,
   parseEgg,
   parseNames,
+  parseVerdict,
 } from '../../src/core/llmParse';
 
 describe('extractJson —— 从废话里取第一段完整 JSON', () => {
@@ -57,8 +60,8 @@ describe('parseCards —— 卡片候选', () => {
     expect(got.ok).toBe(true);
     if (!got.ok) return;
     expect(got.value).toEqual([
-      { front: 'f1', back: 'b1', tags: ['历史', '唐诗'] },
-      { front: 'q2', back: 'a2', tags: [] },
+      { front: 'f1', back: 'b1', tags: ['历史', '唐诗'], choices: [] },
+      { front: 'q2', back: 'a2', tags: [], choices: [] },
     ]);
     expect(got.truncated).toBe(false);
   });
@@ -75,7 +78,7 @@ describe('parseCards —— 卡片候选', () => {
   it('LP#4 半截卡（缺 front 或 back / 空串）被丢弃；全丢 ⇒ ok:false', () => {
     const partial = parseCards('[{"front":"f","back":""},{"front":"","back":"b"},{"front":"ok","back":"a"}]');
     expect(partial.ok).toBe(true);
-    if (partial.ok) expect(partial.value).toEqual([{ front: 'ok', back: 'a', tags: [] }]);
+    if (partial.ok) expect(partial.value).toEqual([{ front: 'ok', back: 'a', tags: [], choices: [] }]);
 
     const allBad = parseCards('[{"front":"","back":""},null,42]');
     expect(allBad.ok).toBe(false);
@@ -123,7 +126,7 @@ describe('parseCards —— 卡片候选', () => {
     const evil = '[{"front":"f","back":"b","__proto__":{"polluted":true},"constructor":{"x":1}}]';
     const got = parseCards(evil);
     expect(got.ok).toBe(true);
-    if (got.ok) expect(got.value[0]).toEqual({ front: 'f', back: 'b', tags: [] });
+    if (got.ok) expect(got.value[0]).toEqual({ front: 'f', back: 'b', tags: [], choices: [] });
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 
     // 也不是所有输入都能让本模块抛
@@ -214,5 +217,134 @@ describe('parseEgg —— 彩蛋正文（唯一允许纯文本的入口）', () 
       expect(got.text).not.toContain('\u0000');
       expect(got.text).toContain('正文');
     }
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T2 */
+
+/**
+ * 判卷结果与「卡片自带干扰项」的严格解析（Plan 6 · T2）。
+ *
+ * 判别力：
+ * - PV#2/3 `match` **必须是布尔**：`"true"` / `1` / 缺失一律拒 —— 用
+ *   `String(x).includes('true')` 之类的嗅探实现会把 `{"match":"not true"}` 判成"答对"（红）；
+ * - PV#4 `missing` 必须逐项净化（null/空串/重复/超长/控制字符）；
+ * - PV#4b `missing` 是字符串（不是数组）⇒ 视作没有，不拒（模型的常见偏差）；
+ * - PCh#2 `choices` 与 `back` 相同 ⇒ 剔除（否则选项里会出现"正确答案"本身）。
+ */
+describe('parseVerdict —— 判卷结果（Plan 6 · T2）', () => {
+  it('PV#1 标准结果：对/错 + 理由 + 缺失要点', () => {
+    const got = parseVerdict('{"match":true,"reason":"抓住了要点","missing":[]}');
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    expect(got.value.match).toBe(true);
+    expect(got.value.reason).toBe('抓住了要点');
+    expect(got.value.missing).toEqual([]);
+
+    const bad = parseVerdict('```json\n{"match":false,"reason":"漏了作者","missing":["作者","朝代"]}\n```');
+    expect(bad.ok).toBe(true);
+    if (!bad.ok) return;
+    expect(bad.value.match).toBe(false);
+    expect(bad.value.missing).toEqual(['作者', '朝代']);
+  });
+
+  it('PV#2 match 不是布尔 ⇒ 拒绝（字符串 "true" / 数字 1 / null）', () => {
+    for (const raw of ['{"match":"true"}', '{"match":1}', '{"match":null}', '{"match":[]}']) {
+      const got = parseVerdict(raw);
+      expect(got.ok, raw).toBe(false);
+      if (!got.ok) expect(got.reason).toContain('判定');
+    }
+  });
+
+  it('PV#3 缺 match ⇒ 拒绝；非 JSON / 空串也不抛', () => {
+    for (const raw of ['{"reason":"x"}', '不是 JSON', '', '   ', '{"match"']) {
+      expect(parseVerdict(raw).ok).toBe(false);
+    }
+    expect(() => parseVerdict(null as never)).not.toThrow();
+    expect(() => parseVerdict(undefined as never)).not.toThrow();
+  });
+
+  it('PV#4 missing 逐项净化：null/空串/重复/超长/控制字符', () => {
+    const got = parseVerdict(
+      '{"match":false,"reason":"差一点","missing":["作者",null,"作者","","  ",3,"' + '长'.repeat(200) + '"]}',
+    );
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    expect(got.value.missing).toHaveLength(2); // 去重 + 剔空 + 非字符串剔除
+    expect(got.value.missing[0]).toBe('作者');
+    expect(Array.from(got.value.missing[1]).length).toBeLessThanOrEqual(60);
+  });
+
+  it('PV#4b missing 是字符串或缺失 ⇒ 视作没有要点（不因此拒绝）', () => {
+    for (const raw of ['{"match":true}', '{"match":true,"missing":"作者"}', '{"match":true,"missing":null}']) {
+      const got = parseVerdict(raw);
+      expect(got.ok, raw).toBe(true);
+      if (got.ok) expect(got.value.missing).toEqual([]);
+    }
+  });
+
+  it('PV#4c missing 超过 5 条 ⇒ 只留 5 条（上限本身就是"不可信"的一部分）', () => {
+    const raw = JSON.stringify({ match: false, missing: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] });
+    const got = parseVerdict(raw);
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.value.missing).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+
+  it('PV#5 理由里的方向控制符被剥掉、超长按码点截断', () => {
+    const got = parseVerdict(`{"match":false,"reason":"反着写\\u202e再来","missing":[]}`);
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    expect(got.value.reason).not.toContain('\u202e');
+    const long = parseVerdict(JSON.stringify({ match: true, reason: '甲'.repeat(300) }));
+    if (long.ok) expect(Array.from(long.value.reason).length).toBeLessThanOrEqual(120);
+  });
+
+  it('PV#6 理由缺失 ⇒ 空串（不是 undefined），保证 UI 直接可用', () => {
+    const got = parseVerdict('{"match":true}');
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.value.reason).toBe('');
+  });
+});
+
+describe('parseCards —— 卡片自带的干扰项 choices（Plan 6 · T2）', () => {
+  it('PCh#1 choices 正常项被保留（≤5 条、每条 ≤200 码点）', () => {
+    const got = parseCards('[{"front":"f","back":"b","choices":["错1","错2","错3"]}]');
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    expect(got.value[0]?.choices).toEqual(['错1', '错2', '错3']);
+
+    const many = parseCards(
+      JSON.stringify([{ front: 'f', back: 'b', choices: Array.from({ length: 12 }, (_, i) => `w${i}`) }]),
+    );
+    if (many.ok) expect(many.value[0]?.choices).toHaveLength(CHOICES_MAX);
+  });
+
+  it('PCh#2 与 back 相同 / 空串 / 非字符串 / 重复的干扰项逐项剔除', () => {
+    const got = parseCards(
+      JSON.stringify([
+        { front: 'f', back: '正确', choices: ['正确', ' ', '错1', '错1', 7, null, '错2'] },
+      ]),
+    );
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    expect(got.value[0]?.choices).toEqual(['错1', '错2']);
+  });
+
+  it('PCh#3 choices 缺失或不是数组 ⇒ 空数组（旧模型/旧调用方一字不改）', () => {
+    for (const raw of ['[{"front":"f","back":"b"}]', '[{"front":"f","back":"b","choices":"错"}]', '[{"front":"f","back":"b","choices":null}]']) {
+      const got = parseCards(raw);
+      expect(got.ok, raw).toBe(true);
+      if (got.ok) expect(got.value[0]?.choices).toEqual([]);
+    }
+  });
+
+  it('PCh#4 choices 里超长项按码点截断、控制字符被剥', () => {
+    const long = '乙'.repeat(300);
+    const got = parseCards(JSON.stringify([{ front: 'f', back: 'b', choices: [`${long}\u202e`] }]));
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    const c = got.value[0]?.choices?.[0] ?? '';
+    expect(Array.from(c).length).toBeLessThanOrEqual(CHOICE_TEXT_MAX);
+    expect(c).not.toContain('\u202e');
   });
 });

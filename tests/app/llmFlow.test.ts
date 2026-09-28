@@ -105,14 +105,24 @@ describe('数据最小化 —— 送出去的只有必要内容', () => {
 
 describe('suggestCards —— 解析与失败面', () => {
   it('LF#4 正常：把模型文本交给 core 解析，回候选（含截断申报）', async () => {
+    // choices（Plan 6 · D41）：模型在生成卡时一并给出干扰项，解析后随候选带出
     const f = fakeChat({
       ok: true,
-      text: '```json\n[{"front":"唐朝开国皇帝是谁？","back":"李渊","tags":["历史"]}]\n```',
+      text:
+        '```json\n[{"front":"唐朝开国皇帝是谁？","back":"李渊","tags":["历史"],' +
+        '"choices":["李世民","杨坚","赵匡胤"]}]\n```',
     });
     const res = await suggestCards({ chat: f.fn }, { text: '李渊建立了唐朝。', deckName: '唐诗' });
     expect(res).toEqual({
       ok: true,
-      value: [{ front: '唐朝开国皇帝是谁？', back: '李渊', tags: ['历史'] }],
+      value: [
+        {
+          front: '唐朝开国皇帝是谁？',
+          back: '李渊',
+          tags: ['历史'],
+          choices: ['李世民', '杨坚', '赵匡胤'],
+        },
+      ],
       truncated: false,
     });
   });

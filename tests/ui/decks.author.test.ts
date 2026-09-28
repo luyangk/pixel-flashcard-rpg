@@ -23,7 +23,8 @@ afterEach(() => {
 });
 
 function cand(front: string, back: string): CardCandidate {
-  return { front, back, tags: [] };
+  // choices（Plan 6 · D41）：模型在生成这张卡时一并产出的干扰项；夹具给一条即可
+  return { front, back, tags: [], choices: [`不是 ${back}`] };
 }
 
 function saveOneDeck() {
@@ -138,7 +139,7 @@ describe('mountDecks —— AI 辅建卡', () => {
     const rig = makeRig({
       initial: {
         ok: true,
-        value: [{ front: 'f1', back: 'b1', tags: ['历史', '唐诗'] }],
+        value: [{ front: 'f1', back: 'b1', tags: ['历史', '唐诗'], choices: [] }],
         truncated: false,
       },
     });
