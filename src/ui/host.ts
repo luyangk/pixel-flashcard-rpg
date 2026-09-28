@@ -21,6 +21,7 @@
 import type { Rng } from '@core/rng';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import { pickFakes } from '../app/fakeMemory';
+import { DAILY_CARD_CAP, DAILY_JUDGE_CAP, remainingCards, remainingJudges } from '../app/quota';
 import { needsPrologue } from '../app/storyState';
 import type { BattleScreenDeps, BattleScreenHandle } from './battleScreen';
 import { mountBattleScreen } from './battleScreen';
@@ -224,6 +225,15 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
             return mountSettings(root, ctrl, {
               onNav: () => onNav('menu'),
               llm: deps.llm,
+              setAnswerMode: deps.setAnswerMode,
+              // 今日额度：**现算**（跨天/记账后都要跟手，缓存一行会让玩家看到昨天的数）
+              llmQuotaText: () => {
+                const q = ctrl.snapshot().save?.settings?.llmQuota;
+                const nowMs = deps.now();
+                const left = remainingCards(q, nowMs, deps.tzOffsetMin);
+                const judges = remainingJudges(q, nowMs, deps.tzOffsetMin);
+                return `今日：生成剩 ${left} / ${DAILY_CARD_CAP} · 判定剩 ${judges} / ${DAILY_JUDGE_CAP}`;
+              },
               setTier: deps.setTier,
               setParams: deps.setParams,
               setPoolSize: deps.setPoolSize,

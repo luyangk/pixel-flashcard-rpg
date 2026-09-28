@@ -14,6 +14,7 @@
  */
 import type { Sm2Params } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import type { AnswerMode } from '@core/types';
 import type { ResetSaveResult } from '../app/resetFlow';
 import type { SettingsWriteResult } from '../app/settingsFlow';
 import { BOSS_TIERS, POOL_SIZE_MIN, POOL_SIZE_MAX } from '../app/settingsFlow';
@@ -77,6 +78,16 @@ export interface SettingsDeps {
    * 会话本来就该由**宿主**保证"导出的就是当下这份档"。本屏只要一个 boolean 面。
    */
   readonly exportBackupNow?: () => Promise<{ readonly ok: boolean; readonly reason?: string }>;
+  /**
+   * 作答方式写口（Plan 6 · T8；宿主接 `app/settingsFlow.setAnswerMode`）。
+   * 缺省 ⇒ 整组隐藏（同 AI 分组的口径：不显示点了没反应的入口）。
+   */
+  readonly setAnswerMode?: (mode: AnswerMode) => Promise<SettingsWriteResult>;
+  /**
+   * 「今日：生成剩 N / 200 · 判定剩 M / 300」那一行（宿主按 `settings.llmQuota` 现算）。
+   * 额度是给玩家的承诺，屏上要看得见；缺省则不显示该行。
+   */
+  readonly llmQuotaText?: () => string;
   /** toast 存活毫秒（测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -113,6 +124,22 @@ const LLM_MODEL_HINT =
   '模型名必须与你在服务商那里开通的一致：DeepSeek 现在是 deepseek-flash 或 deepseek-v4-pro' +
   '（旧的 deepseek-chat 已停用，填它会得到 400）；通义是 qwen-plus / qwen-max 等；' +
   '中转/自建网关请照它自己的目录填。拿不准就点「拉取模型列表」，它会问你自己的账号要。';
+
+/** 作答方式（Plan 6 · D41/D42）。 */
+const ANSWER_MODE_OPTIONS: ReadonlyArray<{ readonly mode: AnswerMode; readonly label: string }> = [
+  { mode: 'choice', label: '选择题' },
+  { mode: 'qa', label: '问答模式' },
+];
+const ANSWER_MODE_HINT =
+  '选择题：从选项里挑一个（答对才算「记住了」；答错与「直接看答案」都记为答错）。';
+/**
+ * D42 的例外必须写在屏上：问答模式是**全应用唯一**会把这张卡的答案发出去的地方。
+ * 藏着不说就是欺骗 —— 玩家的数据去向他有权知道。
+ */
+const ANSWER_MODE_QA_HINT =
+  '问答模式：你用一句话写自己的理解，由 AI 判断是否与答案一致 ——' +
+  '这会把这张卡的答案与你的输入发给你自己配置的服务商（只在问答模式、只在你点提交时）。';
+const ANSWER_MODE_QA_BLOCKED = '还没配 AI（下面的「AI（可选）」填好 Key 就能用问答模式）。';
 
 /** 存档分组的一句话说明（与「重看序章」的区别是玩家最容易搞混的点）。 */
 const SAVE_HINT =
@@ -158,6 +185,31 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   const headerEl = h('header', { class: 'settings-header' }, [
     backBtn,
     h('h2', { class: 'screen-title' }, '设置'),
+  ]);
+
+  /* ------------------------------------------------------------ 作答方式（Plan 6 · T8） */
+  const answerModeButtons = ANSWER_MODE_OPTIONS.map((spec) => {
+    const b = h(
+      'button',
+      { 'data-answer-mode': spec.mode, class: 'answer-mode-btn', type: 'button' },
+      spec.label,
+    ) as HTMLButtonElement;
+    b.addEventListener('click', () => void writeAnswerMode(spec.mode));
+    return b;
+  });
+  const answerModeBlockedEl = h(
+    'p',
+    { 'data-ui': 'answer-mode-qa-blocked', class: 'field-hint', hidden: true },
+    ANSWER_MODE_QA_BLOCKED,
+  );
+  const llmQuotaTextEl = h('p', { 'data-ui': 'llm-quota-text', class: 'field-hint', hidden: true });
+  const answerModeEl = h('section', { 'data-ui': 'answer-mode-group', class: 'settings-group' }, [
+    h('h3', { class: 'field-title' }, '作答方式'),
+    h('p', { class: 'field-hint' }, ANSWER_MODE_HINT),
+    h('p', { class: 'field-hint' }, ANSWER_MODE_QA_HINT),
+    h('div', { class: 'tier-row' }, answerModeButtons),
+    answerModeBlockedEl,
+    llmQuotaTextEl,
   ]);
 
   /* ------------------------------------------------------------ 阈值三档 */
@@ -311,6 +363,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   // "上面的重看序章"就指着这个顺序，改顺序要一起改文案。）
   const screen = h('div', { 'data-ui': 'settings-screen', class: 'settings-screen' }, [
     headerEl,
+    answerModeEl,
     tierEl,
     poolEl,
     paramEl,
@@ -339,6 +392,22 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     } catch (e) {
       // 只读闩锁下写口会真 reject——收成一句提示，不让 rejection 逃逸
       toast(`没保存：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      busy = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
+  }
+
+  /** 写作答方式：失败（只读）如实提示；选中态由快照决定（不本地高亮）。 */
+  async function writeAnswerMode(mode: AnswerMode): Promise<void> {
+    if (destroyed || busy || typeof deps.setAnswerMode !== 'function') return;
+    busy = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.setAnswerMode(mode);
+      toast(res.ok ? `作答方式已设为「${mode === 'qa' ? '问答模式' : '选择题'}」。` : res.reason);
+    } catch (e) {
+      toast(`没能设置：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       busy = false;
       if (!destroyed) render(ctrl.snapshot());
@@ -561,6 +630,22 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     saveParamsBtn.disabled = busy || typeof deps.setParams !== 'function';
     replayBtn.disabled = busy || typeof deps.replayPrologue !== 'function';
     setHidden(backBtn, typeof deps.onNav !== 'function');
+    // 作答方式（Plan 6 · T8）：选中态来自快照；问答模式要求 AI 就绪
+    const answerMode: AnswerMode = settings?.answerMode === 'qa' ? 'qa' : 'choice';
+    const canQa = canLlm && typeof llmDeps?.test === 'function';
+    for (const [i, spec] of ANSWER_MODE_OPTIONS.entries()) {
+      answerModeButtons[i].setAttribute('aria-pressed', String(spec.mode === answerMode));
+      answerModeButtons[i].disabled = busy || (spec.mode === 'qa' && !canQa);
+    }
+    setHidden(answerModeEl, typeof deps.setAnswerMode !== 'function');
+    setHidden(answerModeBlockedEl, canQa);
+    if (typeof deps.llmQuotaText === 'function') {
+      llmQuotaTextEl.textContent = deps.llmQuotaText();
+      setHidden(llmQuotaTextEl, false);
+    } else {
+      setHidden(llmQuotaTextEl, true);
+    }
+
     // 存档组：只有宿主给了重置口才显示；未确认时只露一个按钮（不把"危险按钮"摆在最前）
     setHidden(saveEl, typeof deps.resetSave !== 'function');
     resetActionsEl.hidden = !resetArmed;

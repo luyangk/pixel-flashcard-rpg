@@ -101,7 +101,7 @@ export interface HostAdapters {
     | { readonly ok: false; readonly reason: string }
   >;
   /** 作答模式写口（接 `app/settingsFlow.setAnswerMode`）；缺省 ⇒ 战斗屏不显示切换按钮。 */
-  readonly setAnswerMode?: (mode: AnswerMode) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
+  readonly setAnswerMode?: (mode: AnswerMode) => Promise<SettingsWriteResult>;
   /** 彩蛋生成（同样支持 ≤5 条卡面样例，理由见 llmNames）。 */
   readonly llmEgg?: (
     deckName: string,

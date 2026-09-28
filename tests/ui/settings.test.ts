@@ -200,3 +200,102 @@ describe('mountSettings —— 重看序章与拆除', () => {
     expect(all(root, '[data-tier]')).toHaveLength(0);
   });
 });
+
+/* ------------------------------------------------------------------ Plan 6 · T8 */
+
+/**
+ * 设置页「作答方式」（Plan 6 · T8 / D41 + D42）。
+ *
+ * 判别力：
+ * - SA#1 选中态来自**快照**（与阈值同款纪律：写失败时不能停在"点谁谁亮"的假状态）；
+ * - SA#2 点击把值交给注入写口；
+ * - SA#3 **D42 的例外必须上屏**：文案要出现"答案"与"服务商"——把答案发给模型是本应用
+ *   唯一一处打破"不发送答案"承诺的地方，藏着不说就是欺骗；
+ * - SA#4 没配 AI ⇒ 问答按钮禁用并说明（不让玩家选一个点了没反应的模式）；
+ * - SA#5 今日额度来自注入口（额度是给玩家的承诺，屏上要看得见）。
+ */
+describe('mountSettings —— 作答方式（Plan 6 · T8）', () => {
+  function mountAnswer(over: {
+    mode?: 'choice' | 'qa';
+    quotaText?: string;
+    withLlm?: boolean;
+    setAnswerMode?: (m: 'choice' | 'qa') => Promise<SettingsWriteResult>;
+  } = {}) {
+    const root = makeRoot();
+    const base = makeSave();
+    const save = {
+      ...base,
+      settings: { ...base.settings, answerMode: over.mode ?? 'choice' },
+    };
+    const ctrl = makeCtrl(makeSnap({ screen: 'menu', save }));
+    mountSettings(root, ctrl, {
+      toastMs: 0,
+      setAnswerMode: over.setAnswerMode ?? (() => Promise.resolve<SettingsWriteResult>({ ok: true })),
+      llmQuotaText: () => over.quotaText ?? '今日：生成剩 200 / 200 · 判定剩 300 / 300',
+      ...(over.withLlm === true
+        ? {
+            llm: {
+              load: () => ({ baseUrl: 'https://api.deepseek.com', apiKey: 'sk-x', model: 'deepseek-flash' }),
+              save: () => true,
+              clear: () => undefined,
+              test: () => Promise.resolve({ ok: true as const, text: 'pong' }),
+              presets: [],
+            },
+          }
+        : {}),
+    });
+    return root;
+  }
+  const modeBtn = (root: HTMLElement, mode: string): HTMLButtonElement =>
+    root.querySelector<HTMLButtonElement>(`[data-answer-mode="${mode}"]`) as HTMLButtonElement;
+
+  it('SA#1 两个按钮的选中态来自快照', () => {
+    const choice = mountAnswer({ mode: 'choice' });
+    expect(modeBtn(choice, 'choice').getAttribute('aria-pressed')).toBe('true');
+    expect(modeBtn(choice, 'qa').getAttribute('aria-pressed')).toBe('false');
+
+    const qa = mountAnswer({ mode: 'qa' });
+    expect(modeBtn(qa, 'qa').getAttribute('aria-pressed')).toBe('true');
+    expect(modeBtn(qa, 'choice').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('SA#2 点击把值交给写口（切到问答模式）', async () => {
+    const seen: string[] = [];
+    // 切到问答模式要求 AI 就绪（没配 AI 时按钮是禁用的，见 SA#4）
+    const root = mountAnswer({
+      withLlm: true,
+      setAnswerMode: (m) => {
+        seen.push(m);
+        return Promise.resolve<SettingsWriteResult>({ ok: true });
+      },
+    });
+    click(modeBtn(root, 'qa'));
+    await flushMicrotasks();
+    expect(seen).toEqual(['qa']);
+  });
+
+  it('SA#3 D42 的例外上屏：文案含「答案」与「服务商」', () => {
+    const root = mountAnswer();
+    const group = ui(root, 'answer-mode-group');
+    const hint = group.textContent ?? '';
+    expect(hint).toContain('答案');
+    expect(hint).toContain('服务商');
+    expect(hint).toMatch(/AI|大模型/);
+  });
+
+  it('SA#4 没配 AI ⇒ 问答按钮禁用并说明原因（不让玩家选一个点了没反应的模式）', () => {
+    const noAi = mountAnswer({ withLlm: false });
+    expect(modeBtn(noAi, 'qa').disabled).toBe(true);
+    expect(ui(noAi, 'answer-mode-qa-blocked').hidden).toBe(false);
+
+    const withAi = mountAnswer({ withLlm: true });
+    expect(modeBtn(withAi, 'qa').disabled).toBe(false);
+    expect(ui(withAi, 'answer-mode-qa-blocked').hidden).toBe(true);
+  });
+
+  it('SA#5 今日额度行来自注入口', () => {
+    const root = mountAnswer({ quotaText: '今日：生成剩 137 / 200 · 判定剩 288 / 300' });
+    expect(ui(root, 'llm-quota-text').textContent).toContain('137');
+    expect(ui(root, 'llm-quota-text').textContent).toContain('288');
+  });
+});

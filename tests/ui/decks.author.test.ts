@@ -40,6 +40,7 @@ interface AuthorRig {
     id: string;
     sourceType?: string;
     tags?: readonly string[];
+    choices?: readonly string[];
   }>;
   readonly genCalls: Array<{ text: string; deckName: string }>;
   setResult(r: ParseResult<CardCandidate>): void;
@@ -127,8 +128,17 @@ describe('mountDecks —— AI 辅建卡', () => {
     await flushMicrotasks();
 
     expect(rig.addCalls).toEqual([
-      { front: '改过的正面', back: 'b2', deckId: 'deck-a', id: 'id-1', sourceType: 'llm', tags: [] },
-      { front: 'f3', back: 'b3', deckId: 'deck-a', id: 'id-2', sourceType: 'llm', tags: [] },
+      // choices 一并带着（Plan 6 · D41）：夹具的 cand() 给每条候选一个干扰项
+      {
+        front: '改过的正面',
+        back: 'b2',
+        deckId: 'deck-a',
+        id: 'id-1',
+        sourceType: 'llm',
+        tags: [],
+        choices: ['不是 b2'],
+      },
+      { front: 'f3', back: 'b3', deckId: 'deck-a', id: 'id-2', sourceType: 'llm', tags: [], choices: ['不是 b3'] },
     ]);
     expect(ui(rig.root, 'toast').textContent).toBe('已加入 2 张卡。');
     expect(ui(rig.root, 'llm-author').hidden).toBe(true); // 收摊
@@ -248,5 +258,34 @@ describe('mountDecks —— AI 辅建卡', () => {
     await flushMicrotasks();
     expect(rig2.genCalls).toHaveLength(0);
     expect(ui(rig2.root, 'llm-author-status').textContent).toBe('先粘一段资料进来。');
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T8 */
+
+/**
+ * 候选的干扰项随卡入库（Plan 6 · D41）：模型在**生成卡那一刻**产出的 `choices` 必须
+ * 活着走到 `addCard` —— 丢了它，这张卡以后就只能退回"同领域其他卡的背面"这一级来源，
+ * 而"省额度"整个设计的前提就是"选项在生成时算一次、复习时不再调模型"。
+ */
+describe('卡组页 AI 辅建 —— 干扰项入库（Plan 6 · T8）', () => {
+  it('DA#C1 勾选入库时把 choices 一起交给 addCard（丢了必红）', async () => {
+    const rig = makeRig({
+      initial: {
+        ok: true,
+        value: [
+          { front: 'f1', back: 'b1', tags: ['历史'], choices: ['错甲', '错乙', '错丙'] },
+          { front: 'f2', back: 'b2', tags: [], choices: [] },
+        ],
+        truncated: false,
+      },
+    });
+    await openAndGenerate(rig);
+    click(ui(rig.root, 'llm-author-confirm'));
+    await flushMicrotasks();
+
+    expect(rig.addCalls).toHaveLength(2);
+    expect(rig.addCalls[0].choices).toEqual(['错甲', '错乙', '错丙']);
+    expect(rig.addCalls[1].choices).toEqual([]); // 没有干扰项就是空数组，不凭空造
   });
 });

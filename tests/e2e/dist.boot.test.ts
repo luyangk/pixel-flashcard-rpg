@@ -185,6 +185,53 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     expect(win.document.querySelector('[data-ui="llm-author-open"]'), '卡组屏拿不到 llmCards 依赖').not.toBeNull();
   }, 30_000);
 
+  it('DB#6 产物里作答模式可用：设置页有「作答方式」组、战斗屏出选项按钮', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    // 上一节可能停在别的一级屏：先回到菜单（本用例不依赖执行顺序）
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    // 设置屏：作答方式组（两个按钮 + D42 的隐私说明）
+    expect(click('[data-nav="settings"]'), '菜单里没有设置入口').toBe(true);
+    await settle();
+    const group = q('[data-ui="answer-mode-group"]');
+    expect(group, '设置屏没有「作答方式」组（Plan 6 的接线漏了）').not.toBeNull();
+    expect(group?.hidden).toBe(false);
+    expect(q('[data-answer-mode="choice"]'), '没有选择题按钮').not.toBeNull();
+    expect(q('[data-answer-mode="qa"]'), '没有问答模式按钮').not.toBeNull();
+    // D42 的例外必须写在屏上（把答案发给服务商这件事不能藏着）
+    expect(group?.textContent ?? '').toContain('答案');
+    expect(group?.textContent ?? '').toContain('服务商');
+
+    // 战斗屏：真的能出选项（走完整链路：备战 → 开战 → 首张卡出选项）
+    expect(click('[data-ui="back"]')).toBe(true);
+    await settle();
+    expect(click('[data-nav="prepare"]')).toBe(true);
+    await settle();
+    expect(click('[data-ui="start"]')).toBe(true);
+    await settle();
+    // 首战是教学局（弱化敌人），不影响出题形态
+    const choices = win.document.querySelectorAll('button[data-choice]');
+    expect(choices.length, '战斗屏没有出选择题（Plan 6 · T6 的接线漏了）').toBeGreaterThan(0);
+    // 判定面板此时还没出现（要先作答）
+    expect(q('[data-ui="verdict"]')?.hidden).toBe(true);
+    // 收尾：退出本局回菜单（别把后续用例留在战斗屏上）
+    expect(click('[data-ui="quit"]')).toBe(true);
+    await settle();
+  }, 40_000);
+
   it('DB#5 产物里「重置存档」真的能清档重装（main.ts 漏传 presetContent ⇒ 整组不显示）', async () => {
     const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
     const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
@@ -198,9 +245,11 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
       for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
     };
 
-    // 从卡组屏回菜单 → 设置
-    expect(click('[data-ui="back"]')).toBe(true);
-    await settle();
+    // 从任意一级屏回菜单 → 设置（不依赖上一个用例停在哪儿）
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
     expect(click('[data-nav="settings"]')).toBe(true);
     await settle();
 

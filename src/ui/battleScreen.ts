@@ -27,6 +27,7 @@ import type { AnswerMode, Card } from '@core/types';
 import type { BattleEvent } from '@core/battle';
 import type { FightView } from '../app/battleFlow';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import type { SettingsWriteResult } from '../app/settingsFlow';
 import { mountBattleStage, type BattleStage, type BattleStageDeps } from '../stage/battleStage';
 import type { StageSprites } from '../stage/renderer';
 import { docOf, h, setHidden } from './dom';
@@ -124,7 +125,7 @@ export interface BattleScreenDeps {
    * 作答模式写回（宿主接 `app/settingsFlow.setAnswerMode`）。缺省 ⇒ 不显示切换按钮。
    * 写失败（只读态）时屏上如实提示并**停在原模式**。
    */
-  readonly setAnswerMode?: (mode: AnswerMode) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
+  readonly setAnswerMode?: (mode: AnswerMode) => Promise<SettingsWriteResult>;
 }
 
 /** 挂载句柄：unmount/destroy 同一件事（unmount 是 brief 的对外名，destroy 是行文习惯）。 */

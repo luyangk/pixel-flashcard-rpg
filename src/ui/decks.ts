@@ -46,6 +46,8 @@ export interface DecksDeps {
     sourceType?: 'manual' | 'llm';
     /** 主题标签（AI 辅建带过来；PRD §3 主题筛选的依据）。缺省 = 无标签。 */
     tags?: readonly string[];
+    /** 干扰项（Plan 6 · D41；AI 辅建带过来）。缺省 = 没有，由 core/choices 回落地板来源。 */
+    choices?: readonly string[];
   }) => Promise<LibraryResult<Card>>;
   /** 建领域写口（宿主接 app/library.addDeck）。缺省则新建领域表单不显示。 */
   readonly addDeck?: (input: { name: string; id: string }) => Promise<LibraryResult<Deck>>;
@@ -644,7 +646,14 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
       authorListEl.appendChild(
         h(
           'li',
-          { 'data-candidate': String(i), 'data-candidate-tags': candidate.tags.join('\u0001'), class: 'candidate' },
+          {
+            'data-candidate': String(i),
+            'data-candidate-tags': candidate.tags.join('\u0001'),
+            // 干扰项也一起带着（Plan 6 · D41）：模型在生成卡时算出来的选项不该在入库时丢掉
+            // ——丢了这张卡以后就只能退回"同领域其他卡的背面"这一级来源。
+            'data-candidate-choices': (candidate.choices ?? []).join('\u0001'),
+            class: 'candidate',
+          },
           [check, front, back, tagHint],
         ),
       );
@@ -686,7 +695,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
   async function onAuthorConfirm(): Promise<void> {
     if (destroyed || authorGenerating || authorSaving || !deps.addCard) return;
     const rows = Array.from(authorListEl.children) as HTMLElement[];
-    const picked: Array<{ front: string; back: string; tags: string[] }> = [];
+    const picked: Array<{ front: string; back: string; tags: string[]; choices: string[] }> = [];
     for (const row of rows) {
       const check = row.querySelector('[data-candidate-check]') as HTMLInputElement | null;
       if (!check || !check.checked) continue; // 取消勾选的**不入库**（含默认勾选后手动取消）
@@ -694,6 +703,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
       const back = (row.querySelector('[data-candidate-back]') as HTMLInputElement | null)?.value ?? '';
       // tags 一起带上：它是 PRD §3 主题筛选的依据，生成时算出来的分类不该在入库时丢掉
       const tagText = row.getAttribute('data-candidate-tags') ?? '';
+      const choiceText = row.getAttribute('data-candidate-choices') ?? '';
       picked.push({
         front,
         back,
@@ -701,6 +711,10 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
           .split('\u0001')
           .map((t) => t.trim())
           .filter((t) => t.length > 0),
+        choices: choiceText
+          .split('\u0001')
+          .map((ch) => ch.trim())
+          .filter((ch) => ch.length > 0),
       });
     }
     if (picked.length === 0) {
@@ -723,6 +737,9 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
             deckId,
             id: newId(),
             sourceType: 'llm',
+            // 干扰项随卡入库（Plan 6 · D41）：模型生成时算好的选项在这里交出，
+            // 之后复习出选择题就不必再调模型（省额度是这个设计的全部前提）
+            choices: item.choices,
             tags: item.tags,
           });
           if (res.ok) added += 1;

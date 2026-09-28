@@ -419,7 +419,7 @@ describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
     // 记下宿主交给战斗屏的 deps，再断言两个口确实在里面且是同一份实现。
     let seen: BattleScreenDeps | null = null;
     const judge = () => Promise.resolve({ ok: true as const, match: true, reason: '要点都在', missing: [] });
-    const setAnswerMode = () => Promise.resolve({ ok: true });
+    const setAnswerMode = () => Promise.resolve({ ok: true as const });
     const { deps } = adapters({
       judge,
       setAnswerMode,
