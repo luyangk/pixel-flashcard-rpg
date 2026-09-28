@@ -75,6 +75,15 @@ export interface HostDeps extends HostAdapters {
 
 export interface HostHandle {
   unmount(): void;
+  /**
+   * 重新演出序章（设置页的「重看序章」，T11 评审判 I-2）。
+   *
+   * 为什么需要这个显式方法：`prologueActive` 是在**挂载时**求值一次的本地状态——
+   * 不能改成"每次快照都按 needsPrologue 重算"，因为 onDone 派发的 seenPrologue 是
+   * 异步落库的，重算会在落库完成前把刚收起的序章又挂回来（自激循环）。
+   * 于是由"发起方"显式要求重演：设置写口成功后宿主调它一次。
+   */
+  replayPrologue(): void;
 }
 
 /**
@@ -86,6 +95,12 @@ function viewKey(view: HostView, snap: ControllerSnapshot): string {
   const pool = snap.fight?.state?.pool;
   if (view.kind === 'battle') return `battle#${Array.isArray(pool) ? pool.join(',') : ''}`;
   if (view.kind === 'result') return `result#${snap.fight?.state?.phase ?? ''}#${String(snap.lastResult?.won)}`;
+  // 备战屏有两条来路（会话位 'prepare' = startFight 失败停留；本地路由 'prepare' = 玩家点进来），
+  // 但它们是**同一个屏**、挂载参数也完全相同。两者必须归一到同一个 key（T11 评审判 I-3）：
+  // 否则"开战失败"会被判成换屏 ⇒ 旧实例被拆、新实例重建 ⇒ 玩家刚选的池子/领域被静默复位
+  // （实测：选 25 张 → 开战失败 → aria-pressed 回到 15）。
+  if (view.kind === 'prepare') return 'prepare';
+  if (view.kind === 'screen' && view.route === 'prepare') return 'prepare';
   return view.kind === 'screen' ? `screen#${view.route}` : view.kind;
 }
 
@@ -212,8 +227,11 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
 
     current?.unmount();
     current = null;
+    // key 只在**挂载成功之后**才提交（T11 评审 m-4）：mountFor 抛错时若 key 已闩上，
+    // 这个屏就再也重建不了（而且异常会穿进控制器的订阅回调）。
+    const mounted = mountFor(view, snap);
+    current = mounted;
     currentKey = key;
-    current = mountFor(view, snap);
   }
 
   const unsubscribe = ctrl.subscribe((snap) => sync(snap));
@@ -228,5 +246,13 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
     readOnlyBar.unmount();
   }
 
-  return { unmount: destroy };
+  return {
+    unmount: destroy,
+    replayPrologue(): void {
+      if (destroyed) return;
+      prologueActive = true;
+      currentKey = ''; // 强制换屏（哪怕此刻正停在菜单）
+      sync(ctrl.snapshot());
+    },
+  };
 }

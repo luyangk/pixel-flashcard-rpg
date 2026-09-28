@@ -6,7 +6,7 @@
 
 技术底座是四层分离：`src/core/` 纯 TypeScript 逻辑核（零 DOM、零平台 API、时间与随机全部入参化）、
 `src/platform/` 平台能力抽象（IndexedDB / 内存存储、时钟、时区、随机播种、图片与文件口）、
-`src/app/` 编排层（会话控制器、Boss 净化、预算内容种子、导入导出）、`src/ui/` + `src/stage/`
+`src/app/` 编排层（会话控制器、Boss 净化、预置内容种子、导入导出）、`src/ui/` + `src/stage/`
 （原生 DOM 屏组件与 Canvas 战斗舞台，无框架、无游戏引擎）。
 
 ## 五个计划 · 进度
@@ -61,7 +61,7 @@ npm run verify        # = npm run typecheck && npm run check:purity && npm test
 | DoD | 证据用例 |
 |---|---|
 | DoD1 无画面也能打完一局（SRS/经验/榜单/备份全链一致） | `tests/app/fullSession.smoke.test.ts` · SM#1 |
-| DoD2 3 天内能击败首个 Boss（引导领域 15 次阈值） | `tests/e2e/playable.smoke.test.ts` · E2E#4（卷灵达标 → 卷灵战 → 净化 → 藏书阁条目） |
+| DoD2 3 天内能击败首个 Boss（引导领域 15 次阈值） | `tests/e2e/playable.smoke.test.ts` · E2E#4（**口径**：用例直接把引导域推到 15 次有效复习，验"达标 → 卷灵战 → 净化 → 藏书阁条目"这条链；"3 天"是数值设计结论（每卡每日只计一次 ⇒ 10 张卡两天即可攒够 15 次），不是用例在跑日历） |
 | DoD4 界面上能玩完整闭环（序章→首战→结算→卡组→图鉴） | `tests/e2e/playable.smoke.test.ts` · E2E#1–#4 |
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |

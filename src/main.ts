@@ -1,18 +1,15 @@
 /**
- * main.ts —— Plan 4 · T11：装配层（唯一把"真世界"接进游戏的地方）。
+ * main.ts —— Plan 4 · T11：启动编排（唯一把"真世界"接进游戏的地方）。
  *
- * 职责边界：本文件**只有装配**，没有规则。它按顺序做四件事，然后交给 `ui/host.mountHost`：
- *   1. 开存储（IndexedDB 失败自动降级内存，`openStorage` 已有契约）→ 建 coordinator；
- *   2. 首次启动灌预置内容（`app/presetContent`，空库才灌）并 flush；
- *   3. 建会话控制器（时钟/时区/rng 全部来自 platform）；
- *   4. 把 assets/ 里的内容与 app 层的写口装进 `HostAdapters`，挂宿主。
+ * 本文件**只做编排**，一条规则都没有：开存储 → 首次启动灌预置内容 → 建控制器 →
+ * 载素材 → 装配宿主依赖（`ui/hostAdapters.assembleHost`，那里是唯一可测的装配点）→ 挂宿主。
  *
  * 三条刻意的取舍：
  * - **启动失败要有人话**：任何一步抛错都落到 `#app` 里的一句大白话 + 原始信息
  *   （手机上看不到控制台；白屏是最差的结果）；
- * - **预置内容灌装失败不阻断启动**（`installed:false` 只记一句 notice 素材）：
- *   内容文件坏了就不给新手套装，玩家仍可以手写卡开局；
- * - **精灵加载永不 reject**（`platform/assets` 已保证），所以战斗不会因为缺图而起不来。
+ * - **预置内容灌装失败要上屏**（T11 评审判 m-5）：原来的实现把 `installed.reason`
+ *   丢进虚空，玩家只看到空卡库、不知道发生了什么——现在挂载后用 toast 说一句；
+ * - **精灵加载永不 reject**（`platform/assets` 保证），所以战斗不会因为缺图起不来。
  */
 import './ui/styles.css';
 
@@ -23,22 +20,17 @@ import fakeWordsJson from '../assets/narrative/fake-words.json';
 import prologueJson from '../assets/narrative/prologue.json';
 import presetJson from '../assets/content/preset.json';
 
-import { addCard, addDeck } from './app/library';
-import { bossFightParams, setBossName } from './app/bossFlow';
 import { createGameController } from './app/gameController';
 import { createCoordinator } from './app/persist';
-import { installPresetContent } from './app/presetContent';
-import { setBossThresholdTier, setDefaultPoolSize, setSm2Params, replayPrologue } from './app/settingsFlow';
-import { saveBeatCursor } from './app/storyState';
-import { exportAndMark, importBackupAndSave } from './app/transfer';
-import type { GameController, GameIntent } from './app/controllerTypes';
+import { installPresetContent, isFreshLibrary } from './app/presetContent';
 import { loadSprites } from './platform/assets';
 import { now as clockNow } from './platform/clock';
 import { tzOffsetMin } from './platform/env';
-import { downloadText, pickTextFile } from './platform/files';
 import { makeRng } from './platform/rngProvider';
 import { openStorage } from './platform/storage';
-import { mountHost } from './ui/host';
+import { mountHost, type HostHandle } from './ui/host';
+import { assembleHost } from './ui/hostAdapters';
+import { showToast } from './ui/toast';
 import type { ArcAct } from './ui/codex';
 import type { BeatEntry } from './ui/beats';
 import type { PrologueScene } from './ui/prologue';
@@ -50,104 +42,49 @@ function showFatal(root: HTMLElement, error: unknown): void {
   root.setAttribute('data-ui', 'fatal');
 }
 
-/** 装配期占位：包一层控制器只为记住"上一局的开局参数"，故先声明后赋值（见 boot 内顺序）。 */
-let bootCtrl: GameController;
-/** 无 crypto.randomUUID 的极老环境用的进程内自增（不读钟、不用 Math.random）。 */
-let idSeed = 0;
-
-/**
- * 记录"上一局的开局参数"：「再来一场」按它重开，不必让玩家再走一遍备战屏。
- * 包一层而不改控制器：控制器不知道"上一局参数"这件事，属宿主记忆。
- */
-function withLastStart(): { ctrl: GameController; lastStart: () => GameIntent } {
-  let last: { size: number; deckIds?: string[]; difficulty?: 'encounter' | 'boss' } = { size: 15 };
-  return {
-    ctrl: {
-      snapshot: () => bootCtrl.snapshot(),
-      subscribe: (cb) => bootCtrl.subscribe(cb),
-      intent: (i: GameIntent) => {
-        if (i.type === 'startFight') {
-          last = { size: i.size, deckIds: i.deckIds ? [...i.deckIds] : undefined, difficulty: i.difficulty };
-        }
-        return bootCtrl.intent(i);
-      },
-    },
-    lastStart: () => ({ type: 'startFight', ...last }),
-  };
-}
-
 async function boot(): Promise<void> {
   const root = document.getElementById('app') ?? document.body;
 
   const store = await openStorage('pixel-flashcard');
   const coord = await createCoordinator(store, { now: clockNow });
 
-  // 首次启动：空库才灌预置内容（内容坏了只提示、不阻断）
+  // 首次启动：空库才灌预置内容。失败**不阻断启动**（玩家仍可手写卡开局），但要说一句
+  // （评审判 m-5）：只有"本来就该有新手套装"的场合才提示——老玩家看到"没灌预置内容"
+  // 的 toast 只会莫名其妙。
+  const wasFresh = isFreshLibrary(coord.snapshot());
   const installed = await installPresetContent(coord, presetJson, clockNow());
   if (installed.installed) await coord.flush();
+  const notice = wasFresh && !installed.installed ? installed.reason : null;
 
-  bootCtrl = await createGameController({
+  const rawCtrl = await createGameController({
     coord,
     rng: makeRng(clockNow()),
     now: clockNow,
     tzOffsetMin: tzOffsetMin(),
   });
-
-  const { ctrl, lastStart } = withLastStart();
   const sprites = await loadSprites();
-  const wordTable = new Map(Object.entries(fakeWordsJson.pairs as Record<string, string>));
 
-  mountHost(root, ctrl, {
-    prologueScenes: prologueJson.scenes as unknown as readonly PrologueScene[],
-    beats: beatsJson.beats as unknown as readonly BeatEntry[],
-    eggs: eggsJson.eggs as Readonly<Record<string, string>>,
-    acts: arcJson.acts as unknown as readonly ArcAct[],
-    sprites,
-    wordTable,
-    rng: makeRng(clockNow() ^ 0x5f3759df),
+  let host: HostHandle | null = null;
+  const { ctrl, adapters } = assembleHost({
+    ctrl: rawCtrl,
+    coord,
+    store,
     now: clockNow,
     tzOffsetMin: tzOffsetMin(),
-    newId: () => {
-      const c = globalThis.crypto;
-      if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-      idSeed += 1;
-      return `zx-${idSeed}`;
-    },
-    // 写口：全部经 app 层（视图不持存储）
-    addCard: (input) => addCard(coord, { ...input, nowMs: clockNow() }),
-    addDeck: (input) => addDeck(coord, input),
-    setBossName: (deckId, raw) => setBossName(coord, deckId, raw),
-    setTier: (tier) => setBossThresholdTier(coord, tier),
-    setParams: (params) => setSm2Params(coord, params),
-    setPoolSize: (size) => setDefaultPoolSize(coord, size),
-    replayPrologue: () => replayPrologue(coord),
-    onBeatDrawn: (cursor) => void saveBeatCursor(coord, cursor).catch(() => undefined),
-    onReplay: () => void ctrl.intent(lastStart()).catch(() => undefined),
-    onPractice: (deckId) => {
-      const p = bossFightParams(coord.snapshot(), deckId);
-      void ctrl.intent({ type: 'startFight', size: p.size, deckIds: p.deckIds, difficulty: 'boss' }).catch(() => undefined);
-    },
-    // 导入 / 导出 / 抢救
-    exportBackup: () => exportAndMark(coord, clockNow()),
-    importBackup: async (text) => {
-      // 先把在途改动落净再导入：导入走的是 store.save（core 职责），而 coordinator 可能
-      // 还有一批 debounce 中的旧档——不等它写完就导入，一次陈旧的窗写会把导入结果覆盖掉。
-      await coord.flush();
-      const res = await importBackupAndSave(text, store);
-      // 导入走的是 store.save（core 职责），coordinator 的内存档必须重载才看得到
-      // （否则 UI 继续显示导入前那份；坏档玩家还能借此解除只读闩锁，见 Coordinator.reload）
-      if (res.ok) await coord.reload();
-      return res;
-    },
-    pickBackupText: async () => {
-      const picked = await pickTextFile();
-      return picked.ok ? picked.text : null; // 取消与读失败都回 null，导入屏不弹提示
-    },
-    saveTextFile: (text, filename) => {
-      downloadText(text, filename);
-    },
-    rawDump: () => coord.rawDump(),
+    // 假记忆演出的随机流与战斗分开（演出不该偷走战斗的随机序列）
+    rng: makeRng(clockNow() ^ 0x5f3759df),
+    sprites,
+    prologueScenes: prologueJson.scenes as unknown as readonly PrologueScene[],
+    beats: beatsJson.beats as unknown as readonly BeatEntry[],
+    acts: arcJson.acts as unknown as readonly ArcAct[],
+    eggs: eggsJson.eggs as Readonly<Record<string, string>>,
+    wordTable: new Map(Object.entries(fakeWordsJson.pairs as Record<string, string>)),
+    hostRef: () => host, // 「重看序章」用它把序章当场挂回来
+    onNotice: (text) => showToast(root, text, { ms: 8000 }),
   });
+
+  host = mountHost(root, ctrl, adapters);
+  if (notice !== null) showToast(root, notice, { ms: 8000 });
 }
 
 boot().catch((e: unknown) => {

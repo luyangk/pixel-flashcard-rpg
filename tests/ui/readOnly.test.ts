@@ -45,6 +45,26 @@ describe('mountReadOnlyBar —— 显隐', () => {
     mountReadOnlyBar(root, makeCtrl(makeSnap({ readOnly: true })), {});
     expect(ui(root, 'readonly-dump').hidden).toBe(true);
   });
+
+  it('RO#2c **只缺时钟**时也隐藏（否则会静默产出 1970 的文件名；评审判 m-2）', () => {
+    const root = makeRoot();
+    mountReadOnlyBar(root, makeCtrl(makeSnap({ readOnly: true })), {
+      rawDump: () => Promise.resolve('{}'),
+      saveTextFile: () => undefined,
+      // 刻意不给 now
+    });
+    expect(ui(root, 'readonly-dump').hidden).toBe(true);
+
+    // 补上时钟就出现（证明隐藏的原因确实是缺时钟，而不是别的）
+    const root2 = makeRoot();
+    mountReadOnlyBar(root2, makeCtrl(makeSnap({ readOnly: true })), {
+      rawDump: () => Promise.resolve('{}'),
+      saveTextFile: () => undefined,
+      now: () => 0,
+      toastMs: 0,
+    });
+    expect(ui(root2, 'readonly-dump').hidden).toBe(false);
+  });
 });
 
 describe('mountReadOnlyBar —— 坏档原文导出', () => {

@@ -448,3 +448,44 @@ describe('gameController —— 卷灵净化 / 经验切档 / 三幕里程碑（
     expect(coord.snapshot().decks[0].purifiedAt).toBeUndefined();
   });
 });
+
+/* ------------------------------------------------------------------ 序章意图与战局的竞态（T10 接缝） */
+
+describe('gameController —— 序章意图不得踩掉正在进行的战局（T11 评审判 I-4）', () => {
+  it('GC#T10-1 seenPrologue 落库期间开战 ⇒ 快照必须停在 fight，不能被折回 menu', async () => {
+    const clock = fakeClock(NOW);
+    const store = createMemoryStorage();
+    const real = await createCoordinator(store, { now: clock.now });
+    // 让序章那次落库**慢**下来：真实场景是 debounce 的写口（这里用一个延迟 mutate 复刻）
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const coord: Coordinator = {
+      ...real,
+      mutate: async (fn) => {
+        await gate;
+        return real.mutate(fn);
+      },
+    };
+    const ctrl = await createGameController({ coord, rng: mulberry32(3), now: clock.now, tzOffsetMin: TZ });
+    // 夹具准备走**未加闸**的 real（闸只用来拖住序章那一次写）
+    await real.mutate((s) => {
+      s.cards = [makeCard('c0')];
+      s.decks = makeSave([makeCard('c0')]).decks;
+    });
+    await real.flush();
+
+    // 序章收尾派 seenPrologue（挂起在 gate 上）
+    const prologue = ctrl.intent({ type: 'seenPrologue' });
+    // 玩家"接着"就开了下一局（startFight 不落库，故不会被 gate 挡住）
+    await ctrl.intent({ type: 'startFight', size: 1 });
+    expect(ctrl.snapshot().screen).toBe('fight');
+
+    release(); // 序章落库这时才完成
+    await prologue;
+
+    // 守卫的关键：不能因为序章那条异步路径把屏折回菜单
+    expect(ctrl.snapshot().screen).not.toBe('menu');
+  });
+});

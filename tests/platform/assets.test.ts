@@ -71,6 +71,16 @@ describe('loadImage', () => {
   });
 });
 
+describe('loadImage —— 兜底图不再二次 create（评审判 m-1）', () => {
+  it('AS#4 create 恒抛（极老环境没有 Image）也必须 resolve，而不是 reject', async () => {
+    const boom = (): HTMLImageElement => {
+      throw new Error('no image');
+    };
+    const img = await loadImage('assets/sprites/hero.png', { createImage: boom, timeoutMs: 0 });
+    expect((img as HTMLImageElement).getAttribute('src')).toBe(TRANSPARENT_PNG);
+  });
+});
+
 describe('loadSprites', () => {
   it('AS#3 四张图各来自正确路径，并发等齐后一起返回', async () => {
     const factory = fakeImageFactory();

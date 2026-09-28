@@ -48,7 +48,11 @@ function copyAssets(): Plugin {
       const from = `${ROOT}assets`;
       const to = `${ROOT}dist/assets`;
       if (!existsSync(from)) return;
-      cpSync(from, to, { recursive: true });
+      // 排除工作文件（T11 评审 m-7）：`_contact-sheet.png` 是目检拼图、`*.md` 是文档，
+      // 两者都不该进游戏包（assets/README.md 自己也是这么写的）。
+      const skip = (src: string): boolean =>
+        src.includes('_contact-sheet') || src.endsWith('.md');
+      cpSync(from, to, { recursive: true, filter: (src: string) => !skip(src) });
     },
   };
 }

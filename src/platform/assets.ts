@@ -44,11 +44,14 @@ export function loadImage(src: string, deps: ImageLoaderDeps = {}): Promise<HTML
   const clearTimer = deps.clearTimer ?? ((h: number) => clearTimeout(h as unknown as ReturnType<typeof setTimeout>));
 
   return new Promise<HTMLImageElement>((resolve) => {
-    let img: HTMLImageElement;
+    let img: HTMLImageElement | null = null;
     try {
       img = create();
     } catch {
-      resolve(fallbackImage(create));
+      // create 本身抛（极老环境没有 Image）：此时**不能再调一次 create** 造兜底图
+      // （T11 评审 m-1：二次 create 同样抛 ⇒ Promise reject，与"永不 reject"的承诺相反）。
+      // 直接回一个 data URL 图片元素；连 document 都不可用时，回一个最小的鸭子类型对象。
+      resolve(safeFallback());
       return;
     }
     let settled = false;
@@ -68,11 +71,30 @@ export function loadImage(src: string, deps: ImageLoaderDeps = {}): Promise<HTML
   });
 }
 
-/** 造一张兜底图（设置 src 前就 resolve，故调用方拿到的是"已可画"的占位）。 */
+/**
+ * 造一张兜底图。**自己承担全部失败**（T11 评审 m-1）：优先用 document 造 <img>；
+ * document 也不可用时回一个只有 `src` 字段的鸭子类型对象（drawImage 在无 ctx 的测试
+ * 环境里只当它是脏输入，不会崩）。这个函数**永不抛**。
+ */
+function safeFallback(create?: () => HTMLImageElement): HTMLImageElement {
+  try {
+    const img = create ? create() : new Image();
+    img.src = TRANSPARENT_PNG;
+    return img;
+  } catch {
+    try {
+      const img = document.createElement('img');
+      img.src = TRANSPARENT_PNG;
+      return img;
+    } catch {
+      return { src: TRANSPARENT_PNG } as unknown as HTMLImageElement;
+    }
+  }
+}
+
+/** 兜底图（对外名保留给测试与调用方）。 */
 function fallbackImage(create: () => HTMLImageElement): HTMLImageElement {
-  const img = create();
-  img.src = TRANSPARENT_PNG;
-  return img;
+  return safeFallback(create);
 }
 
 /** 舞台四件套（hero/mob/boss/bg），路径可覆盖以便将来接不同关卡素材。 */

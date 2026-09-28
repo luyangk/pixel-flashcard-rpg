@@ -36,8 +36,11 @@ import { showToast } from './toast';
 export const POOL_SIZES: readonly number[] = [10, 15, 25];
 
 export interface PrepareDeps {
-  /** 屏内导航（错误引导用；缺省则不显示引导按钮）。 */
-  readonly onNav?: (target: 'decks') => void;
+  /**
+   * 屏内导航：'decks' 用于错误引导（缺省则不显示引导按钮）；
+   * 'menu' 用于返回按钮（T11 评审判 I-1：备战屏此前没有任何退出入口，是条导航死路）。
+   */
+  readonly onNav?: (target: 'decks' | 'menu') => void;
   /**
    * 卷灵称号写口（宿主接 app/bossFlow.setBossName）。缺省时**不问称号**、直接开战——
    * 这样没有写口的宿主（测试/降级装配）也不会卡在弹窗上。
@@ -144,6 +147,7 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
   ]);
   const totalEl = h('p', { 'data-ui': 'pool-total', class: 'pool-total' });
   const errorEl = h('p', { 'data-ui': 'start-error', class: 'start-error', hidden: true });
+  const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
   const errorGoBtn = h(
     'button',
     { 'data-ui': 'error-go-decks', class: 'error-go', type: 'button' },
@@ -152,7 +156,7 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
   const startBtn = h('button', { 'data-ui': 'start', class: 'start-btn', type: 'button' }, '开战') as HTMLButtonElement;
 
   const screen = h('div', { 'data-ui': 'prepare-screen', class: 'prepare-screen' }, [
-    h('h2', { class: 'screen-title' }, '备战'),
+    h('header', { class: 'prepare-header' }, [backBtn, h('h2', { class: 'screen-title' }, '备战')]),
     chipsEl,
     h('h3', { class: 'field-title' }, '池子大小'),
     sizeEl,
@@ -255,6 +259,7 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     setHidden(errorEl, err === null);
     if (err) errorEl.textContent = `${err.message} ${NEXT_STEP[err.code] ?? ''}`.trim();
     setHidden(errorGoBtn, !(err !== null && needsLibrary(err.code) && typeof deps.onNav === 'function'));
+    setHidden(backBtn, typeof deps.onNav !== 'function');
   }
 
   /* ------------------------------------------------------------ 交互 */
@@ -367,6 +372,7 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
   bossNameConfirmBtn.addEventListener('click', () => void confirmBossName(false));
   startBtn.addEventListener('click', () => void onStart());
   errorGoBtn.addEventListener('click', () => deps.onNav?.('decks'));
+  backBtn.addEventListener('click', () => deps.onNav?.('menu'));
 
   const unsubscribe = ctrl.subscribe((snap) => {
     if (destroyed) return;

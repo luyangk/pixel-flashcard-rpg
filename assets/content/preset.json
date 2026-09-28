@@ -4,7 +4,7 @@
     {
       "id": "preset-life",
       "name": "生活常识",
-      "bossName": "常识·卷灵",
+      "bossName": "烟火篇·卷灵",
       "cards": [
         { "id": "life-01", "front": "打雷时为什么先看到闪电、后听到雷声？", "back": "光的速度远快于声音", "tags": ["物理"] },
         { "id": "life-02", "front": "高压锅为什么能更快把食物煮熟？", "back": "锅内气压升高，水的沸点随之升高", "tags": ["物理"] },
@@ -21,7 +21,7 @@
     {
       "id": "preset-tang",
       "name": "唐诗",
-      "bossName": "诗酒·卷灵",
+      "bossName": "长安篇·卷灵",
       "cards": [
         { "id": "tang-01", "front": "「举头望明月」的下一句", "back": "低头思故乡（李白《静夜思》）", "tags": ["李白"] },
         { "id": "tang-02", "front": "「国破山河在」出自谁的诗？", "back": "杜甫《春望》", "tags": ["杜甫"] },
@@ -36,7 +36,7 @@
     {
       "id": "preset-root",
       "name": "英语词根",
-      "bossName": "词根·卷灵",
+      "bossName": "巴别篇·卷灵",
       "cards": [
         { "id": "root-01", "front": "spect 这个词根表示什么？", "back": "看（inspect 往里看，respect 回头看）", "tags": ["词根"] },
         { "id": "root-02", "front": "port 这个词根表示什么？", "back": "搬运（transport 运输，import 输入）", "tags": ["词根"] },
@@ -49,7 +49,7 @@
     {
       "id": "preset-idiom",
       "name": "成语典故",
-      "bossName": "典故·卷灵",
+      "bossName": "锦绣篇·卷灵",
       "cards": [
         { "id": "idiom-01", "front": "「胸有成竹」最初说的是画什么？", "back": "画竹子——落笔前心中已有完整竹形", "tags": ["典故"] },
         { "id": "idiom-02", "front": "「洛阳纸贵」形容的是什么？", "back": "文章风行一时，人人传抄，纸都涨价", "tags": ["典故"] },

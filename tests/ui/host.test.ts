@@ -68,6 +68,13 @@ function adapters(over: Partial<HostDeps> = {}): { deps: HostDeps; battleMounts:
   };
 }
 
+/** 点完序章（本文件的夹具只有一屏）。 */
+function clickThroughPrologue(root: HTMLElement): void {
+  const screen = root.querySelector('[data-ui="prologue-screen"]') as HTMLElement | null;
+  if (!screen) throw new Error('序章屏不存在');
+  screen.click();
+}
+
 function snapMenu(over: Parameters<typeof makeSnap>[0] = {}) {
   const base = makeSave();
   return makeSnap({
@@ -177,6 +184,62 @@ describe('mountHost —— 换屏与本地路由', () => {
     ctrl.push(makeSnap({ screen: 'prepare' }));
     ctrl.push(snapMenu());
     expect(root.querySelector('[data-ui="menu-screen"]')).not.toBeNull();
+  });
+
+  it('HS#8 备战屏有返回入口（T11 评审判 I-1：此前是条导航死路）', async () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(snapMenu());
+    const { deps } = adapters();
+    mountHost(root, ctrl, deps);
+
+    click(root.querySelector('[data-nav="prepare"]') as HTMLElement);
+    expect(root.querySelector('[data-ui="prepare-screen"]')).not.toBeNull();
+    const back = ui(root, 'back');
+    expect(back.hidden).toBe(false);
+    click(back);
+    expect(root.querySelector('[data-ui="menu-screen"]')).not.toBeNull();
+    expect(root.querySelector('[data-ui="prepare-screen"]')).toBeNull();
+  });
+
+  it('HS#9 宿主句柄的 replayPrologue 当场重演序章（设置页「重看序章」的落点）', async () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'menu', save: makeSave() })); // prologueSeen=false
+    const { deps } = adapters();
+    const handle = mountHost(root, ctrl, deps);
+    expect(root.querySelector('[data-ui="prologue-screen"]')).not.toBeNull();
+
+    clickThroughPrologue(root);
+    expect(ctrl.intents).toEqual([{ type: 'seenPrologue' }]);
+    const base = makeSave();
+    ctrl.push(snapMenu({ save: { ...base, settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } } } }));
+    expect(root.querySelector('[data-ui="prologue-screen"]')).toBeNull();
+
+    // 玩家在设置页点了「重看序章」⇒ 设置写口成功后宿主调它
+    handle.replayPrologue();
+    expect(root.querySelector('[data-ui="prologue-screen"]')).not.toBeNull();
+    expect(root.querySelector('[data-ui="menu-screen"]')).toBeNull();
+  });
+
+  it('HS#10 startFight 失败**不重建**备战屏：玩家刚选的池子不该被静默复位（评审判 I-3）', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(snapMenu());
+    const { deps } = adapters();
+    mountHost(root, ctrl, deps);
+
+    click(root.querySelector('[data-nav="prepare"]') as HTMLElement);
+    const sizeBtn = (n: number): HTMLElement => root.querySelector(`[data-size="${n}"]`) as HTMLElement;
+    click(sizeBtn(25));
+    expect(sizeBtn(25).getAttribute('aria-pressed')).toBe('true');
+
+    // 控制器把屏停在 prepare 并带 lastError（键必须与本地路由的 prepare 归一，否则整屏重建）
+    ctrl.push(
+      makeSnap({
+        screen: 'prepare',
+        lastError: { code: 'insufficient-cards', message: '这个领域的卡不够凑一局。' },
+      }),
+    );
+    expect(ui(root, 'start-error').hidden).toBe(false);
+    expect(sizeBtn(25).getAttribute('aria-pressed')).toBe('true'); // 选择还在
   });
 
   it('HS#6 只读态常驻横幅：进任意屏都在，unmount 后全部摘掉', () => {

@@ -188,6 +188,33 @@ describe('installPresetContent —— 只在空库灌', () => {
     expect(b.coord.snapshot().cards).toHaveLength(0);
   });
 
+  it('PC#4d isFreshLibrary 是**合取**：只有领域无卡、或只有卡无领域，都不算空库（评审判 m-3）', async () => {
+    // 只有领域（玩家建了领域还没加卡）：不该被塞 30 张陌生卡
+    const decksOnly = emptySave();
+    decksOnly.decks = [{ id: 'mine', name: '我的领域', isPreset: false }];
+    expect(isFreshLibrary(decksOnly)).toBe(false);
+    const a = await makeCoord(decksOnly);
+    expect((await installPresetContent(a.coord, presetJson, NOW)).installed).toBe(false);
+    expect(a.writes()).toBe(0);
+
+    // 只有卡（历史档：cards 有内容但 decks 被清过）：同样不灌
+    const cardsOnly = emptySave();
+    cardsOnly.cards = [
+      {
+        id: 'c1',
+        deckId: 'ghost',
+        front: 'f',
+        back: 'b',
+        srs: { ease: 2.5, interval: 0, reps: 0, lapses: 0, due: 0, stability: 'new', effectiveReviewDays: [] },
+        tags: [],
+      },
+    ];
+    expect(isFreshLibrary(cardsOnly)).toBe(false);
+
+    // 两者皆空才算空库（唯一会灌的形态）
+    expect(isFreshLibrary(emptySave())).toBe(true);
+  });
+
   it('PC#5 只读态（坏档接管）不灌也不抛——启动路径不能因为存档坏了而白屏', async () => {
     const { coord } = await makeCoord({ schemaVersion: 2, decks: [], cards: [], settings: {}, meta: {} });
     expect(coord.readOnly()).toBe(true);

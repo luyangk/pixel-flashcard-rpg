@@ -3,8 +3,13 @@
  * tests/e2e/playable.smoke.test.ts —— Plan 4 · T10：**可玩性**端到端冒烟（DoD2/DoD4 的可执行证据）。
  *
  * 与 Plan 3 的 `tests/app/fullSession.smoke.test.ts`（无画面的逻辑链）分工不同：本文件把
- * **真宿主壳 + 真控制器 + 真屏组件**接起来跑一条完整玩家路径，只在"必须 canvas/rAF"的一处
- * 替换成假战斗屏（happy-dom 没有 2D context）：
+ * **真宿主壳 + 真控制器 + 真屏组件 + 真装配层（`ui/hostAdapters.assembleHost`）**接起来
+ * 跑一条完整玩家路径。被替换的只有三处**无头环境里无法真实完成**的边界：
+ *   1. 战斗屏（happy-dom 没有 2D canvas context）→ 假 stage 屏；
+ *   2. 文件选择与下载（真实现会开系统对话框）→ 两个 spy；
+ *   3. 加卡写口 → 恒失败的桩（本冒烟的卡都来自预置内容与导入备份）。
+ * 其余一切——屏路由、序章、控制器、导入链（含 flush→import→reload）、只读横幅——
+ * 走的都是生产代码本身：
  *
  *   E2E#1 冷启动 → 预置内容灌装（4 领域 30 卡）→ 序章 8 屏 → 菜单
  *   E2E#2 首战（引导域「生活常识」单领域）→ 逐张答对 → 结算屏：胜 + 战报碎片
@@ -30,8 +35,10 @@ import { saveBeatCursor } from '../../src/app/storyState';
 import { exportAndMark, importBackupAndSave } from '../../src/app/transfer';
 import { createCoordinator, type Coordinator } from '../../src/app/persist';
 import { createGameController } from '../../src/app/gameController';
-import type { GameController } from '../../src/app/controllerTypes';
+import type { ControllerSnapshot, GameController } from '../../src/app/controllerTypes';
 import { mountHost, type HostDeps } from '../../src/ui/host';
+import type { HostAdapters } from '../../src/ui/hostTypes';
+import { assembleHost } from '../../src/ui/hostAdapters';
 import type { BattleScreenDeps } from '../../src/ui/battleScreen';
 import arcJson from '../../assets/narrative/arc.json';
 import beatsJson from '../../assets/narrative/beats.json';
@@ -82,26 +89,39 @@ async function boot(opts: { seed?: SaveFile } = {}): Promise<Harness> {
     expect(installed.installed).toBe(true); // 冷启动必须真的灌上新手套装
     await coord.flush();
   }
-  const ctrl = await createGameController({ coord, rng: mulberry32(7), now: () => NOW, tzOffsetMin: TZ });
+  const rawCtrl = await createGameController({ coord, rng: mulberry32(7), now: () => NOW, tzOffsetMin: TZ });
 
   const calls = { pick: 0, import: 0, export: 0 };
   const downloads: Array<[string, string]> = [];
   let picked: string | null = null;
   let battleMounts = 0;
 
-  const deps: HostDeps = {
-    prologueScenes: prologueJson.scenes as unknown as HostDeps['prologueScenes'],
-    beats: beatsJson.beats as unknown as HostDeps['beats'],
-    eggs: eggsJson.eggs as Readonly<Record<string, string>>,
-    acts: arcJson.acts as unknown as HostDeps['acts'],
-    // 直接用四个 <img> 当舞台素材（happy-dom 没有真解码，也无需等 load 事件）
-    sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
-    wordTable: new Map(Object.entries(fakeWordsJson.pairs as Record<string, string>)),
-    rng: mulberry32(11),
+  // 真装配层（生产同一段代码）：导入前 flush、导入后 reload、练习关走 bossFightParams…全在这
+  const { ctrl, adapters } = assembleHost({
+    ctrl: rawCtrl,
+    coord,
+    store,
     now: () => NOW,
     tzOffsetMin: TZ,
-    newId: () => `zx-${++idSeq}`,
+    rng: mulberry32(11),
+    // 直接用四个 <img> 当舞台素材（happy-dom 没有真解码，也无需等 load 事件）
+    sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+    prologueScenes: prologueJson.scenes as unknown as HostAdapters['prologueScenes'],
+    beats: beatsJson.beats as unknown as HostAdapters['beats'],
+    acts: arcJson.acts as unknown as HostAdapters['acts'],
+    eggs: eggsJson.eggs as Readonly<Record<string, string>>,
+    wordTable: new Map(Object.entries(fakeWordsJson.pairs as Record<string, string>)),
     toastMs: 0,
+    // 文件口与加卡写口：无头环境里换成 spy/桩（见文件头"被替换的三处"）
+    pickBackupText: () => {
+      calls.pick += 1;
+      return Promise.resolve(picked);
+    },
+    saveTextFile: (text: string, filename: string) => downloads.push([text, filename]),
+  });
+  const deps: HostDeps = {
+    ...adapters,
+    addCard: async () => ({ ok: false, reason: '冒烟不手写卡' }),
     mountBattle: (mountRoot, _c, _d: BattleScreenDeps) => {
       battleMounts += 1;
       const el = document.createElement('div');
@@ -110,39 +130,11 @@ async function boot(opts: { seed?: SaveFile } = {}): Promise<Harness> {
       const off = (): void => el.remove();
       return { unmount: off, destroy: off };
     },
-    exportBackup: () => {
-      calls.export += 1;
-      return exportAndMark(coord, NOW);
-    },
-    importBackup: async (text) => {
-      calls.import += 1;
-      await coord.flush(); // 与 main.ts 同一处装配：先落净在途改动再导入
-      const res = await importBackupAndSave(text, store);
-      if (res.ok) await coord.reload();
-      return res;
-    },
-    pickBackupText: () => {
-      calls.pick += 1;
-      return Promise.resolve(picked);
-    },
-    saveTextFile: (text, filename) => downloads.push([text, filename]),
-    rawDump: () => coord.rawDump(),
-    addCard: async () => ({ ok: false, reason: '冒烟不手写卡' }),
-    setBossName: (deckId, raw) => setBossName(coord, deckId, raw),
-    setTier: (t) => setBossThresholdTier(coord, t),
-    setParams: (p) => setSm2Params(coord, p),
-    setPoolSize: (n) => setDefaultPoolSize(coord, n),
-    replayPrologue: () => replayPrologue(coord),
-    onBeatDrawn: (cursor) => void saveBeatCursor(coord, cursor).catch(() => undefined),
-    onReplay: () => void ctrl.intent({ type: 'startFight', size: 15 }),
-    onPractice: (deckId) => {
-      const cards = coord.snapshot().cards.filter((c) => c.deckId === deckId);
-      void ctrl.intent({ type: 'startFight', size: Math.min(cards.length, 25), deckIds: [deckId], difficulty: 'boss' });
-    },
   };
+  const exportCalls = (): number => calls.export;
 
   const trace: string[] = [];
-  ctrl.subscribe((snap) => trace.push(`${snap.screen}:${snap.fight?.state.phase ?? '-'}`));
+  ctrl.subscribe((snap: ControllerSnapshot) => trace.push(`${snap.screen}:${snap.fight?.state.phase ?? '-'}`));
   const host = mountHost(root, ctrl, deps);
   (root as unknown as { __trace?: string[] }).__trace = trace;
   return {
@@ -154,7 +146,7 @@ async function boot(opts: { seed?: SaveFile } = {}): Promise<Harness> {
     setPicked: (text) => {
       picked = text;
     },
-    spies: () => ({ mountBattle: battleMounts, ...calls }),
+    spies: () => ({ mountBattle: battleMounts, ...calls, exportCalls: exportCalls() }),
   };
 }
 
@@ -387,10 +379,16 @@ describe('E2E#4 卷灵战 → 净化 → 藏书阁', () => {
     await settle(2);
     (h.root.querySelector('[data-nav="codex"]') as HTMLElement).click();
     expect(h.root.querySelectorAll('[data-codex-entry]')).toHaveLength(1);
-    expect((h.root.querySelector('[data-ui="entry-name"]') as HTMLElement).textContent).toBe('常识·卷灵');
+    // LORE §4.2 的预置领域官方称号（T11 评审 I-6：预置内容必须用官方名，不能自造）
+    expect((h.root.querySelector('[data-ui="entry-name"]') as HTMLElement).textContent).toBe('烟火篇·卷灵');
     expect((h.root.querySelector('[data-ui="entry-egg"]') as HTMLElement).textContent).toBe(eggsJson.eggs['preset-life']);
-    expect(h.root.querySelector('[data-practice="preset-life"]')).not.toBeNull();
     expect(h.root.querySelectorAll('[data-act][data-unlocked="true"]')).toHaveLength(0);
+
+    // 练习关（重战）：真点一次，断言走的是 boss 档 + 单领域（口径来自 bossFightParams）
+    h.root.querySelector('[data-practice="preset-life"]')?.dispatchEvent(new Event('click'));
+    await waitFor('练习关开出卷灵战', () => h.ctrl.snapshot().screen === 'fight');
+    expect(h.ctrl.snapshot().fight?.difficulty).toBe('boss');
+    expect(h.ctrl.snapshot().fight?.pool.every((c) => c.deckId === 'preset-life')).toBe(true);
     h.host.unmount();
   });
 });

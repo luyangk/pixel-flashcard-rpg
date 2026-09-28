@@ -237,6 +237,22 @@ describe('mountPrepare —— 防双开与拆除', () => {
     expect(start.disabled).toBe(false);
   });
 
+  it('PR#11 返回按钮回菜单（备战屏此前的唯一出口是"开战"，评审判 I-1）', () => {
+    const root = makeRoot();
+    const nav: string[] = [];
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWithDecks() }));
+    mountPrepare(root, ctrl, { onNav: (t) => nav.push(t) });
+
+    click(ui(root, 'back'));
+    expect(nav).toEqual(['menu']);
+  });
+
+  it('PR#11b 未注入 onNav 时返回按钮隐藏（不显示点了没反应的入口）', () => {
+    const root = makeRoot();
+    mountPrepare(root, makeCtrl(makeSnap({ screen: 'prepare', save: saveWithDecks() })), {});
+    expect(ui(root, 'back').hidden).toBe(true);
+  });
+
   it('PR#8 unmount 后不再响应快照（订阅已撤销，且 DOM 已摘）', () => {
     const root = makeRoot();
     const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: saveWithDecks() }));

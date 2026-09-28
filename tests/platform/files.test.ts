@@ -94,6 +94,59 @@ describe('pickTextFile', () => {
     expect(document.querySelector('input[type="file"]')).toBeNull(); // 用完即摘
   });
 
+  it('FL#3 取消（cancel 事件）必须 settle 成 cancelled——只等 change 的实现会让 Promise 永挂', async () => {
+    const fakeWin = { addEventListener: () => undefined, removeEventListener: () => undefined };
+    const promise = pickTextFile({ doc: document, win: fakeWin, timeoutMs: 0 });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    input.dispatchEvent(new Event('cancel'));
+    await expect(promise).resolves.toEqual({ ok: false, reason: 'cancelled' });
+    expect(document.querySelector('input[type="file"]')).toBeNull(); // 取消也要摘干净
+  });
+
+  it('FL#3b 焦点兜底：窗口回焦后仍没选中文件 ⇒ cancelled（多数浏览器取消时不发 change）', async () => {
+    // 手动调度器：自己决定"焦点后延时"那一刻何时到
+    const jobs: Array<() => void> = [];
+    const handlers = new Map<string, () => void>();
+    const fakeWin = {
+      addEventListener: (t: string, cb: () => void) => void handlers.set(t, cb),
+      removeEventListener: (t: string) => void handlers.delete(t),
+    };
+    const promise = pickTextFile({
+      doc: document,
+      win: fakeWin,
+      focusDelayMs: 400,
+      timeoutMs: 0,
+      setTimer: (cb) => {
+        jobs.push(cb);
+        return jobs.length;
+      },
+      clearTimer: () => undefined,
+    });
+    // 用户关掉了选择器：窗口回焦，但没有 change
+    handlers.get('focus')?.();
+    expect(jobs).toHaveLength(1);
+    jobs[0]();
+    await expect(promise).resolves.toEqual({ ok: false, reason: 'cancelled' });
+    expect(handlers.has('focus')).toBe(false); // 收尾时摘监听
+  });
+
+  it('FL#3c 兜底超时：极端情况下也不能把调用方锁死', async () => {
+    const jobs: Array<() => void> = [];
+    const promise = pickTextFile({
+      doc: document,
+      win: { addEventListener: () => undefined, removeEventListener: () => undefined },
+      timeoutMs: 1234,
+      setTimer: (cb) => {
+        jobs.push(cb);
+        return jobs.length;
+      },
+      clearTimer: () => undefined,
+    });
+    expect(jobs).toHaveLength(1);
+    jobs[0]();
+    await expect(promise).resolves.toEqual({ ok: false, reason: 'cancelled' });
+  });
+
   it('FL#2b 读文件失败 → read-failed（不抛异常）', async () => {
     // happy-dom 的 FileReader 不可靠，这里只钉"没有文件时的分支"与"用完摘除"；
     // 真实读取路径由宿主手工冒烟（T10）覆盖，避免为测试造一套 FileReader 假实现。
