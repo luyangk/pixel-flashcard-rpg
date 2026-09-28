@@ -129,7 +129,7 @@ export function setLlmQuota(coord: Coordinator, quota: LlmQuota): Promise<Settin
 // library.addCard 入参追加
 readonly choices?: readonly string[];   // 经 core 同一套严检后落 Card.choices（缺席 = 不写该字段）
 ```
-**口径：** 三个字段都**可选且缺席不拒**（做成拒绝点会让旧档整包打不开）；在场严检（`answerMode` ∈ 枚举；`llmQuota.day` 非空字符串且两计数为非负整数；`Card.choices` 为字符串数组、≤5 条、每条 ≤200 码点）；`migrateSave` 为缺席档补 `'choice'` 与 `{day:'',cards:0,judges:0}`，**不补** `choices`（缺席 = 没有）；两个 setter 同值不重写、域外值拒绝并回可上屏 reason；`addCard` 的 `choices` 经 core 严检后**只在非空时**写字段。
+**口径：** 三个字段都**可选且缺席不拒**（做成拒绝点会让旧档整包打不开）；在场严检（`answerMode` ∈ 枚举；`llmQuota.day` 为**字符串**（`''` 合法 —— 它就是缺省值；首版写成「非空」会让注入缺省后的每个存档整包拒、协调器进只读态，被三段式用例当场抓住）且两计数为非负整数；`Card.choices` 为字符串数组、≤5 条、每条 ≤200 码点）；`migrateSave` 为缺席档补 `'choice'` 与 `{day:'',cards:0,judges:0}`，**不补** `choices`（缺席 = 没有）；两个 setter 同值不重写、域外值拒绝并回可上屏 reason；`addCard` 的 `choices` 经 core 严检后**只在非空时**写字段。
 - [ ] Step 1 失败测试：SM#? 旧档（三字段全缺）⇒ 迁出后 `answerMode==='choice'`、`llmQuota` 全零、卡片无 `choices`；`answerMode:'x'` ⇒ 整包拒；`llmQuota.cards:-1`/`1.5`/`'3'` ⇒ 拒；`choices:['a', 3]` ⇒ 拒；`choices` 20 条 ⇒ 拒；SF#? `setAnswerMode` 切换成功+落盘、同值零写入、域外值失败；`setLlmQuota` 同上且脏值被拒；LB#? `addCard` 带 choices ⇒ 落盘保留，带空数组 ⇒ **不写字段**（`'choices' in card === false`）
 - [ ] Step 2 红 → Step 3 实现 → Step 4 绿 → Step 5 Commit `feat(core,app): answerMode/llmQuota/Card.choices 扩位与写口`
 
