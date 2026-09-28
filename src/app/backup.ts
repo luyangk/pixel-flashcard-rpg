@@ -47,7 +47,7 @@
  */
 
 import type { SaveFile } from '@core/types';
-import { migrateSave } from '@core/saveMigrate';
+import { MAX_TIME_MS, migrateSave } from '@core/saveMigrate';
 
 // ---------------------------------------------------------------------------
 // 常量与类型
@@ -83,9 +83,6 @@ const MS_PER_DAY = 86_400_000;
 /** 默认提醒周期（RF#5：每 7 天未备份提醒一次）。 */
 const DEFAULT_REMINDER_PERIOD_DAYS = 7;
 
-/** Date 可表示时间戳范围（与 saveMigrate 的 requireTimestamp 同域）。 */
-const MAX_TIME_MS = 8.64e15;
-
 /** migrateSave 抛错时的固定前缀——转述给用户时剥掉，避免"存档…存档…"套娃。 */
 const MIGRATE_ERROR_PREFIX = '存档不合法，无法迁移：';
 
@@ -113,7 +110,9 @@ function envelopeError(detail: string): { ok: false; reason: string } {
   return { ok: false, reason: `${ENVELOPE_ERROR_PREFIX}${detail}` };
 }
 
-/** 有限时间戳判定（NaN/±Infinity/字符串/超界一律不算）。 */
+/** 有限时间戳判定（NaN/±Infinity/字符串/超界一律不算）。
+ *  上界统一取 core/saveMigrate 的权威常量 MAX_TIME_MS（T8 · R-T7-p3-e-1：
+ *  原为本地字面量副本，信封校验与落盘自检的域靠人工同步）。 */
 function isTimestamp(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_TIME_MS;
 }

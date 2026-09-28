@@ -35,6 +35,7 @@
 
 import type { RunRecord, RunInput } from '@core/leaderboard';
 import { rankRuns, scoreRun } from '@core/leaderboard';
+import { MAX_TIME_MS } from '@core/saveMigrate';
 import type { BattleState } from '@core/battle';
 import type { Coordinator } from './persist';
 import type { FightView } from './battleFlow';
@@ -59,9 +60,6 @@ interface RunExtras {
   level: number;
 }
 
-/** Date 可表示时间戳范围（与 saveMigrate.requireTimestamp 同域）。 */
-const MAX_TIME_MS = 8.64e15;
-
 /** 有限非负整数消毒：非有限/负 → 0，小数向下取整（scoreRun/leaderboard 同口径）。 */
 function nonNegIntOr(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
@@ -69,7 +67,11 @@ function nonNegIntOr(value: unknown): number {
   return n >= 0 ? n : 0;
 }
 
-/** 时间戳消毒：可表示范围内的有限数原样保留（含 1970 前），否则回落 0。 */
+/**
+ * 时间戳消毒：可表示范围内的有限数原样保留（含 1970 前），否则回落 0。
+ * 上界 import core/saveMigrate 的权威常量 MAX_TIME_MS（T8 · R-T7-p3-e-1：原为本地
+ * 字面量副本，与落盘自检的域靠人工同步；现由编译器保证同值）。
+ */
 function timestampOr(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= MAX_TIME_MS
     ? value

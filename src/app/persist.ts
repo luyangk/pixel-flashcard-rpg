@@ -31,7 +31,7 @@
 
 import type { Card, SaveFile, Settings } from '@core/types';
 import type { GameStorage } from '@platform/storage';
-import { validateSave } from '@core/saveMigrate';
+import { MAX_TIME_MS, validateSave } from '@core/saveMigrate';
 import type { SettleResult } from './growth';
 
 // ---------------------------------------------------------------------------
@@ -56,10 +56,9 @@ const MAX_FLUSH_ROUNDS = 5;
  * 否则放行的值会在下一次 flush 里让 validateSave 整包拒（I1 的实证教训：1e300 进档后
  * dirty 恒 true、连无关改动都写不进去）。
  *
- * 此处是本地副本而非 import：core 侧该常量尚未导出（R-T6-d 的"不发明新导出面"），
- * 而 core 文件不在本任务授权面内。域值若变更（几乎不可能），两处需同步——已登记报告。
+ * 【T8 · R-T7-p3-e-1】原为本地字面量副本，现直接 import core 的权威常量：
+ * "同值"由编译器保证，不再靠两处人工同步。
  */
-const MAX_TIME_MS = 8.64e15;
 
 /** brief Produces 声明的最小接口；实现返回的对象是其超集（结构兼容，CT#3 钉住）。 */
 export interface Coordinator {

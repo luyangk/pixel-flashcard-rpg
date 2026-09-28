@@ -164,8 +164,15 @@ function requireInterval(v: unknown, path: string): number {
   return v as number;
 }
 
-/** Date 可表示时间戳范围（±8.64e15ms ≈ 前后各 271820 年）；超界令 new Date() 变 Invalid Date。 */
-const MAX_TIME_MS = 8.64e15;
+/** Date 可表示时间戳范围（±8.64e15ms ≈ 前后各 271820 年）；超界令 new Date() 变 Invalid Date。
+ *
+ * 【Plan 3 · T8 导出面变更申报（R-T7-p3-e-1）】本常量自 T8 起为 core 的**公开导出**
+ * （此前模块私有）。理由：装配层三处守卫（persist.markExported 域守卫、results.timestampOr
+ * 消毒、backup.isTimestamp 信封校验）必须与落盘自检 `requireTimestamp` **完全同域**，
+ * 此前各持一份本地字面量副本，值漂移即"放行的值在下次 flush 让 validateSave 整包拒"
+ * （I1 的实证后果：dirty 恒 true、无关改动也写不进去）。现由本文件成为唯一权威，
+ * 三处改为 import。这是本文件导出面的唯一新增，其余导出不变。 */
+export const MAX_TIME_MS = 8.64e15;
 
 /** 时间戳域：|v| ≤ 8.64e15——顺带封死 dueQueue 对 NaN/Invalid 排序失序的入口（m-5）。 */
 function requireTimestamp(v: unknown, path: string): number {
