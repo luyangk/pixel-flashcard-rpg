@@ -120,7 +120,7 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
   const { ctrl, coord, store, now, tzOffsetMin } = deps;
 
   /* ------------------------------------------------------------ 上一局参数（「再来一场」） */
-  let last: { size: number; deckIds?: string[]; difficulty?: 'encounter' | 'boss' } = { size: 15 };
+  let last: { size: number; deckIds?: string[]; difficulty?: 'tutorial' | 'encounter' | 'boss' } = { size: 15 };
   const wrapped: GameController = {
     snapshot: () => ctrl.snapshot(),
     subscribe: (cb) => ctrl.subscribe(cb),

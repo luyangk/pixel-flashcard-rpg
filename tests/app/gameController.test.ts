@@ -227,13 +227,57 @@ describe('gameController —— 一局的落库义务（R-T4-d 端到端第三�
     const cards = [makeCard('c0'), makeCard('c1')];
     const { ctrl, coord } = await makeController(cards, clock);
     const before = JSON.stringify(coord.snapshot().cards.map((c) => c.srs.reps));
-    await ctrl.intent({ type: 'startFight', size: 2 });
+    // 显式指定 encounter 档：本用例要验的是"弃战不落账"，**不能让第一击就打穿**。
+    // （不指定的话首战会走 tutorial 档，HP 只有 6 点，一击致命会让这一局提前结算——
+    //  那是另一个用例的事，见 GC#T5-1。）
+    await ctrl.intent({ type: 'startFight', size: 2, difficulty: 'encounter' });
     await ctrl.intent({ type: 'answer', grade: GRADES.good });
     await ctrl.intent({ type: 'toMenu' });
     expect(ctrl.snapshot().screen).toBe('menu');
     expect(ctrl.snapshot().fight).toBeNull();
     expect(JSON.stringify(coord.snapshot().cards.map((c) => c.srs.reps))).toBe(before);
     expect(coord.snapshot().settings.leaderboard).toHaveLength(0);
+  });
+
+  it('GC#T5-1 首战自动走教学局（tutorial）：敌血系数 0.3；打过一局后回到 encounter', async () => {
+    const clock = fakeClock(NOW);
+    const cards = Array.from({ length: 10 }, (_, i) => makeCard(`c${i}`));
+    const { ctrl, coord } = await makeController(cards, clock);
+    expect(coord.snapshot().meta.plays).toBe(0); // 从未打过
+
+    await ctrl.intent({ type: 'startFight', size: 10 });
+    const first = ctrl.snapshot().fight!;
+    expect(first.difficulty).toBe('tutorial');
+    expect(first.state.enemyHp).toBe(30); // ceil(10×10×0.3)
+    expect(first.state.enemyPower).toBe(7); // 反击与遭遇战同档（教学局只是更脆）
+
+    // 打完这一局（判负也算"打过"）：下一场自动回到正常遭遇战
+    for (let i = 0; i < 10; i++) {
+      if (ctrl.snapshot().screen !== 'fight') break;
+      await ctrl.intent({ type: 'answer', grade: GRADES.again });
+    }
+    expect(coord.snapshot().meta.plays).toBe(1);
+    await ctrl.intent({ type: 'toMenu' });
+    await ctrl.intent({ type: 'startFight', size: 10 });
+    expect(ctrl.snapshot().fight?.difficulty).toBe('encounter');
+    expect(ctrl.snapshot().fight?.state.enemyHp).toBe(70); // ceil(10×10×0.7)
+  });
+
+  it('GC#T5-2 教学局只降敌血：结算仍按遭遇战记账（kind=encounter、经验 21 而非 boss 档）', async () => {
+    const clock = fakeClock(NOW);
+    const cards = Array.from({ length: 10 }, (_, i) => makeCard(`c${i}`, 'review'));
+    const { ctrl, coord } = await makeController(cards, clock);
+    await ctrl.intent({ type: 'startFight', size: 10 });
+    expect(ctrl.snapshot().fight?.difficulty).toBe('tutorial');
+    for (let i = 0; i < 10; i++) {
+      if (ctrl.snapshot().screen !== 'fight') break;
+      await ctrl.intent({ type: 'answer', grade: GRADES.good });
+    }
+    const res = ctrl.snapshot().lastResult!;
+    expect(res.won).toBe(true);
+    expect(res.expGained).toBe(21); // 遭遇战档（round(30×0.7)），不是 boss 的 45
+    const board = coord.snapshot().settings.leaderboard ?? [];
+    expect(board[0].kind).toBe('encounter'); // 教学局不是另一类战斗
   });
 
   it('GC#9b 终局同帧两次 answer：第二次被相位守卫拦下，exp/plays/榜单只记一次（C-1 回归钉）', async () => {

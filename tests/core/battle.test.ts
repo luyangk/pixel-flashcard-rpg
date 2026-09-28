@@ -237,12 +237,13 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     expect(a.log[0]).toEqual({ kind: 'damage', cardId: 'm1', amount: 14 });
     expect(a.enemyHp).toBe(6);
 
-    // 中值：rng≡0.5 → float=1.0；learning 倍率 0.5 → round(10×0.5×1.0)=5
+    // 中值：rng≡0.5 → float=1.0；learning 倍率 0.7（Plan 5 改进：原 0.5）
+    // → round(10×0.7×1.0)=7
     const learning = makeCard('l1', 'learning');
     let b = createBattle([learning], 12, STATS_10, HALF);
     b = answer(b, makeCard('l1', 'learning'), GRADES.good, HALF);
-    expect(b.log[0].amount).toBe(5);
-    expect(b.enemyHp).toBe(7);
+    expect(b.log[0].amount).toBe(7);
+    expect(b.enemyHp).toBe(5);
 
     // 上界：rng→1⁻ → float→1.1⁻；review 倍率 1.0 → round(10×1.0×1.1)=11
     const near: Rng = () => 0.999999;
@@ -253,16 +254,17 @@ describe('answer —— 命中路径（grade ≥ good）', () => {
     expect(c.enemyHp).toBe(1);
   });
 
-  it('AN#3 stability=new 的卡伤害 0.1×atk 取整可为 0：amount=0 仍记 damage 事件算命中', () => {
+  it('AN#3 stability=new 的卡：低 atk 下取整可为 0，amount=0 仍记 damage 事件算命中', () => {
     const card = makeCard('n1', 'new');
-    // atk=10 → 10×0.1×1.0 = 1（非零）；atk=4 → 0.4 → round 0
+    // Plan 5 数值改进后 new 倍率是 0.3：atk=10 → round(3.0)=3（非零）
     let s = createBattle([card], 5, STATS_10, HALF);
     s = answer(s, card, GRADES.good, HALF);
-    expect(s.log[0]).toEqual({ kind: 'damage', cardId: 'n1', amount: 1 });
-    expect(s.enemyHp).toBe(4);
+    expect(s.log[0]).toEqual({ kind: 'damage', cardId: 'n1', amount: 3 });
+    expect(s.enemyHp).toBe(2);
 
-    // atk=4 → round(4×0.1×1.0)=round(0.4)=0：零伤害仍记 damage 事件（算命中）
-    const lowAtk = { level: 1, vit: 0, spi: 0, atk: 4, def: 7, maxHp: 100 };
+    // atk=1 → round(0.3)=0：零伤害仍记 damage 事件（算命中）。
+    // 这个用例的价值是钉住"damage 事件 ≠ 有伤害"，与具体倍率无关，故用极低 atk 保持可复现。
+    const lowAtk = { level: 1, vit: 0, spi: 0, atk: 1, def: 7, maxHp: 100 };
     let s2 = createBattle([card], 5, lowAtk, HALF);
     s2 = answer(s2, card, GRADES.good, HALF);
     expect(s2.enemyHp).toBe(5);

@@ -84,7 +84,13 @@ export type ControllerSnapshot = Readonly<{
  *   之一；控制器不主动切 'prologue' 屏（类型位保留，初始屏仍是 menu）。
  */
 export type GameIntent =
-  | { type: 'startFight'; size: number; deckIds?: string[]; difficulty?: 'encounter' | 'boss' }
+  | {
+      type: 'startFight';
+      size: number;
+      deckIds?: string[];
+      /** 缺省由控制器按是否首战决定（首战 = 教学局 tutorial）。 */
+      difficulty?: 'tutorial' | 'encounter' | 'boss';
+    }
   | { type: 'answer'; grade: Grade }
   | { type: 'finish' }
   | { type: 'toMenu' }

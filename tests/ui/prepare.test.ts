@@ -269,6 +269,20 @@ describe('mountPrepare —— 防双开与拆除', () => {
 
 /* ------------------------------------------------------------------ 卷灵现身（T8） */
 
+describe('mountPrepare —— 首战教学局提示（Plan 5 数值改进）', () => {
+  it('PR#12 从未打过任何一局（plays=0）时提示"第一场是教学局"；打过之后消失', () => {
+    const root = makeRoot();
+    const save0 = makeSave({ meta: { savedAt: 0, plays: 0 } });
+    const ctrl = makeCtrl(makeSnap({ screen: 'prepare', save: save0 }));
+    mountPrepare(root, ctrl, {});
+    expect(ui(root, 'first-fight-hint').hidden).toBe(false);
+
+    const base = makeSave();
+    ctrl.push(makeSnap({ screen: 'prepare', save: { ...base, meta: { savedAt: 0, plays: 1 } } }));
+    expect(ui(root, 'first-fight-hint').hidden).toBe(true);
+  });
+});
+
 describe('mountPrepare —— 卷灵现身与称号（T8）', () => {
   /** 15 个有效复习日 = 引导域/低档阈值的达标线（Boss 计数口径 = Σ effectiveReviewDays）。 */
   const DAYS = Array.from({ length: 15 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`);

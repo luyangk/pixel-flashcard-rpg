@@ -207,6 +207,15 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
       case 'startFight': {
         lastError = null;
         const save = coord.snapshot();
+        // **首战 = 教学局**（Plan 5 数值改进）：`meta.plays === 0` 时把遭遇战降到 tutorial 档
+        // （敌血系数 0.3），让全 `new` 卡的新手第一场能赢——旧数值下新手期存在数学上不可能赢的
+        // 门槛（每卡分摊 7 点，而 new 卡每击只有 1 点），用户实测"玩了两轮都失败"。
+        // 玩家显式指定档位时不覆盖（Boss 与练习关走自己的档）。
+        // 语义：**显式指定优先**；只有"没指定档位"（备战屏的正常开战就是这种）才在首战时
+        // 降到教学局。这样 Test/测试与 Boss 档都能确定性地指名自己要的档。
+        const requested = i.difficulty;
+        const difficulty =
+          requested === undefined ? ((save.meta?.plays ?? 0) === 0 ? 'tutorial' : 'encounter') : requested;
         const res = startFight(
           { decks: save.decks, cards: save.cards },
           {
@@ -215,7 +224,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
             rng,
             nowMs: now(),
             stats: playerStatsFor(save),
-            difficulty: i.difficulty,
+            difficulty,
           },
         );
         if ('error' in res) {

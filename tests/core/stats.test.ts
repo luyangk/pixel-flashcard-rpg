@@ -31,8 +31,10 @@ function makeCard(id: string, stability: Stability = 'review'): Card {
 }
 
 describe('DIFFICULTY / BASE_CARD_DAMAGE —— §6.5 verbatim 常数', () => {
-  it('C#1 常数逐字：encounter 0.7、boss 1.5、基准单卡伤害 10', () => {
-    expect(DIFFICULTY).toEqual({ encounter: 0.7, boss: 1.5 });
+  it('C#1 常数逐字：tutorial 0.3（首战教学局）、encounter 0.7、boss 1.5、基准单卡伤害 10', () => {
+    // tutorial 是 Plan 5 加的档：让全 new 卡的首战能赢（敌血系数 0.3 ⇒ 3 点/张，
+    // 而 new 卡每击 4 点）；只作用于 meta.plays===0 的第一场。
+    expect(DIFFICULTY).toEqual({ tutorial: 0.3, encounter: 0.7, boss: 1.5 });
     expect(BASE_CARD_DAMAGE).toBe(10);
   });
 });

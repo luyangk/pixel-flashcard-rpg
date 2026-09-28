@@ -36,7 +36,19 @@ export interface PlayerStats {
 }
 
 /** 难度系数（§6.5 verbatim）。 */
-export const DIFFICULTY = { encounter: 0.7, boss: 1.5 } as const;
+/**
+ * 敌人 HP 系数（按池长反推：`enemyHpForPool = ceil(池长 × BASE_CARD_DAMAGE × 系数)`）。
+ *
+ * `tutorial`（Plan 5 数值改进，用户实测驱动）：**第一场战斗**用的"教学局"档。
+ * 起因：新手期存在一个数学上不可能赢的门槛——每张卡分摊的敌血恒为
+ * `BASE_CARD_DAMAGE × 系数`（与池长无关！），遭遇战是 7 点/张；而 `new` 卡
+ * 每击只有 `atk × 0.1`（L1 时 1 点），`learning` 也只有 6 点 ⇒ **背过一遍仍赢不了**。
+ * 用户"玩了两轮都失败"正是撞在这个断崖上。
+ * 教学局把系数降到 0.3（= 3 点/张），配合 `damageMult(new)` 提到 0.3（每击 4）⇒ 首战必胜
+ * 但每击只有 3–4 点、十击刚好打穿，手感是"险胜"而非碾压；且**只作用于第一场**
+ * （`meta.plays === 0` 时由控制器选用），之后立刻回到正常曲线。
+ */
+export const DIFFICULTY = { tutorial: 0.3, encounter: 0.7, boss: 1.5 } as const;
 
 /** 基准单卡伤害（§6.5 verbatim）：HP 生成常数，非伤害上界（见头注释）。 */
 export const BASE_CARD_DAMAGE = 10;
@@ -103,7 +115,7 @@ export function enemyHpForPool(poolSize: number, difficulty: keyof typeof DIFFIC
  * 1.1（power=11 < good 档基础输出 12），保「全对必胜」红线不被反击磨穿（裁定
  * R-T1-p4-b，PRD §6.5 同步改写；取 HP 系数 1.5→15 会击穿该红线）。
  */
-const POWER_FACTOR = { encounter: 0.7, boss: 1.1 } as const;
+const POWER_FACTOR = { tutorial: 0.7, encounter: 0.7, boss: 1.1 } as const;
 
 /**
  * D28：敌人每回合反击强度，与 HP 同源反推但**与池长解耦**——

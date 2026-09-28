@@ -190,16 +190,23 @@ export function dueQueue(cards: Card[], nowMs: number): Card[] {
 
 /** PRD §2.1 熟练度倍率；LORE"未入脑≈0"用 0.1 保底防零伤害死局。 */
 export function damageMultiplier(srs: SRSState): number {
+  // 【Plan 5 数值改进】低两档上调：new 0.1→0.3、learning 0.5→0.7。
+  // 依据（数值推演 + 用户实测）：每张卡分摊的敌血是 `10 × 难度系数`（遭遇战 7 点），
+  // 与池长无关；旧值下 L1（atk=12）new=1 点、learning=6 点 ⇒ **两档都赢不了**，
+  // 玩家"背过一遍回来还是输"，这就是"两轮都失败"的根因。
+  // 新值：new=round(12×0.3)=4、learning=round(12×0.7)=8 ⇒ 前者靠教学局（DIFFICULTY.tutorial）
+  // 取胜，后者在正常遭遇战里以 8 > 7 取胜（仍不轻松）。review/mastered 不动：
+  // "背熟才有伤害"的阶梯必须保留，否则学习动机就没了。
   switch (srs?.stability) {
     case 'new':
-      return 0.1;
+      return 0.3;
     case 'learning':
-      return 0.5;
+      return 0.7;
     case 'review':
       return 1.0;
     case 'mastered':
       return 1.5;
     default:
-      return 0.1;
+      return 0.3;
   }
 }

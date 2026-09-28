@@ -219,14 +219,10 @@ describe('E2E#1 冷启动 → 预置内容 → 序章 → 菜单', () => {
 });
 
 describe('E2E#2 首战（引导域）→ 结算屏', () => {
-  it('全 new 卡的首战必败（伤害 0.1×）：假记忆演出逐拍推进 + 打叉揭示，榜单记一条败绩', async () => {
+  it('首战是**教学局**且能赢：敌血 30、全 new 卡十击打穿；胜局抽战报碎片并记一条战绩', async () => {
     const h = await boot();
     clickThroughPrologue(h.root);
     await settle();
-
-    // 这里**不再**为了逼出演出而临时改卡（终审 I-1 抓的正是这一点）：预置内容本身必须
-    // 含可篡改的答案（ASCII 数字或词表词），否则玩家最可能的第一场败局看不到 LORE §5.5
-    // 的叙事钩子。演出是否出现由真实内容决定 —— 下面的断言就是这条内容的回归钉。
 
     (h.root.querySelector('[data-nav="prepare"]') as HTMLElement).click();
     expect(h.root.querySelector('[data-ui="prepare-screen"]')).not.toBeNull();
@@ -238,24 +234,57 @@ describe('E2E#2 首战（引导域）→ 结算屏', () => {
     expect(h.ctrl.snapshot().screen).toBe('fight');
     expect(h.root.querySelector('[data-ui="battle-stub"]')).not.toBeNull();
 
+    // 数值事实（Plan 5 数值改进）：首战自动落到教学局档——敌血系数 0.3 ⇒ 10 张池只有 30 点，
+    // 而 new 卡每击 round(12×0.3)=4 ⇒ 十击 40 ≥ 30，**新手第一场能赢**。
+    // （改进前：敌血 70、每击 1 点 ⇒ 十击 10 点，数学上不可能赢，用户实测"两轮都失败"。）
+    expect(h.ctrl.snapshot().fight?.difficulty).toBe('tutorial');
+    expect(h.ctrl.snapshot().fight?.state.enemyHp).toBe(30);
+
     await playUntilEnd(h.ctrl);
     expect(h.ctrl.snapshot().screen).toBe('result');
-    // 数值事实：new 卡 damageMultiplier=0.1 ⇒ 每击 1 点，10 张全答对也打不掉 70 点敌血
+    expect(h.ctrl.snapshot().lastResult?.won).toBe(true);
+    expect(h.ctrl.snapshot().lastResult?.expGained).toBe(21); // 教学局仍按遭遇战记经验
+
+    // 结算屏：胜 + 一条战报碎片（LORE §5.2 只对胜局抽）
+    expect((h.root.querySelector('[data-ui="outcome"]') as HTMLElement).textContent).toBe('胜');
+    expect((h.root.querySelector('[data-ui="beat"]') as HTMLElement).hidden).toBe(false);
+
+    // 回菜单：榜上 1 条、碎片游标已回写
+    (h.root.querySelector('[data-ui="to-menu"]') as HTMLElement).click();
+    await settle(2);
+    expect(h.root.querySelectorAll('[data-ui="rank-row"]')).toHaveLength(1);
+    await waitFor('碎片游标回写', () => h.coord.snapshot().settings.story.beatIndex === 1);
+    h.host.unmount();
+  });
+
+  it('败局（空转打不死）→ 假记忆演出逐拍推进 + 打叉揭示；碎片不抽、榜单记一条败绩', async () => {
+    const h = await boot();
+    clickThroughPrologue(h.root);
+    await settle();
+    // 打过一局（教学局）之后再打，就回到正常遭遇战：全 `again` 空转 ⇒ 必败。
+    // 这里刻意**不**依赖"新卡太弱"来制造败局（那是被改掉的设计），而是用"全答错"这一
+    // 玩家可控的路径——演出与败绩记账都与卡强度无关，覆盖更稳。
+    await h.ctrl.intent({ type: 'startFight', size: 10, deckIds: ['preset-life'], difficulty: 'encounter' });
+    expect(h.ctrl.snapshot().fight?.state.enemyHp).toBe(70);
+    while (h.ctrl.snapshot().screen === 'fight') {
+      await h.ctrl.intent({ type: 'answer', grade: GRADES.again });
+    }
+
     expect(h.ctrl.snapshot().lastResult?.won).toBe(false);
     expect(h.ctrl.snapshot().lastResult?.expGained).toBe(0);
-
-    // 战败演出（LORE §5.5）：闪现 → 打叉揭示；纯演出，零数值后果
     expect((h.root.querySelector('[data-ui="outcome"]') as HTMLElement).textContent).toBe('败');
+
+    // 战败演出（LORE §5.5）：闪现 → 打叉揭示；纯演出、零数值后果。
+    // 预置内容本身含可篡改的答案（ASCII 数字/词表词），所以演出必然有素材。
     expect((h.root.querySelector('[data-ui="fake-memory"]') as HTMLElement).hidden).toBe(false);
     expect((h.root.querySelector('[data-ui="fake-back"]') as HTMLElement).textContent).not.toBe('');
     (h.root.querySelector('[data-ui="fake-skip"]') as HTMLElement).click();
     expect((h.root.querySelector('[data-ui="fake-cross"]') as HTMLElement).hidden).toBe(false);
     expect((h.root.querySelector('[data-ui="fake-reveal-text"]') as HTMLElement).textContent).toBe('假的。幸好你没记住它。');
 
-    // 回菜单：败局也上榜（1 条），碎片不抽（LORE §5.2 只对胜局）
+    // 榜单记一条败绩；败局不抽碎片
     (h.root.querySelector('[data-ui="to-menu"]') as HTMLElement).click();
     await settle(2);
-    expect(h.root.querySelector('[data-ui="menu-screen"]')).not.toBeNull();
     expect(h.root.querySelectorAll('[data-ui="rank-row"]')).toHaveLength(1);
     expect(h.coord.snapshot().settings.story.beatIndex).toBe(0);
     h.host.unmount();

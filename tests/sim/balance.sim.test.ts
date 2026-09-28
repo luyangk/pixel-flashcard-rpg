@@ -159,12 +159,13 @@ describe('balance sim —— 语料与静态锚点', () => {
     expect([count('new'), count('learning'), count('review'), count('mastered')]).toEqual([40, 40, 80, 40]);
   });
 
-  it('SIM#0b 预推导锚点：L1 atk=12、HP(encounter)=ceil(len×10×0.7)、倍率表均值≈0.82', () => {
+  it('SIM#0b 预推导锚点：L1 atk=12、HP(encounter)=ceil(len×10×0.7)、倍率表均值≈0.90', () => {
     expect(deriveStats(PLAYER_LEVEL, 0, SPIRIT_COUNT).atk).toBe(12); // 探针级事实复现
     expect(enemyHpForPool(15, 'encounter')).toBe(105); // 7/张 × 15
     const avgMult = CORPUS.reduce((s, c) => s + damageMultiplier(c.srs), 0) / CORPUS.length;
-    expect(avgMult).toBeCloseTo(0.82, 5); // 0.1×0.2+0.5×0.2+1.0×0.4+1.5×0.2
-    expect(Math.round(12 * avgMult)).toBe(10); // 期望单卡伤 ≈9.8→round 域内 ~10 vs HP 基准 7/张
+    // Plan 5 数值改进后：0.3×0.2+0.7×0.2+1.0×0.4+1.5×0.2 = 0.90（原 0.82）
+    expect(avgMult).toBeCloseTo(0.9, 5);
+    expect(Math.round(12 * avgMult)).toBe(11); // 期望单卡伤 ≈10.8→round 11 vs HP 基准 7/张
   });
 });
 
@@ -175,8 +176,10 @@ describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
     // 一旦红：先查 sim 自身（rng 消耗序 / pool[idx] 取卡错位），再怀疑常数被动。
     expect(losers).toEqual([]);
     expect(results.filter((r) => r.won)).toHaveLength(50);
-    // 余量佐证：中位 13 回合打满 105 血（HP 基准 105），平均留 ~2 张冗余卡。
-    expect(median(results.map((r) => r.turns))).toBe(13);
+    // 余量佐证：中位 10 回合打满 105 血（HP 基准 105）——Plan 5 数值改进把低档倍率抬了
+    // （new 0.1→0.3、learning 0.5→0.7），语料均值 0.82→0.90 ⇒ 每回合输出更高、收得更快
+    // （重录前中位 13 回合）。**这一格是"难度刻度"的可见面**：持续红=常数被动过。
+    expect(median(results.map((r) => r.turns))).toBe(10);
     for (const r of results) expect(r.dealt).toBeGreaterThanOrEqual(r.enemyHp);
     // 来历：D28——反击入规则后「必胜」升级为「必胜且不阵亡」。def=7≥power=7 ⇒
     // 承伤被 max(1,·) 下钳到恒 1/回合（round(1×float)≡1）；击杀回合因 won 优先于
@@ -201,18 +204,19 @@ describe('balance sim —— 性质 A：全对必胜（RF#5 硬闸）', () => {
 });
 
 describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬断言）', () => {
-  it('SIM#B miss∈{0.3,0.4} 最小失败率为回归基线（D28 重录：当前 72%）', () => {
+  it('SIM#B miss∈{0.3,0.4} 最小失败率为回归基线（Plan 5 重录：当前 50%）', () => {
     const lossRates = [0.3, 0.4].map((mr) => {
       const wins = SEEDS.map((seed) => simulate(seed, mr, CORPUS)).filter((r) => r.won).length;
       return 1 - wins / SEEDS.length;
     });
     const minLoss = Math.min(...lossRates);
-    // 「B 大概率跑出未败」的实测兑现：miss=0.40 仍有 7/50 翻盘（好池+坏运气组合）。
-    // 判据取下界：失败率不得低于基线 0.72。**重录而非收紧**（T2 评审 I-3）：0.60→0.72
-    // 的来源是 D28 让每回合多掷一次浮动、seed→pool→hit 序列整体重排的噪声级位移，
-    // 难度本身未变。本闸容差极薄（≈±3 HP 点）：DIFFICULTY/BASE_CARD_DAMAGE/atk 任何
-    // 微调都会先在这里红——这是回归基线的职责，不是难度刻度。
-    expect(minLoss).toBeGreaterThanOrEqual(0.72);
+    // 判据取下界：失败率不得低于基线 0.50。**重录而非收紧**：
+    // - 0.60→0.72 那一次（Plan 4/D28）来源是"每回合多掷一次浮动"的序列重排；
+    // - 0.72→0.50 这一次（Plan 5 数值改进）是**刻意的难度下调**：低档倍率抬高后，
+    //   错过 30% 时的翻盘面明显变大（实测 miss=0.3 失败率 0.50、miss=0.4 为 0.82）。
+    //   这正是用户反馈要的效果（新手期不再被数学门槛卡死），故基线跟着改，而不是收紧断言。
+    // 本闸仍容差很薄：DIFFICULTY/BASE_CARD_DAMAGE/damageMultiplier/atk 任何微调都会先在这里红。
+    expect(minLoss).toBeGreaterThanOrEqual(0.5);
     // 上界同样钉住（防"调过头"方向漂移）：B 不是必败性质，胜率不该归零。
     expect(minLoss).toBeLessThan(1);
   });
@@ -220,9 +224,12 @@ describe('balance sim —— 性质 B：错 40% 必败（记录实测，不硬�
   it('SIM#C 单调性：错误率越高胜率不升（曲线形状是规格的一部分）', () => {
     const rows = MISS_RATES.map((mr) => curveRow(mr).winRate);
     for (let i = 1; i < rows.length; i++) expect(rows[i]).toBeLessThanOrEqual(rows[i - 1]);
-    // 中位胜负点在 miss≈0.2~0.3 之间翻转（产品决策口径：主曲线拐点）。
+    // 中位胜负点在 miss≈0.3 附近翻转（Plan 5 重录的实测曲线：
+    // miss 0→1.00、0.1→0.98、0.2→0.82、0.3→0.50、0.4→0.18）。
+    // 旧断言写的是"0.3 < 0.5"——数值改进后 0.3 恰好等于 0.50，故改为"不得高于 0.5"
+    // （拐点右移是这次调整的直接后果：低档倍率抬高 ⇒ 容错变宽）。
     expect(curveRow(0.2).winRate).toBeGreaterThanOrEqual(0.5);
-    expect(curveRow(0.3).winRate).toBeLessThan(0.5);
+    expect(curveRow(0.3).winRate).toBeLessThanOrEqual(0.5);
   });
 
   it('SIM#D 确定性：同 seed 复跑逐字段全等（曲线数字可信的前提）', () => {

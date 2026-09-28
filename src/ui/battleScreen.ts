@@ -46,7 +46,12 @@ const QUIT_TEXT = '退出本局';
  * 只在当前卡还是 `new` 时挂着——这正是玩家最可能的第一场，也是"苦修"循环的入口；
  * 一旦背熟（稳定度晋升）它自动消失。文案是功能轨大白话，不编叙事。
  */
-const NEW_CARD_HINT = '新卡每击只有一成伤害——先把它背熟（稳定度升到「复习」后每击满伤害）。';
+const NEW_CARD_HINT = '新卡每击只有三成伤害——背熟它（稳定度升到「复习」）伤害会翻倍。';
+/**
+ * 教学局提示（Plan 5 数值改进）：第一场战斗的敌人是弱化版。**必须告诉玩家**——
+ * 难度变化不能是暗改，否则第二场突然变难会让人以为游戏出问题了。
+ */
+const TUTORIAL_HINT = '教学局：这是你的第一场，敌人会手下留情。打完这一场就按正常难度来了。';
 
 /** resize 监听只需要这么点面：够注入假 window，也够真 window 直接喂进来。 */
 export interface BattleScreenWindow {
@@ -125,6 +130,7 @@ export function mountBattleScreen(
   const fxEl = h('div', { 'data-ui': 'fx', class: 'fx' });
   const missEl = h('div', { 'data-ui': 'miss-hint', class: 'miss-hint', hidden: true }, MISS_HINT_TEXT);
   const newCardHintEl = h('p', { 'data-ui': 'new-card-hint', class: 'new-card-hint', hidden: true }, NEW_CARD_HINT);
+  const tutorialHintEl = h('p', { 'data-ui': 'tutorial-hint', class: 'new-card-hint', hidden: true }, TUTORIAL_HINT);
   const frontEl = h('div', { 'data-ui': 'card-front', class: 'card-front' });
   const backEl = h('div', { 'data-ui': 'card-back', class: 'card-back', hidden: true });
   // 两段式翻面：先看题面 → 点"看答案" → 再自评。答案因此恒属于**当前这张卡**，
@@ -167,6 +173,7 @@ export function mountBattleScreen(
 
   const screen = h('div', { 'data-ui': 'battle-screen', class: 'battle-screen' }, [
     hpEl,
+    tutorialHintEl,
     quitBtn,
     stageHost,
     fxEl,
@@ -271,6 +278,9 @@ export function mountBattleScreen(
       shownCardId = currentId;
       revealed = false;
     }
+
+    // 教学局提示：按本局难度档显隐（快照驱动，不做一次性开关）
+    setHidden(tutorialHintEl, fight?.difficulty !== 'tutorial');
 
     const fresh = fight ? newEvents(fight.state.log) : ((seenLogLen = 0), EMPTY_EVENTS);
     renderCard(snap);

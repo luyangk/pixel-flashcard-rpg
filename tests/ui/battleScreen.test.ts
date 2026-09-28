@@ -352,13 +352,33 @@ describe('mountBattleScreen —— 新卡伤害提示（终审 J-1）', () => {
     h.ctrl.push({ ...h.ctrl.snapshot(), fight: view });
     const hint = root.querySelector('[data-ui="new-card-hint"]') as HTMLElement;
     expect(hint.hidden).toBe(false);
-    expect(hint.textContent).toContain('一成伤害');
+    expect(hint.textContent).toContain('三成伤害'); // Plan 5 数值改进后文案同步（0.1→0.3）
 
     h.ctrl.push({
       ...h.ctrl.snapshot(),
       fight: { ...view, state: { ...view.state, idx: 1 }, current: pool[1] },
     });
     expect((root.querySelector('[data-ui="new-card-hint"]') as HTMLElement).hidden).toBe(true);
+    handle.unmount();
+  });
+});
+
+describe('mountBattleScreen —— 教学局提示（Plan 5 数值改进）', () => {
+  it('BS#T1 只有 difficulty=tutorial 时挂提示；普通遭遇战与 Boss 都不显示', () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const h = setup();
+    const handle = mountBattleScreen(root, h.ctrl, h.deps);
+    const hint = (): HTMLElement => root.querySelector('[data-ui="tutorial-hint"]') as HTMLElement;
+    expect(hint().hidden).toBe(true); // 默认 encounter
+
+    const base = h.ctrl.snapshot().fight!;
+    h.ctrl.push({ ...h.ctrl.snapshot(), fight: { ...base, difficulty: 'tutorial' } });
+    expect(hint().hidden).toBe(false);
+    expect(hint().textContent).toContain('教学局');
+
+    h.ctrl.push({ ...h.ctrl.snapshot(), fight: { ...base, difficulty: 'boss' } });
+    expect(hint().hidden).toBe(true); // 难度变化不是暗改：Boss 不该挂教学局提示
     handle.unmount();
   });
 });

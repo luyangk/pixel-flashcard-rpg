@@ -175,6 +175,12 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     '去卡组',
   ) as HTMLButtonElement;
   const startBtn = h('button', { 'data-ui': 'start', class: 'start-btn', type: 'button' }, '开战') as HTMLButtonElement;
+  /** 首战提示（Plan 5 数值改进）：让玩家知道第一场是教学局，而不是以为难度忽然变了。 */
+  const firstFightHintEl = h(
+    'p',
+    { 'data-ui': 'first-fight-hint', class: 'field-hint', hidden: true },
+    '第一场是教学局：敌人较弱，够你打赢；之后按正常难度。',
+  );
 
   const screen = h('div', { 'data-ui': 'prepare-screen', class: 'prepare-screen' }, [
     h('header', { class: 'prepare-header' }, [backBtn, h('h2', { class: 'screen-title' }, '备战')]),
@@ -182,6 +188,7 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     h('h3', { class: 'field-title' }, '池子大小'),
     sizeEl,
     totalEl,
+    firstFightHintEl,
     bossRowEl,
     bossNameDialog,
     errorEl,
@@ -283,6 +290,8 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     if (err) errorEl.textContent = `${err.message} ${NEXT_STEP[err.code] ?? ''}`.trim();
     setHidden(errorGoBtn, !(err !== null && needsLibrary(err.code) && typeof deps.onNav === 'function'));
     setHidden(backBtn, typeof deps.onNav !== 'function');
+    // 只在"从未打过任何一局"时提示；打完一局（无论胜负）自动消失
+    setHidden(firstFightHintEl, (snap.save?.meta?.plays ?? 0) > 0);
   }
 
   /* ------------------------------------------------------------ 交互 */

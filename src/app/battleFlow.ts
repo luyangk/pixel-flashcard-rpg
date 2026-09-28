@@ -29,6 +29,19 @@ import { deriveStats, enemyHpForPool, enemyPowerFor, type PlayerStats } from '@c
 import { createBattle, answer, type BattleState } from '@core/battle';
 import type { SessionCards } from './sessionTypes';
 
+/**
+ * 本局难度档。`tutorial` = **第一场战斗的教学局**（Plan 5 数值改进，用户实测驱动）：
+ * 敌血系数 0.3 而不是 0.7，让全 `new` 卡的首战能赢；由控制器在 `meta.plays === 0` 时选用。
+ * 它在结算面**按遭遇战处理**（榜单 kind、经验档都是 encounter）——教学局只是难度更低，
+ * 不是另一类战斗。
+ */
+export type FightDifficulty = 'tutorial' | 'encounter' | 'boss';
+
+/** 脏难度值一律归 'encounter'（存档/UI 透传的域外值不得产出 NaN 或改档）。 */
+function difficultyOfInput(value: unknown): FightDifficulty {
+  return value === 'tutorial' || value === 'boss' ? value : 'encounter';
+}
+
 /** 一场遭遇战的只读视图：state 是权威进度，pool 持对象（state.pool 只持 id）。 */
 export interface FightView {
   readonly state: BattleState;
@@ -39,7 +52,7 @@ export interface FightView {
    * 本局难度档（T3 起随视图带出，T8 结算/榜单消费）：缺省字段保持可选——
    * 既有 FightView 夹具与 answerCurrent 返回值不因它而必须改动（追加非破坏）。
    */
-  readonly difficulty?: 'encounter' | 'boss';
+  readonly difficulty?: FightDifficulty;
 }
 
 /** 失败面：error 码 + 可直接上屏的大白话文案。 */
@@ -60,7 +73,7 @@ export interface StartFightOptions {
    * 难度档（T3 管道、T8 消费）：默认 encounter；boss 时敌人 HP 与反击强度
    * 同源切档（enemyHpForPool(len,'boss') + enemyPowerFor('boss')）。
    */
-  readonly difficulty?: 'encounter' | 'boss';
+  readonly difficulty?: FightDifficulty;
   /**
    * 玩家六维快照（T3 注入位）：装配层传 growth.playerStatsFor(save)。
    * 缺省 / 非法（非对象、含 NaN 字段）一律回落 deriveStats(1,0,0)——
@@ -78,7 +91,7 @@ function isPositiveInt(v: unknown): v is number {
 function toView(
   state: BattleState,
   pool: readonly Card[],
-  difficulty: 'encounter' | 'boss' = 'encounter',
+  difficulty: FightDifficulty = 'encounter',
 ): FightView {
   const current = state.phase === 'answering' ? (pool[state.idx] ?? null) : null;
   return { state, pool, current, difficulty };
@@ -129,7 +142,7 @@ export function startFight(
   // 敌人 HP 必须跟着实际池长走，否则 8 张卡打 15 张的血量必输。
   // 阈值裁决（brief 未言明处）：仅"筛后 0 张"视为不可战；≥1 张即可开打，
   // 哪怕只有 1 张——单卡池打完即终局，数据流自洽（见 tests/app AC#4）。
-  const difficulty = opts.difficulty === 'boss' ? 'boss' : 'encounter';
+  const difficulty = difficultyOfInput(opts.difficulty);
   const enemyHp = enemyHpForPool(pool.length, difficulty);
 
   // stats 注入位（T3）：合法 PlayerStats 直用；缺省/脏值回落 T2 中间态同值，

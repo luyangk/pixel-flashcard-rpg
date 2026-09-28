@@ -271,9 +271,11 @@ describe('dueQueue', () => {
 });
 
 describe('damageMultiplier', () => {
-  it('四档映射', () => {
-    expect(damageMultiplier(state({ stability: 'new' }))).toBe(0.1);
-    expect(damageMultiplier(state({ stability: 'learning' }))).toBe(0.5);
+  it('四档映射（Plan 5 数值改进：new 0.1→0.3、learning 0.5→0.7；review/mastered 不动）', () => {
+    // 依据：每张卡分摊的敌血恒为 10×难度系数（遭遇战 7），与池长无关；旧值下 L1 的
+    // new=1/learning=6 都打不穿 ⇒ 新手期数学上不可能赢（用户实测"两轮都失败"）。
+    expect(damageMultiplier(state({ stability: 'new' }))).toBe(0.3);
+    expect(damageMultiplier(state({ stability: 'learning' }))).toBe(0.7);
     expect(damageMultiplier(state({ stability: 'review' }))).toBe(1.0);
     expect(damageMultiplier(state({ stability: 'mastered' }))).toBe(1.5);
   });
