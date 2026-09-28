@@ -27,6 +27,7 @@ import beatsJson from '../../assets/narrative/beats.json';
 import eggsJson from '../../assets/narrative/eggs.json';
 import presetJson from '../../assets/content/preset.json';
 import prologueJson from '../../assets/narrative/prologue.json';
+import { localDayString } from '@core/reviewLedger';
 import { makeCard, makeDeck, makeSave } from './support';
 
 const NOW = Date.UTC(2026, 9, 27, 10, 0, 0);
@@ -409,5 +410,116 @@ describe('assembleHost —— 导出与抢救口', () => {
     const named = await rig.assembly.adapters.setBossName?.('deck-a', '荒原卷灵');
     expect(named?.ok).toBe(true);
     expect(rig.coord.snapshot().decks[0].bossName).toBe('荒原卷灵');
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T7 */
+
+/**
+ * 判卷口的装配（Plan 6 · T7 / D42）。
+ *
+ * 判别力：
+ * - AD#10 **判定额度真的记账**：判一次 `llmQuota.judges` 必须 +1 并落盘
+ *   （不记账的实现 ⇒ 设置页显示的消耗是假的、300 次上限永远不生效）；
+ * - AD#10b 额度到顶 ⇒ **不发起请求**（假 fetch 计数取证）且回可上屏原因；
+ * - AD#10c 判定同样**每次现读配置**（玩家刚改的 Key 立刻生效，与辅建卡同一条接缝）；
+ * - AD#11 作答模式写口直达 settingsFlow（同值不重写由那条用例保证）。
+ */
+describe('assembleHost —— 问答判卷与作答模式（Plan 6 · T7）', () => {
+  function judgeRig(opts: { fetchCalls?: string[]; quotaJudges?: number } = {}) {
+    const fakeFetch = (async (_url: string | URL, init?: RequestInit) => {
+      opts.fetchCalls?.push(String((init?.headers as Record<string, string>)?.Authorization ?? ''));
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"match":true,"reason":"要点都在","missing":[]}' } }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+    let current: LlmConfig = { baseUrl: 'https://a.example', apiKey: 'sk-FIRST', model: 'm1' };
+    return {
+      fakeFetch,
+      getConfig: () => current,
+      setConfig: (cfg: LlmConfig) => {
+        current = cfg;
+      },
+      configIo: {
+        load: () => ({ ...current }),
+        save: (cfg: LlmConfig) => {
+          current = { ...cfg };
+          return true;
+        },
+        clear: () => {
+          current = { ...current, apiKey: '' };
+        },
+      },
+    };
+  }
+
+  async function makeJudgeAssembly(opts: { fetchCalls?: string[]; quotaJudges?: number } = {}) {
+    const rig = judgeRig(opts);
+    const seed = makeSave();
+    if (opts.quotaJudges !== undefined) {
+      seed.settings.llmQuota = { day: localDayString(NOW, 480), cards: 0, judges: opts.quotaJudges };
+    }
+    const store = createMemoryStorage();
+    await store.save(seed);
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    const ctrl = await createGameController({ coord, rng: () => 0.5, now: () => NOW, tzOffsetMin: 480 });
+    const assembly = assembleHost({
+      ctrl,
+      coord,
+      store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      llmFetchImpl: rig.fakeFetch,
+      llmConfigIo: rig.configIo,
+    });
+    return { assembly, coord, store, rig };
+  }
+
+  it('AD#10 判一次 ⇒ 额度 +1 且落盘；结果原样回给屏', async () => {
+    const { assembly, coord, store } = await makeJudgeAssembly();
+    const res = await assembly.adapters.judge?.({ front: 'f', answer: 'a', reply: 'r' });
+    expect(res).toEqual({ ok: true, match: true, reason: '要点都在', missing: [] });
+    expect(coord.snapshot().settings.llmQuota?.judges).toBe(1);
+    await coord.flush();
+    expect((await store.load())?.settings.llmQuota?.judges).toBe(1);
+  });
+
+  it('AD#10b 额度用尽 ⇒ 不发起请求，回可上屏原因（UI 据此回落自评）', async () => {
+    const fetchCalls: string[] = [];
+    const { assembly } = await makeJudgeAssembly({ fetchCalls, quotaJudges: 300 });
+    const res = await assembly.adapters.judge?.({ front: 'f', answer: 'a', reply: 'r' });
+    expect(res?.ok).toBe(false);
+    if (res && !res.ok) expect(res.reason).toContain('额度用完');
+    expect(fetchCalls).toHaveLength(0); // ← 到顶就不该再花钱
+  });
+
+  it('AD#10c 判定同样每次现读配置：改完 Key 后下一次请求带新 Key', async () => {
+    const fetchCalls: string[] = [];
+    const { assembly, rig } = await makeJudgeAssembly({ fetchCalls });
+    await assembly.adapters.judge?.({ front: 'f', answer: 'a', reply: 'r' });
+    rig.setConfig({ baseUrl: 'https://b.example', apiKey: 'sk-SECOND', model: 'm2' });
+    await assembly.adapters.judge?.({ front: 'f', answer: 'a', reply: 'r' });
+    expect(fetchCalls).toEqual(['Bearer sk-FIRST', 'Bearer sk-SECOND']);
+  });
+
+  it('AD#11 作答模式写口：切到 qa 落盘、同值不重写', async () => {
+    const { assembly, coord, store } = await makeJudgeAssembly();
+    expect(await assembly.adapters.setAnswerMode?.('qa')).toEqual({ ok: true });
+    expect(coord.snapshot().settings.answerMode).toBe('qa');
+    await coord.flush();
+    expect((await store.load())?.settings.answerMode).toBe('qa');
+    await assembly.adapters.setAnswerMode?.('qa'); // 同值
+    expect(coord.dirty()).toBe(false);
   });
 });

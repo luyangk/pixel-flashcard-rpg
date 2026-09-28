@@ -866,3 +866,47 @@ h1 {
   border-color: var(--neon-cyan);
   background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
 }
+
+/* -------------------------------------------- 问答模式与模式切换（Plan 6 · T7 / D42） */
+.answer-qa {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.qa-input {
+  width: 100%;
+  min-height: 4.2rem;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.qa-submit {
+  min-height: 2.5rem;
+}
+
+/* 模式切换：不抢戏（它是"换作答方式"，不是本屏的主操作） */
+.mode-toggle {
+  align-self: flex-end;
+  min-height: 2.2rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+  border-color: var(--wash);
+}
+
+/* 「没判成」时的二选一自评：两个等宽按钮并排，不给任何一边更多的视觉权重 */
+.self-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.self-btn {
+  flex: 1 1 0;
+  min-height: 2.5rem;
+}
+
+/* 没判成的结果行用中性色（既不是对也不是错 —— 那正是"没判成"的含义） */
+.verdict [data-ui='verdict-result'][data-verdict-kind='unknown'] {
+  color: var(--paper-dim);
+}

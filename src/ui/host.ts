@@ -138,7 +138,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
    * 各屏的挂载点。
    *
    * 【易错点】这里是**显式白名单**：`assembleHost` 造出来的依赖（`llm`/`llmCards`/`llmNames`/
-   * `llmEgg`/`setEgg`/`resetSave`/`exportBackupNow`）如果没在这里透传，功能在生产里就是死的——
+   * `llmEgg`/`setEgg`/`resetSave`/`exportBackupNow`/`judge`/`setAnswerMode`）如果没在这里透传，
+   * 功能在生产里就是死的——
    * 而"直挂屏组件"的单元测试仍然全绿（它们自己传 deps）。Plan 5 的 AI 接线就踩过一次，
    * 「重置存档」的接线又踩过一次（设置屏测了、宿主没透传），故这些行单独标注。
    */
@@ -162,6 +163,10 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
           bannerText: deps.readOnlyText,
           // 选项洗牌的随机源走宿主注入位（Plan 6 · T6）：测试要确定性，生产要每次都变
           rng: deps.rng,
+          // 问答模式（Plan 6 · T7）：判卷口 + 模式写口。漏透传 = 生产里问答模式不可用
+          // 而单测全绿（Plan 5 的 AI 接线踩过一次，这里的 HS#? 钉住）
+          judge: deps.judge,
+          setAnswerMode: deps.setAnswerMode,
         });
       }
       case 'result': {

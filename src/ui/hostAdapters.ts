@@ -22,16 +22,19 @@ import { chat, listModels } from '../platform/llmHttp';
 import { addCard, addDeck, removeCard, removeDeck, renameDeck } from '../app/library';
 import { bossFightParams, setBossName } from '../app/bossFlow';
 import { setEggOnDeck } from '../app/codexFlow';
-import { suggestBossNames, suggestCards, suggestEgg, type ChatFn } from '../app/llmFlow';
+import { judgeAnswer, suggestBossNames, suggestCards, suggestEgg, type ChatFn } from '../app/llmFlow';
 import type { GameController, GameIntent } from '../app/controllerTypes';
 import type { Coordinator } from '../app/persist';
 import {
   replayPrologue as writeReplayPrologue,
+  setAnswerMode,
   setBossThresholdTier,
   setDefaultPoolSize,
+  setLlmQuota,
   setSm2Params,
 } from '../app/settingsFlow';
 import { saveBeatCursor } from '../app/storyState';
+import { planJudge } from '../app/quota';
 import { resetSave } from '../app/resetFlow';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
@@ -99,6 +102,10 @@ export interface AssembleDeps {
   readonly llmNamesOverride?: HostAdapters['llmNames'];
   readonly llmEggOverride?: HostAdapters['llmEgg'];
   readonly setEggOverride?: HostAdapters['setEgg'];
+  /** 判卷口覆盖位（Plan 6 · T7）：装配链要能在测试里穷举"额度记账 + 现读配置"。 */
+  readonly judgeOverride?: HostAdapters['judge'];
+  /** 作答模式写口的覆盖位（一般不需要：真实现就是 settingsFlow 的薄封装）。 */
+  readonly setAnswerModeOverride?: HostAdapters['setAnswerMode'];
 }
 
 export interface HostAssembly {
@@ -278,6 +285,29 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       ((deckName, sampleFronts) => suggestBossNames({ chat: boundChat() }, { deckName, sampleFronts })),
     llmEgg: deps.llmEggOverride ?? ((deckName, sampleFronts) => suggestEgg({ chat: boundChat() }, { deckName, sampleFronts })),
     setEgg: deps.setEggOverride ?? ((deckId, text) => setEggOnDeck(coord, deckId, text)),
+
+    /* ---- 作答模式（Plan 6 · T7） ---- */
+    setAnswerMode: deps.setAnswerModeOverride ?? ((mode) => setAnswerMode(coord, mode)),
+    /**
+     * 判卷：**先记一次判定额度，再调判卷口**（D42 的两本账之一）。
+     *
+     * 两个刻意的口径：
+     * 1. 额度**先记后判**：那次请求已经发出去了（钱已经花了），失败也照记 —— 否则
+     *    "模型老是回垃圾"会变成免费刷额度；到顶时**不调用**、直接回可上屏的原因，
+     *    UI 据此回落成玩家自评（额度是成本闸，不该把复习锁住）。
+     * 2. 用的是 `boundChat()`：**每次调用现读**配置（玩家刚在设置页换的 Key 立刻生效），
+     *    与辅建卡/称号/彩蛋同一条接缝。
+     */
+    judge:
+      deps.judgeOverride ??
+      (async (input) => {
+        const plan = planJudge(coord.snapshot().settings.llmQuota, now(), tzOffsetMin);
+        if (!plan.allowed) {
+          return { ok: false as const, reason: '今天的判定额度用完了（300 次），这次你自己定对错。' };
+        }
+        await setLlmQuota(coord, plan.quota);
+        return judgeAnswer({ chat: boundChat() }, input);
+      }),
   };
 
   return { ctrl: wrapped, adapters };

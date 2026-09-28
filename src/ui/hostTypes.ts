@@ -6,7 +6,7 @@
  * 把"宿主需要外部提供什么"单独声明，`main.ts` 只 import 本文件 + `mountHost`，
  * 屏组件之间也不为此多出运行时依赖（type-only import 在 verbatimModuleSyntax 下零残留）。
  */
-import type { Card, Deck, Sm2Params } from '@core/types';
+import type { AnswerMode, Card, Deck, Sm2Params } from '@core/types';
 import type { Rng } from '@core/rng';
 import type { CardCandidate, NameCandidate, ParseResult } from '@core/llmParse';
 import type { ChatResult, LlmConfig } from '../platform/llmTypes';
@@ -87,6 +87,21 @@ export interface HostAdapters {
    */
   readonly llmNames?: (deckName: string, sampleFronts?: readonly string[]) => Promise<ParseResult<NameCandidate>>;
   /** 藏书阁「让 AI 写彩蛋」（接 app/llmFlow.suggestEgg）。 */
+  /**
+   * 问答模式的判卷口（Plan 6 · T7 / D42）。**这是全应用唯一会把"这张卡的答案"发出去的路径**：
+   * 范围锁死在问答模式 + 玩家点提交那一刻 + 单张卡。装配层在调用前先记一次判定额度
+   * （到顶则不调用、直接回可上屏原因，UI 回落成玩家二选一自评）。
+   */
+  readonly judge?: (input: {
+    readonly front: string;
+    readonly answer: string;
+    readonly reply: string;
+  }) => Promise<
+    { readonly ok: true; readonly match: boolean; readonly reason: string; readonly missing: readonly string[] }
+    | { readonly ok: false; readonly reason: string }
+  >;
+  /** 作答模式写口（接 `app/settingsFlow.setAnswerMode`）；缺省 ⇒ 战斗屏不显示切换按钮。 */
+  readonly setAnswerMode?: (mode: AnswerMode) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
   /** 彩蛋生成（同样支持 ≤5 条卡面样例，理由见 llmNames）。 */
   readonly llmEgg?: (
     deckName: string,

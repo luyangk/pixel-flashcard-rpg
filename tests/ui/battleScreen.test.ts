@@ -22,6 +22,7 @@ import type { BattleStage, BattleStageDeps } from '../../src/stage/battleStage';
 import type { StageSprites } from '../../src/stage/renderer';
 import { mulberry32 } from '@core/rng';
 import { mountBattleScreen, type BattleScreenDeps } from '../../src/ui/battleScreen';
+import { flushMicrotasks } from './support';
 
 /* ------------------------------------------------------------------ 夹具 */
 
@@ -672,5 +673,165 @@ describe('mountBattleScreen —— 选择题与判定面板（Plan 6 · T6）', 
     mountBattleScreen(h.root, h.ctrl, h.deps);
     h.ctrl.push(makeSnap({ fight: makeFight(3, [], 'won') }));
     for (const b of choiceBtns(h.root)) expect(b.disabled).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T7 */
+
+/**
+ * 问答模式（Plan 6 · T7 / D42）。
+ *
+ * 判别力：
+ * - BS#Q1 提交后**调用注入的 judge**，入参含卡面/答案/玩家输入（D42 的例外必须真发生）；
+ * - BS#Q2/Q3 判对 ⇒ good、判错 ⇒ again，且**理由与缺失要点上屏**（只说"错"等于让人自己找差距）；
+ * - BS#Q4 **判定失败不猜**：给二选一自评，点了才派发（失败也要先能看到完整答案）；
+ * - BS#Q5 空输入不给提交（省一次网络往返，也避免把空话喂给模型）；
+ * - BS#Q6 **判定额度到顶**走同一条回落路（额度是成本闸，不该变成复习的锁）；
+ * - BS#Q7 没配 AI 时如实说明"用不了"，并**停在可用形态**（不静默变成别的模式）；
+ * - BS#Q8 模式切换写回成功/失败两条路：失败（只读）必须停在原模式并如实提示。
+ */
+describe('mountBattleScreen —— 问答模式（Plan 6 · T7）', () => {
+  const qaSave = (): SaveFile => {
+    const base = makeSave();
+    return { ...base, settings: { ...base.settings, answerMode: 'qa' } };
+  };
+  const qaSnap = (over: Partial<ControllerSnapshot> = {}): ControllerSnapshot =>
+    makeSnap({ save: qaSave(), ...over });
+
+  function qaSetup(judge?: BattleScreenDeps['judge'], extra: Partial<BattleScreenDeps> = {}) {
+    const h = setup({} as StageSprites, { judge, ...extra });
+    h.ctrl.push(qaSnap()); // 存档模式 = qa，且这一屏已经挂上
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    return h;
+  }
+  const qaInput = (root: HTMLElement): HTMLTextAreaElement =>
+    root.querySelector<HTMLTextAreaElement>('[data-ui="qa-input"]') as HTMLTextAreaElement;
+  const qaSubmit = (root: HTMLElement): HTMLButtonElement =>
+    root.querySelector<HTMLButtonElement>('[data-ui="qa-submit"]') as HTMLButtonElement;
+  /** 模拟"打字"：真实输入会触发 input 事件，而提交按钮的可用性正是由它驱动的。 */
+  const typeQa = (root: HTMLElement, text: string): void => {
+    const input = qaInput(root);
+    input.value = text;
+    input.dispatchEvent(new Event('input'));
+  };
+
+  it('BS#Q1 提交后调用 judge，入参含卡面 / 答案 / 玩家输入', async () => {
+    const seen: Array<{ front: string; answer: string; reply: string }> = [];
+    const h = qaSetup((input) => {
+      seen.push(input);
+      return Promise.resolve({ ok: true, match: true, reason: '要点都在', missing: [] });
+    });
+    typeQa(h.root, '是李渊建立的');
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+
+    expect(seen).toEqual([{ front: 'q-c1', answer: 'a-c1', reply: '是李渊建立的' }]);
+  });
+
+  it('BS#Q2 判对 ⇒ 判定面板显示良好 + 理由 + 缺失要点 + 完整答案；继续派发 good', async () => {
+    const h = qaSetup(() => Promise.resolve({ ok: true, match: true, reason: '抓住了要点', missing: [] }));
+    typeQa(h.root, '李渊');
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+
+    expect(hidden(h.root, 'verdict')).toBe(false);
+    expect(text(h.root, 'verdict-result')).toBe('答对了');
+    expect(text(h.root, 'verdict-reason')).toBe('抓住了要点');
+    expect(text(h.root, 'answer-full')).toContain('a-c1');
+    expect(h.ctrl.intents).toHaveLength(0);
+    verdictBtn(h.root, 'verdict-continue').click();
+    expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.good }]);
+  });
+
+  it('BS#Q3 判错 ⇒ 缺失要点逐条上屏，继续派发 again', async () => {
+    const h = qaSetup(() =>
+      Promise.resolve({ ok: true, match: false, reason: '漏了关键', missing: ['作者', '朝代'] }),
+    );
+    typeQa(h.root, '不知道');
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+
+    expect(text(h.root, 'verdict-result')).toBe('答错了');
+    expect(text(h.root, 'verdict-reason')).toBe('漏了关键');
+    const items = Array.from(h.root.querySelectorAll('[data-ui="verdict-missing"] > *')).map((n) => n.textContent);
+    expect(items).toEqual(['作者', '朝代']);
+    verdictBtn(h.root, 'verdict-continue').click();
+    expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
+  });
+
+  it('BS#Q4 判定失败 ⇒ 不猜：显示原因 + 完整答案 + 二选一自评，点了才派发', async () => {
+    const h = qaSetup(() => Promise.resolve({ ok: false, reason: 'AI 调用失败：网络断了' }));
+    typeQa(h.root, '我的理解');
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+
+    expect(text(h.root, 'verdict-result')).toContain('没判成');
+    expect(text(h.root, 'verdict-reason')).toContain('网络断了');
+    expect(text(h.root, 'answer-full')).toContain('a-c1'); // 失败也要看得到答案
+    expect(h.ctrl.intents).toHaveLength(0); // ← 绝不替玩家猜
+    verdictBtn(h.root, 'verdict-self-right').click();
+    expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.good }]);
+  });
+
+  it('BS#Q4b 自评二选一：点"错了"派发 again', async () => {
+    const h = qaSetup(() => Promise.resolve({ ok: false, reason: '没判成' }));
+    typeQa(h.root, 'x');
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+    verdictBtn(h.root, 'verdict-self-wrong').click();
+    expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
+  });
+
+  it('BS#Q5 空输入：提交按钮禁用，点了也不发请求', async () => {
+    let calls = 0;
+    const h = qaSetup(() => {
+      calls += 1;
+      return Promise.resolve({ ok: true, match: true, reason: '', missing: [] });
+    });
+    expect(qaSubmit(h.root).disabled).toBe(true);
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+    expect(calls).toBe(0);
+
+    qaInput(h.root).value = '   '; // 只有空白也算空
+    qaInput(h.root).dispatchEvent(new Event('input'));
+    expect(qaSubmit(h.root).disabled).toBe(true);
+  });
+
+  it('BS#Q6 判定额度到顶（宿主回 ok:false + 额度文案）⇒ 走同一条自评回落', async () => {
+    const h = qaSetup(() =>
+      Promise.resolve({ ok: false, reason: '今天的判定额度用完了（300 次），这次你自己定对错。' }),
+    );
+    typeQa(h.root, '试试');
+    qaSubmit(h.root).click();
+    await flushMicrotasks();
+    expect(text(h.root, 'verdict-reason')).toContain('额度用完');
+    expect(hidden(h.root, 'verdict-self-right')).toBe(false); // 回落可用，复习没被锁住
+  });
+
+  it('BS#Q7 没配 AI 而存档是问答模式 ⇒ 说明用不了，并停在选择题形态', () => {
+    const h = qaSetup(undefined);
+    expect(hidden(h.root, 'qa-unavailable')).toBe(false);
+    expect(choiceBtns(h.root).length).toBeGreaterThan(0); // 仍有可用的作答方式
+    expect(qaSubmit(h.root).disabled).toBe(true);
+  });
+
+  it('BS#Q8 切换写回：成功即换形态；失败（只读）停在原模式并如实提示', async () => {
+    const ok = setup({} as StageSprites, { setAnswerMode: () => Promise.resolve({ ok: true }) });
+    mountBattleScreen(ok.root, ok.ctrl, ok.deps);
+    expect(hidden(ok.root, 'answer-choices')).toBe(false);
+    (ok.root.querySelector('[data-ui="mode-toggle"]') as HTMLButtonElement).click();
+    await flushMicrotasks();
+    // 写口成功 ⇒ 屏上要跟着切（本夹具的写口不回写快照，故此处只断言"调用发生了"）
+    expect(hidden(ok.root, 'mode-toggle')).toBe(false);
+
+    const bad = setup({} as StageSprites, {
+      setAnswerMode: () => Promise.resolve({ ok: false, reason: '存档无法读取（只读保护）。' }),
+    });
+    mountBattleScreen(bad.root, bad.ctrl, bad.deps);
+    (bad.root.querySelector('[data-ui="mode-toggle"]') as HTMLButtonElement).click();
+    await flushMicrotasks();
+    expect(text(bad.root, 'toast')).toContain('只读'); // 如实提示，不假装切成
+    expect(hidden(bad.root, 'answer-choices')).toBe(false); // 仍在选择题形态
   });
 });

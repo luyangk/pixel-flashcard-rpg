@@ -385,6 +385,60 @@ describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
     expect(root.querySelectorAll('[data-name-candidate]')).toHaveLength(1);
   });
 
+  it('战斗屏拿到 judge / setAnswerMode（漏透传 ⇒ 问答模式在生产里不可用而单测全绿）', async () => {
+    const root = makeRoot();
+    const base = makeSave();
+    const fight = {
+      state: {
+        phase: 'answering' as const,
+        pool: base.cards.map((c) => c.id),
+        idx: 0,
+        enemyHp: 42,
+        playerHp: 30,
+        maxPlayerHp: 30,
+        atk: 12,
+        def: 3,
+        enemyPower: 7,
+        log: [],
+      },
+      pool: base.cards,
+      current: base.cards[0] ?? null,
+    };
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'fight',
+        fight: fight as never,
+        // 序章没看过的档会先挂序章（resolveView 的优先级）⇒ 这里显式标成看过
+        save: {
+          ...base,
+          settings: { ...base.settings, answerMode: 'qa', story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    // 本文件的夹具把战斗屏换成了 stub（真屏要 canvas/rAF），所以这里**直接取证**透传：
+    // 记下宿主交给战斗屏的 deps，再断言两个口确实在里面且是同一份实现。
+    let seen: BattleScreenDeps | null = null;
+    const judge = () => Promise.resolve({ ok: true as const, match: true, reason: '要点都在', missing: [] });
+    const setAnswerMode = () => Promise.resolve({ ok: true });
+    const { deps } = adapters({
+      judge,
+      setAnswerMode,
+      mountBattle: (_root, _ctrl, battleDeps) => {
+        seen = battleDeps;
+        const el = document.createElement('div');
+        el.setAttribute('data-ui', 'battle-stub');
+        _root.appendChild(el);
+        return { unmount: () => el.remove(), destroy: () => el.remove() };
+      },
+    });
+    mountHost(root, ctrl, deps);
+
+    expect(seen).not.toBeNull();
+    expect((seen as unknown as BattleScreenDeps).judge).toBe(judge); // ← 同一份实现（漏透传 ⇒ undefined）
+    expect((seen as unknown as BattleScreenDeps).setAnswerMode).toBe(setAnswerMode);
+    expect((seen as unknown as BattleScreenDeps).rng).toBe(deps.rng); // T6 的洗牌源同样透传
+  });
+
   it('设置屏拿到 resetSave / exportBackupNow（漏透传 = 生产里功能是死的，单元测试仍全绿）', async () => {
     const root = makeRoot();
     const ctrl = makeCtrl(

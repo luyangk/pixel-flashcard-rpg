@@ -23,7 +23,7 @@
 import { GRADES, type Grade } from '@core/sm2';
 import { buildChoices, CHOICE_COUNT_DEFAULT, type ChoiceSet } from '@core/choices';
 import type { Rng } from '@core/rng';
-import type { Card } from '@core/types';
+import type { AnswerMode, Card } from '@core/types';
 import type { BattleEvent } from '@core/battle';
 import type { FightView } from '../app/battleFlow';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
@@ -47,6 +47,18 @@ const GUESSED_TEXT = '答对了（按「猜的」记 —— 这次记为答错�
 const CONTINUE_TEXT = '继续';
 const NO_CHOICE_HINT = '这个领域只有这一张卡，凑不出选项——先看答案吧。';
 const ANSWER_PREFIX = '答案：';
+/** 问答模式（D42）的文案。 */
+const QA_PLACEHOLDER = '用你自己的话写下这张卡的答案（写要点就行）';
+const QA_SUBMIT_TEXT = '让 AI 判一判';
+const QA_JUDGING_TEXT = '正在判…';
+const QA_UNAVAILABLE_HINT = '这条存档选的是问答模式，但还没配 AI —— 先用选择题吧。';
+const QA_EMPTY_TEXT = '先写一句你自己的理解，再交给 AI 判。';
+const SELF_RIGHT_TEXT = '我觉得对了';
+const SELF_WRONG_TEXT = '我觉得错了';
+const UNKNOWN_PREFIX = '没判成 —— ';
+const MODE_TO_QA_TEXT = '换成问答模式';
+const MODE_TO_CHOICE_TEXT = '换回选择题';
+const UNKNOWN_RESULT = '这题没判成';
 
 const DEFAULT_BANNER_TEXT = '只读模式：存档当前不可写，本局的改动不会保存';
 const MISS_HINT_TEXT = '空转 —— 这题没想起来，怪物纹丝不动';
@@ -96,6 +108,23 @@ export interface BattleScreenDeps {
    * 玩家记住"永远选第三个"。测试注入 `mulberry32` 以断言确定性。
    */
   readonly rng?: Rng;
+  /**
+   * 判卷口（Plan 6 · T7 / D42；宿主接 `app/llmFlow.judgeAnswer`，并在装配层记账判定额度）。
+   * **缺省 ⇒ 问答模式不可用**：屏上如实说明并停在选择题形态（绝不静默换成别的模式）。
+   */
+  readonly judge?: (input: {
+    readonly front: string;
+    readonly answer: string;
+    readonly reply: string;
+  }) => Promise<
+    { readonly ok: true; readonly match: boolean; readonly reason: string; readonly missing: readonly string[] }
+    | { readonly ok: false; readonly reason: string }
+  >;
+  /**
+   * 作答模式写回（宿主接 `app/settingsFlow.setAnswerMode`）。缺省 ⇒ 不显示切换按钮。
+   * 写失败（只读态）时屏上如实提示并**停在原模式**。
+   */
+  readonly setAnswerMode?: (mode: AnswerMode) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
 }
 
 /** 挂载句柄：unmount/destroy 同一件事（unmount 是 brief 的对外名，destroy 是行文习惯）。 */
@@ -179,18 +208,77 @@ export function mountBattleScreen(
     CONTINUE_TEXT
   ) as HTMLButtonElement;
   continueBtn.addEventListener('click', () => onContinue());
+  const selfRightBtn = h(
+    'button',
+    { 'data-ui': 'verdict-self-right', class: 'self-btn', type: 'button' },
+    SELF_RIGHT_TEXT,
+  ) as HTMLButtonElement;
+  selfRightBtn.addEventListener('click', () => dispatchAnswer(GRADES.good));
+  const selfWrongBtn = h(
+    'button',
+    { 'data-ui': 'verdict-self-wrong', class: 'self-btn', type: 'button' },
+    SELF_WRONG_TEXT,
+  ) as HTMLButtonElement;
+  selfWrongBtn.addEventListener('click', () => dispatchAnswer(GRADES.again));
+  const selfRowEl = h('div', { 'data-ui': 'verdict-self', class: 'self-row', hidden: true }, [
+    selfRightBtn,
+    selfWrongBtn,
+  ]);
   const verdictEl = h('div', { 'data-ui': 'verdict', class: 'verdict', hidden: true }, [
     verdictResultEl,
     verdictReasonEl,
     verdictMissingEl,
     answerFullEl,
+    selfRowEl,
     guessBtn,
     continueBtn,
   ]);
+
+  /* -------- 问答模式（Plan 6 · T7 / D42）：写理解 → AI 判 -------- */
+  const qaInput = h('textarea', {
+    'data-ui': 'qa-input',
+    class: 'qa-input',
+    placeholder: QA_PLACEHOLDER,
+    rows: '3',
+    maxlength: '500',
+  }) as HTMLTextAreaElement;
+  // 空输入不给提交：既不浪费一次调用，也不把空话喂给模型
+  const syncQaSubmit = (): void => {
+    qaSubmitBtn.disabled = pending || judging || qaInput.value.trim().length === 0;
+  };
+  qaInput.addEventListener('input', syncQaSubmit);
+  const qaSubmitBtn = h(
+    'button',
+    { 'data-ui': 'qa-submit', class: 'qa-submit', type: 'button' },
+    QA_SUBMIT_TEXT,
+  ) as HTMLButtonElement;
+  qaSubmitBtn.addEventListener('click', () => void onQaSubmit());
+  const qaStatusEl = h('p', { 'data-ui': 'qa-status', class: 'field-hint', hidden: true });
+  const qaUnavailableEl = h(
+    'p',
+    { 'data-ui': 'qa-unavailable', class: 'field-hint', hidden: true },
+    QA_UNAVAILABLE_HINT,
+  );
+  const qaEl = h('div', { 'data-ui': 'answer-qa', class: 'answer-qa', hidden: true }, [
+    qaInput,
+    qaSubmitBtn,
+    qaStatusEl,
+    qaUnavailableEl,
+  ]);
+
+  const modeToggleBtn = h(
+    'button',
+    { 'data-ui': 'mode-toggle', class: 'mode-toggle', type: 'button' },
+    MODE_TO_QA_TEXT,
+  ) as HTMLButtonElement;
+  modeToggleBtn.addEventListener('click', () => void onToggleMode());
+
   const answerEl = h('div', { 'data-ui': 'answer-area', class: 'answer-area' }, [
+    qaEl,
     choicesEl,
     noChoiceHintEl,
     verdictEl,
+    modeToggleBtn,
   ]);
   // 退出本局：控制器早就有 toMenu（未终局不落账）——此前 UI 层没有任何生产者，
   // 玩家误选领域后只能刷新页面（终审 I-2）。这里补齐这个生产者。
@@ -275,7 +363,18 @@ export function mountBattleScreen(
   /** 判定面板上「继续」要派发的档位（null = 尚未作答）。 */
   let pendingGrade: Grade | null = null;
   /** 判定面板的内容（对错 / 理由 / 缺失要点 / 是否已被「其实是猜的」改判）。 */
-  let verdict: { kind: 'right' | 'wrong'; reason: string; missing: readonly string[]; guessed: boolean } | null = null;
+  let verdict: {
+    kind: 'right' | 'wrong' | 'unknown';
+    reason: string;
+    missing: readonly string[];
+    guessed: boolean;
+  } | null = null;
+  /** 判卷在途（Plan 6 · T7）：期间不接受第二次提交，也不放行任何派发。 */
+  let judging = false;
+  /** 当前作答模式（从快照读：切换按钮写回后由快照驱动，屏上不另存一份）。 */
+  let mode: AnswerMode = 'choice';
+  /** 有效模式（`mode` 再叠加"判卷口在不在场"）：屏上真正按哪个模式渲染由它决定。 */
+  let effective: AnswerMode = 'choice';
   /** 当前卡的选项（`null` = 凑不出干扰项 ⇒ 回落看答案）。 */
   let choices: ChoiceSet | null = null;
   /** 选项按哪张卡算的（换卡即重算；同一张卡内不重算，避免快照重放时选项乱跳）。 */
@@ -353,7 +452,8 @@ export function mountBattleScreen(
   /** 选项按钮：按当前 `choices` 重建（数量少、内容短，直接 replaceChildren 最省心）。 */
   function renderChoices(snap: ControllerSnapshot): void {
     const asking = phase === 'asking' && canAnswer(snap);
-    const show = asking && choices !== null;
+    // 问答模式下不出选项（两条作答路径不能同时摆在屏上，否则玩家会以为要两边都做）
+    const show = asking && effective === 'choice' && choices !== null;
     choicesEl.replaceChildren();
     if (show && choices) {
       choices.options.forEach((_option, i) => {
@@ -369,10 +469,37 @@ export function mountBattleScreen(
     }
     setHidden(choicesEl, !show);
     // 凑不出干扰项的情形必须说明原因（不静默把选择题变成"只能看答案"）
-    setHidden(noChoiceHintEl, !(asking && choices === null && (snap.fight?.current ?? null) !== null));
+    setHidden(
+      noChoiceHintEl,
+      !(asking && effective === 'choice' && choices === null && (snap.fight?.current ?? null) !== null),
+    );
   }
 
   /** 判定面板：对错 + （问答模式的）理由与缺失要点 + **完整答案** + 继续/其实是猜的。 */
+  /**
+   * 作答模式与问答区（Plan 6 · T7）：模式来自快照（`settings.answerMode`，缺省选择题）。
+   * 问答模式要 `deps.judge` 在场；不在场就**如实说明**并停在选择题形态。
+   */
+  function renderMode(snap: ControllerSnapshot): void {
+    mode = snap.save?.settings?.answerMode === 'qa' ? 'qa' : 'choice';
+    const canJudge = typeof deps.judge === 'function';
+    // **有效模式**：存档选了问答但没配 AI ⇒ 屏上按选择题走（并保留切换按钮，
+    // 让玩家能一键改回选择题，而不是面对一个"点了没反应"的模式）。
+    effective = mode === 'qa' && canJudge ? 'qa' : 'choice';
+    const asking = phase === 'asking' && canAnswer(snap);
+    const qaActive = effective === 'qa' && asking;
+    setHidden(qaEl, !qaActive);
+    setHidden(qaUnavailableEl, !(mode === 'qa' && !canJudge && canAnswer(snap)));
+    if (qaActive && qaStatusEl.hasAttribute('hidden')) {
+      qaStatusEl.textContent = '';
+    }
+    // 切换按钮：只有宿主给了写口才出现；判卷在途/在判定面板时不给切（避免半路改语义）
+    setHidden(modeToggleBtn, typeof deps.setAnswerMode !== 'function' || !canAnswer(snap) || phase === 'verdict');
+    modeToggleBtn.textContent = mode === 'qa' ? MODE_TO_CHOICE_TEXT : MODE_TO_QA_TEXT;
+    modeToggleBtn.disabled = pending || judging;
+    modeToggleBtn.setAttribute('data-mode', mode);
+  }
+
   function renderVerdict(snap: ControllerSnapshot): void {
     const current = snap.fight?.current ?? null;
     const inVerdict = phase === 'verdict' && verdict !== null;
@@ -381,6 +508,7 @@ export function mountBattleScreen(
       // 不在判定态时把两个按钮都收起来：留着「其实是猜的」在屏上，
       // 下一张卡作答时会变成一颗"看着能点、点了却什么也不发生"的按钮。
       setHidden(guessBtn, true);
+      setHidden(selfRowEl, true);
       guessBtn.disabled = false;
       continueBtn.disabled = true;
       return;
@@ -389,7 +517,9 @@ export function mountBattleScreen(
       ? GUESSED_TEXT
       : verdict.kind === 'right'
         ? RESULT_RIGHT
-        : RESULT_WRONG;
+        : verdict.kind === 'unknown'
+          ? `${UNKNOWN_RESULT} —— 你自己定对错`
+          : RESULT_WRONG;
     verdictResultEl.setAttribute('data-verdict-kind', verdict.guessed ? 'guessed' : verdict.kind);
     setHidden(verdictReasonEl, verdict.reason.length === 0);
     verdictReasonEl.textContent = verdict.reason;
@@ -401,7 +531,13 @@ export function mountBattleScreen(
     answerFullEl.textContent = current ? `${ANSWER_PREFIX}${current.back}` : '';
     // 「其实是猜的」只在"答对了且还没改判"时可用（答错了没有可改的东西）
     setHidden(guessBtn, verdict.guessed || verdict.kind !== 'right');
-    continueBtn.disabled = pending;
+    // 没判成 ⇒ 二选一自评（**不替玩家猜**）；判定成功时这条不出现
+    setHidden(selfRowEl, verdict.kind !== 'unknown');
+    selfRightBtn.disabled = pending;
+    selfWrongBtn.disabled = pending;
+    // 「继续」在"没判成"时不出现（自评按钮就是那条路的派发口）
+    setHidden(continueBtn, verdict.kind === 'unknown');
+    continueBtn.disabled = pending || judging;
   }
 
   function render(snap: ControllerSnapshot): void {
@@ -462,8 +598,12 @@ export function mountBattleScreen(
       lastNotice = null;
     }
 
+    renderMode(snap);
     renderChoices(snap);
     renderVerdict(snap);
+    // 作答区的可用性必须在**每次渲染**时求值：T6 改造时把这一步挪丢了，于是
+    // "空输入不给提交"只在点过之后才生效（BS#Q5 当场抓到）。
+    setEnabled(!pending && !judging && canAnswer(snap));
   }
 
   /** 换卡/换局：把作答区收回"未作答"（判定面板、待发档位、猜的标记都清掉）。 */
@@ -471,6 +611,8 @@ export function mountBattleScreen(
     phase = 'asking';
     pendingGrade = null;
     verdict = null;
+    // 换卡即清空上一张的作答（留在框里会让玩家以为已经写过这张卡了）
+    qaInput.value = '';
     // choices 不在这里清：ensureChoices 会按新卡 id 重算（清掉反而让"同卡重放"多算一次）
   }
 
@@ -479,8 +621,15 @@ export function mountBattleScreen(
     for (const b of Array.from(choicesEl.querySelectorAll('button'))) {
       (b as HTMLButtonElement).disabled = !on;
     }
-    continueBtn.disabled = !on;
+    // 「继续」与二选一自评只在判定态可用（面板收起时它们不该是"能点"的状态——
+    // 虽然点不动，但一块可点样式会给玩家错觉；R#1 钉住这条）
+    const inVerdict = phase === 'verdict';
+    continueBtn.disabled = !on || !inVerdict;
+    selfRightBtn.disabled = !on || !inVerdict;
+    selfWrongBtn.disabled = !on || !inVerdict;
     revealBtn.disabled = !on;
+    // 问答提交还要看输入框空不空（空输入始终不给提交）
+    qaSubmitBtn.disabled = !on || qaInput.value.trim().length === 0;
   }
 
   /* ------------------------------------------------------------ 防连点（UI 层） */
@@ -527,12 +676,13 @@ export function mountBattleScreen(
     render(ctrl.snapshot());
   }
 
-  /** 「继续」：把作答真正派发出去（判定面板是唯一的派发口）。 */
-  function onContinue(): void {
-    if (destroyed || pending || phase !== 'verdict' || pendingGrade === null) return;
+  /**
+   * 把作答真正派发出去 —— **判定面板与自评按钮是唯一的两个派发口**（`onChoice`/`onReveal`
+   * 只负责把面板摆出来）。这样"答案先于结算上屏"这条不变量在结构上就成立。
+   */
+  function dispatchAnswer(grade: Grade): void {
+    if (destroyed || pending || !canAnswer(ctrl.snapshot())) return;
     const snap = ctrl.snapshot();
-    if (!canAnswer(snap)) return;
-    const grade = pendingGrade;
 
     // ① 立刻锁住作答区；记下点击时的快照对象，只有"新对象"能解禁（重放不解禁）。
     pending = true;
@@ -556,6 +706,97 @@ export function mountBattleScreen(
       void Promise.resolve(res).catch(unlock);
     } catch {
       unlock();
+    }
+  }
+
+  /** 「继续」：把判定面板上记着的档位派发出去。 */
+  function onContinue(): void {
+    if (destroyed || pending || judging || phase !== 'verdict' || pendingGrade === null) return;
+    dispatchAnswer(pendingGrade);
+  }
+
+  /**
+   * 问答模式提交（Plan 6 · T7 / D42）：把「卡面 + 答案 + 玩家输入」交给注入的判卷口。
+   *
+   * **绝不替玩家猜**：判卷失败（无 Key / 超时 / 模型回垃圾 / 判定额度到顶）一律进"没判成"
+   * 形态 —— 显示原因、显示完整答案、给二选一自评，点了才派发。
+   */
+  async function onQaSubmit(): Promise<void> {
+    if (destroyed || pending || judging || phase !== 'asking') return;
+    const judge = deps.judge;
+    if (typeof judge !== 'function') return;
+    const snap = ctrl.snapshot();
+    const current = snap.fight?.current ?? null;
+    if (!canAnswer(snap) || current === null) return;
+    const reply = qaInput.value.trim();
+    if (reply.length === 0) {
+      qaStatusEl.textContent = QA_EMPTY_TEXT;
+      setHidden(qaStatusEl, false);
+      return;
+    }
+
+    judging = true;
+    qaStatusEl.textContent = QA_JUDGING_TEXT;
+    setHidden(qaStatusEl, false);
+    qaSubmitBtn.disabled = true;
+    setEnabled(false);
+    try {
+      const res = await judge({ front: current.front, answer: current.back, reply });
+      if (destroyed) return;
+      if (res && res.ok === true) {
+        enterVerdict(res.match ? GRADES.good : GRADES.again, { reason: res.reason, missing: res.missing });
+      } else {
+        const reason = res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : '';
+        enterUnknown(reason);
+      }
+    } catch (e) {
+      // 判卷口自身抛错也要收敛成"没判成"（绝不把异常逃到事件处理器）
+      enterUnknown(`AI 调用失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      judging = false;
+      if (!destroyed) {
+        qaStatusEl.textContent = '';
+        setHidden(qaStatusEl, true);
+        setEnabled(canAnswer(ctrl.snapshot()));
+        syncQaSubmit();
+        render(ctrl.snapshot());
+      }
+    }
+  }
+
+  /** 「没判成」形态：原因 + 完整答案 + 二选一自评。 */
+  function enterUnknown(reason: string): void {
+    const snap = ctrl.snapshot();
+    if (!canAnswer(snap)) return;
+    phase = 'verdict';
+    pendingGrade = null; // 由自评按钮决定
+    verdict = { kind: 'unknown', reason: `${UNKNOWN_PREFIX}${reason}`, missing: [], guessed: false };
+    render(snap);
+  }
+
+  /** 在选择题 / 问答模式之间切换：写回成功由快照驱动换形态；失败如实提示并停在原模式。 */
+  async function onToggleMode(): Promise<void> {
+    if (destroyed || judging || typeof deps.setAnswerMode !== 'function') return;
+    const next: AnswerMode = mode === 'qa' ? 'choice' : 'qa';
+    try {
+      const res = await deps.setAnswerMode(next);
+      if (destroyed) return;
+      if (res && res.ok === true) {
+        // 写口成功：快照里的 answerMode 已更新，直接重渲染即可换形态
+        render(ctrl.snapshot());
+        return;
+      }
+      toastOff?.();
+      toastOff = showToast(
+        screen,
+        res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : '没能切换作答方式。',
+        { ms: deps.toastMs },
+      );
+    } catch (e) {
+      toastOff?.();
+      toastOff = showToast(screen, `没能切换作答方式：${e instanceof Error ? e.message : String(e)}`, {
+        ms: deps.toastMs,
+      });
     }
   }
 
