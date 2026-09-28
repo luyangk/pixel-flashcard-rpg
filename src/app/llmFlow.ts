@@ -14,7 +14,7 @@
  */
 import type { ChatMessage, ChatResult } from '../platform/llmTypes';
 import type { CardCandidate, NameCandidate, ParseResult } from '../core/llmParse';
-import { parseCards, parseEgg, parseNames } from '../core/llmParse';
+import { CARD_FIELD_MAX, CHOICES_MAX, parseCards, parseEgg, parseNames, parseVerdict } from '../core/llmParse';
 
 /** 注入的调用器（生产接 `platform/llmHttp.chat`；测试给假的）。 */
 export type ChatFn = (messages: readonly ChatMessage[]) => Promise<ChatResult>;
@@ -43,11 +43,14 @@ const CARD_SYSTEM = [
   '你是闪卡（记忆卡）编辑。把用户给的资料拆成一组问答卡，供间隔重复记忆使用。',
   '硬性要求：',
   '1. 只输出一个 JSON 数组，不要任何解释、不要 Markdown 代码块以外的文字；',
-  '2. 每个元素形如 {"front":"问题或提示","back":"答案","tags":["主题"]}；',
+  '2. 每个元素形如 {"front":"问题或提示","back":"答案","tags":["主题"],"choices":["干扰项1","干扰项2","干扰项3"]}；',
   '3. front 与 back 都必须是**自足**的短句：单看卡片就能作答，不出现"上文""这段"这类指代；',
   '4. front ≤ 40 字，back ≤ 80 字，tags 最多 3 个、每个 ≤ 6 字；',
-  '5. 一张卡只考一个知识点；资料信息不足时宁可少出卡，绝不编造；',
-  '6. 最多 20 张。',
+  `5. choices 是给这张卡出选择题用的**错误选项**（3 条，每条 ≤ 30 字）：要"像答案但不对"、` +
+    `与 back 同类同粒度，**不要与 back 相同或同义**，彼此也不重复；确实想不出就留空数组；`,
+  `6. choices 最多 ${CHOICES_MAX} 条（超出只取前 ${CHOICES_MAX} 条）；`,
+  '7. 一张卡只考一个知识点；资料信息不足时宁可少出卡，绝不编造；',
+  '8. 最多 20 张。',
 ].join('\n');
 
 const NAME_SYSTEM = [
@@ -70,10 +73,31 @@ const EGG_SYSTEM = [
 ].join('\n');
 
 /**
+ * 判卷提示词（Plan 6 · T3 / D42）。
+ *
+ * **这是全应用唯一会把"这张卡的答案"发出去的路径** —— 不把参考答案发出去就无法判断
+ * "玩家的理解是否与它一致"，这就是该功能的定义本身。范围锁死在：问答模式 + 玩家点提交
+ * 的那一刻 + 单张卡。提示词里同时要 `missing`（缺了哪些要点），因为"差在哪"才是复习的抓手。
+ */
+const JUDGE_SYSTEM = [
+  '你在给一张记忆卡的作答判卷。用户会给你：卡面、参考答案、玩家用自己的话写的理解。',
+  '判定标准：',
+  '1. 只要**要点一致**就算对：换词、更口语、更简略、顺序不同、举例说明，都算 match=true；',
+  '2. 漏掉参考答案里的**关键点**（人名、年代、结论、数量级）算错，把漏掉的写进 missing；',
+  '3. 答非所问、空话套话、只重复题面、明显说反了 ⇒ match=false；',
+  '4. 不确定时从严：宁可判错并说明缺什么，也不要放过。',
+  '输出要求：只输出一个 JSON 对象，不要任何解释、不要代码块以外的文字，形如',
+  '{"match":true,"reason":"一句话说明为什么","missing":["漏掉的要点"]}；',
+  'reason ≤ 60 字；missing 最多 5 条、每条 ≤ 20 字；没有缺漏就给空数组。',
+].join('\n');
+
+/**
  * 粘贴原文的长度上限（评审 m-3）：一次调用就是一次真实付费请求，几千字的长文既贵又慢，
  * 而辅建卡的收益主要来自"精炼的笔记"。超出部分**截断并明确告知**（不静默丢）。
  */
 export const PASTE_MAX = 4000;
+/** 玩家在问答模式里写的理解的长度上限（码点；超出按码点截断，不静默丢）。 */
+export const REPLY_MAX = 500;
 
 /** 按码点截断（与 core/llmParse 同一口径：`.slice` 会劈开代理对）。 */
 function clip(text: unknown, max: number): string {
@@ -94,7 +118,7 @@ function sampleLine(fronts: readonly string[] | undefined, max = 5): string {
 export function buildCardPrompt(input: { text: string; deckName: string; max?: number }): readonly ChatMessage[] {
   const max = Number.isInteger(input.max) && (input.max as number) > 0 ? (input.max as number) : 20;
   return [
-    { role: 'system', content: `${CARD_SYSTEM}\n7. 这次最多出 ${max} 张。` },
+    { role: 'system', content: `${CARD_SYSTEM}\n9. 这次最多出 ${max} 张。` },
     {
       role: 'user',
       content: `领域：${clip(input.deckName, 30)}\n\n${wrapUntrusted('资料', clip(input.text, PASTE_MAX))}`,
@@ -122,6 +146,26 @@ export function buildEggPrompt(input: { deckName: string; sampleFronts?: readonl
   ];
 }
 
+/**
+ * 判卷提示词（导出成纯函数：提示词是产品文案的一部分，值得逐字断言；也便于安全评审
+ * 直接看到"答案确实只出现在 user 段的定界资料里"）。
+ */
+export function buildJudgePrompt(input: {
+  readonly front: string;
+  readonly answer: string;
+  readonly reply: string;
+}): readonly ChatMessage[] {
+  const body = [
+    wrapUntrusted('卡面', clip(input?.front, CARD_FIELD_MAX)),
+    wrapUntrusted('参考答案', clip(input?.answer, CARD_FIELD_MAX)),
+    wrapUntrusted('玩家作答', clip(input?.reply, REPLY_MAX)),
+  ].join('\n\n');
+  return [
+    { role: 'system', content: JUDGE_SYSTEM },
+    { role: 'user', content: body },
+  ];
+}
+
 /** 统一收口：调用失败/抛错 → 可读 reason（绝不把异常抛给 UI）。 */
 async function ask(deps: LlmDeps, messages: readonly ChatMessage[]): Promise<ChatResult> {
   try {
@@ -144,6 +188,26 @@ export async function suggestCards(
   const res = await ask(deps, buildCardPrompt(input));
   if (!res.ok) return { ok: false, reason: res.reason };
   return parseCards(res.text, { max: input.max });
+}
+
+/**
+ * 判卷（**只回判定，不写盘、不落账**）。
+ *
+ * 失败一律如实回 `{ok:false, reason}`：判"答对"会写进复习账本，所以**任何不确定都不猜** ——
+ * UI 收到失败会交给玩家二选一自评（"没判成，你自己定对错"）。
+ * 额度记账在装配层（`app/quota.planJudge`），本函数只管这一次调用本身。
+ */
+export async function judgeAnswer(
+  deps: LlmDeps,
+  input: { readonly front: string; readonly answer: string; readonly reply: string },
+): Promise<{ ok: true; match: boolean; reason: string; missing: readonly string[] } | { ok: false; reason: string }> {
+  const reply = typeof input?.reply === 'string' ? input.reply.trim() : '';
+  if (reply.length === 0) return { ok: false, reason: '先写一句你自己的理解，再交给 AI 判。' };
+  const res = await ask(deps, buildJudgePrompt(input));
+  if (!res.ok) return { ok: false, reason: res.reason };
+  const parsed = parseVerdict(res.text);
+  if (!parsed.ok) return { ok: false, reason: parsed.reason };
+  return { ok: true, match: parsed.value.match, reason: parsed.value.reason, missing: parsed.value.missing };
 }
 
 /** 给自建领域起卷灵称号候选（**只回候选，不写盘**）。 */

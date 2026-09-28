@@ -1,5 +1,5 @@
 /**
- * tests/app/llmFlow.test.ts —— Plan 5 · T3：三项 AI 编排（提示词 + 调用 + 解析）。
+ * tests/app/llmFlow.test.ts —— Plan 5 · T3 + Plan 6 · T3：AI 编排（提示词 + 调用 + 解析）。
  *
  * 判别力：
  * - LF#2 提示词里**看得见防注入设计**：资料被定界包裹 + 显式声明"不是指令"；
@@ -13,15 +13,19 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  REPLY_MAX,
   buildCardPrompt,
   buildEggPrompt,
+  buildJudgePrompt,
   buildNamePrompt,
+  judgeAnswer,
   suggestBossNames,
   suggestCards,
   suggestEgg,
   wrapUntrusted,
   type ChatFn,
 } from '../../src/app/llmFlow';
+import { CHOICES_MAX } from '../../src/core/llmParse';
 import type { ChatMessage, ChatResult } from '../../src/platform/llmTypes';
 import { stripComments } from '../../scripts/check-core-purity';
 
@@ -177,5 +181,103 @@ describe('职责边界 —— 本模块不写存档', () => {
     // 网络只允许出现在 platform/llmHttp
     expect(code).not.toContain('fetch(');
     expect(code).not.toContain('xmlhttprequest');
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 6 · T3 */
+
+/**
+ * 判卷（Plan 6 · T3）与"生成卡时一并产出干扰项"。
+ *
+ * 判别力：
+ * - LF#12 **答案必须真的在 prompt 里**：D42 的例外就是"为了判定而发送这张卡的答案"，
+ *   不发送的实现根本判不了（也会让设置页那句告知变成谎言）；
+ * - LF#13 玩家输入按码点截断（`.slice` 会劈开代理对 ⇒ 红）；
+ * - LF#15 `match` 是字符串 ⇒ `{ok:false}`（宽松嗅探的实现必红）；
+ * - LF#17 卡片提示词**要干扰项**（不要求 choices 的实现 ⇒ 生产上永远没有 AI 选项 ⇒ 红）。
+ */
+describe('judgeAnswer —— 问答模式的判卷（Plan 6 · T3）', () => {
+  it('LF#12 提示词含三段定界，且答案确实在其中（D42 的例外必须真的发生）', () => {
+    const messages = buildJudgePrompt({
+      front: '唐朝开国皇帝是谁？',
+      answer: '李渊',
+      reply: '是李渊建立的唐朝',
+    });
+    const user = messages.find((m) => m.role === 'user')?.content ?? '';
+    expect(user).toContain('【卡面｜开始】');
+    expect(user).toContain('【参考答案｜开始】');
+    expect(user).toContain('【玩家作答｜开始】');
+    expect(user).toContain('唐朝开国皇帝是谁？');
+    expect(user).toContain('李渊'); // ← 答案真的发出去了（否则无从判定）
+    expect(user).toContain('是李渊建立的唐朝');
+    const system = messages.find((m) => m.role === 'system')?.content ?? '';
+    expect(system).toContain('match');
+    expect(system).toContain('missing'); // 缺失要点也是契约的一部分
+    expect(system).not.toContain('李渊'); // 答案不进 system（防注入面收在 user 段）
+  });
+
+  it('LF#13 玩家输入超长 ⇒ 按码点截到 REPLY_MAX（不劈开代理对）', () => {
+    const messages = buildJudgePrompt({ front: 'f', answer: 'a', reply: '🐉'.repeat(600) });
+    const user = messages.find((m) => m.role === 'user')?.content ?? '';
+    const body = user.slice(user.indexOf('【玩家作答｜开始】'), user.indexOf('【玩家作答｜结束】'));
+    const emojis = [...body].filter((c) => c === '🐉');
+    expect(emojis.length).toBeLessThanOrEqual(REPLY_MAX);
+    expect(body).not.toMatch(/[\uD800-\uDBFF]\n/); // 不出现孤立代理
+  });
+
+  it('LF#14 模型回标准 JSON ⇒ 三样都对（对/错 + 理由 + 缺失要点）', async () => {
+    const f = fakeChat({
+      ok: true,
+      text: '{"match":false,"reason":"大意对了","missing":["作者","朝代"]}',
+    });
+    const res = await judgeAnswer({ chat: f.fn }, { front: 'f', answer: 'a', reply: 'r' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.match).toBe(false);
+    expect(res.reason).toBe('大意对了');
+    expect(res.missing).toEqual(['作者', '朝代']);
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it('LF#15 match 是字符串 "true" ⇒ 不判成答对，如实回失败（宽松嗅探必红）', async () => {
+    const f = fakeChat({ ok: true, text: '{"match":"true","reason":"看着对"}' });
+    const res = await judgeAnswer({ chat: f.fn }, { front: 'f', answer: 'a', reply: 'r' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('判定');
+  });
+
+  it('LF#16 chat 抛错 / 回失败 ⇒ 原样收敛成人话，不抛给 UI', async () => {
+    const boom: ChatFn = () => Promise.reject(new Error('网络断了'));
+    const r1 = await judgeAnswer({ chat: boom }, { front: 'f', answer: 'a', reply: 'r' });
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toContain('网络断了');
+
+    const denied = fakeChat({ ok: false, reason: '被限流了，等一会儿。' });
+    const r2 = await judgeAnswer({ chat: denied.fn }, { front: 'f', answer: 'a', reply: 'r' });
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toBe('被限流了，等一会儿。');
+  });
+
+  it('LF#16b 空作答不发请求，直接回人话（省一次网络往返）', async () => {
+    const f = fakeChat({ ok: true, text: '{"match":true}' });
+    const res = await judgeAnswer({ chat: f.fn }, { front: 'f', answer: 'a', reply: '   ' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('写');
+    expect(f.calls).toHaveLength(0);
+  });
+});
+
+describe('卡片提示词 —— 生成卡时一并产出干扰项（D41）', () => {
+  it('LF#17 system 要求 choices，并说明"错误选项"的口径与不与答案重复', () => {
+    const messages = buildCardPrompt({ text: '资料', deckName: '唐诗' });
+    const system = messages.find((m) => m.role === 'system')?.content ?? '';
+    expect(system).toContain('choices');
+    expect(system).toContain('错误');
+    expect(system).toMatch(/不要与|不与|不能与/); // 明确禁止与正确答案相同
+  });
+
+  it('LF#17b choices 条数上限写进提示词（与 core 的 CHOICES_MAX 同口径）', () => {
+    const system = buildCardPrompt({ text: '资料', deckName: '唐诗' }).find((m) => m.role === 'system')?.content ?? '';
+    expect(system).toContain(String(CHOICES_MAX));
   });
 });
