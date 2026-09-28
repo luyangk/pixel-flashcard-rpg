@@ -171,6 +171,41 @@ describe('parseEgg —— 彩蛋正文（唯一允许纯文本的入口）', () 
     if (long.ok) expect([...long.text].length).toBe(EGG_MAX);
   });
 
+  it('LP#10 安全评审 I-1 的五族不可见字符：双向隔离符/ALM/软连字符/Hangul filler/行间注记全剥', () => {
+    // 每族一个代表：U+2066–2069（双向隔离）、U+061C、U+00AD、U+3164、U+FFF9
+    const dirty = 'a\u2066b\u2069c\u061cd\u00ade\u3164f\ufff9g';
+    const card = parseCards(`[{"front":"${dirty}","back":"b","tags":["x\u00ady"]}]`);
+    expect(card.ok).toBe(true);
+    if (card.ok) {
+      for (const ch of ['\u2066', '\u2069', '\u061c', '\u00ad', '\u3164', '\ufff9']) {
+        expect(card.value[0].front.includes(ch), `未剥掉 ${ch}`).toBe(false);
+      }
+      expect(card.value[0].tags[0]).not.toContain('\u00ad');
+    }
+
+    // 彩蛋路径同样（这曾是一份复刻的正则，两处会一起漏——现在同源）
+    const egg = parseEgg('正文\u2066ABC\u2069结束\u3164');
+    expect(egg.ok).toBe(true);
+    if (egg.ok) {
+      expect(egg.text).not.toContain('\u2066');
+      expect(egg.text).not.toContain('\u3164');
+      expect(egg.text).toContain('正文');
+    }
+  });
+
+  it('LP#11 parseEgg 的 JSON 分支取不到正文时**拒绝**，不把 JSON 原文当彩蛋（评审 m-4）', () => {
+    const got = parseEgg('{"error":"rate limited"}');
+    expect(got.ok).toBe(false);
+    if (!got.ok) expect(got.reason).toContain('没有正文');
+  });
+
+  it('LP#12 opts 显式传 null 也不抛（"永不抛"是文件头写下的契约；评审 m-1）', () => {
+    expect(() => parseCards('[{"front":"f","back":"b"}]', null as never)).not.toThrow();
+    expect(() => parseNames('["x"]', null as never)).not.toThrow();
+    const cards = parseCards('[{"front":"f","back":"b"}]', null as never);
+    if (cards.ok) expect(cards.value).toHaveLength(1); // 回落默认上限
+  });
+
   it('LP#9c 控制字符被剥掉（含方向控制符——它能在屏上伪装文本顺序）', () => {
     const got = parseEgg('正文\u202e反着写\u0000 结束');
     expect(got.ok).toBe(true);

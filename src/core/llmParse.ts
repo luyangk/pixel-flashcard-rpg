@@ -37,23 +37,42 @@ export const CARDS_MAX = 20;
 export const NAMES_MAX = 5;
 export const EGG_MAX = 200;
 
-/** 控制字符与"看起来像空白但不显示"的字符：一律剥掉（防屏上伪装/排版破坏）。 */
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\ufeff]/g;
+/**
+ * 不可见/可伪装字符的黑名单：**全仓唯一来源**（`app/codexFlow` 与 `app/bossFlow` 都从这里引）。
+ *
+ * 五族（T6 安全评审判 I-1：首版漏了三族，模型输出里本来就会自然带这些字符）：
+ * 1. C0/C1 控制字符与 DEL；
+ * 2. 零宽与段落分隔：U+200B–200F、U+2028/2029、U+FEFF(BOM)；
+ * 3. **双向控制与隔离符**：U+202A–202E（覆盖）、U+2066–2069（LRI/RLI/FSI/PDI）——
+ *    它们能重排屏幕上的显示顺序，是"看着是 A、存进去是 B"最顺手的工具；
+ * 4. 不可见填充与软连字符：U+00AD、U+061C(ALM)、U+3164/U+FFA0(Hangul filler)、U+2060–2064；
+ * 5. 行间注记：U+FFF9–FFFB。
+ *
+ * 口径：**一律替换成空格再折叠**（不是删除）——删除会把"两个词"拼成一个新词，
+ * 替换成空格至少不改变分词结构。
+ */
+export const UNSAFE_CHARS_RE =
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2069\u3164\ufeff\uffa0\ufff9-\ufffb]/g;
 
 /**
- * 清洗一段文本：剥控制字符 → 折叠内部空白 → 去首尾 → 按**码点**截断到上限。
- *
- * 截断必须按码点（`[...s]`）而不是 `.slice()`：后者按 UTF-16 单元切，会把 emoji/生僻字
- * 的**代理对劈成两半**，留下一个孤立代理字符写进存档（渲染成 "�"，且 `validateSave` 的
- * 类型检查看不出来——它只关心是字符串）。长度上限的语义本来就是"多少个字"，
- * 所以码点既是正确性也是口径。
+ * 清洗一段**外部文本**：剥不可见字符 → 折叠空白 → 去首尾 → 按码点封顶。
+ * 导出供 app 层的写口复用（彩蛋/称号都走这里，避免"解析器与写口各有一份正则"的裂缝）。
  */
-function clean(raw: unknown, max: number): string {
+export function sanitizeExternalText(raw: unknown, max: number): string {
   if (typeof raw !== 'string') return '';
-  const stripped = raw.replace(CONTROL_RE, ' ');
+  const stripped = raw.replace(UNSAFE_CHARS_RE, ' ');
   const collapsed = stripped.replace(/[ \t\r\n]+/g, ' ').trim();
   const points = [...collapsed];
   return points.length > max ? points.slice(0, max).join('').trim() : collapsed;
+}
+
+/**
+ * 清洗一段文本（本模块内的简写）：实现见 `sanitizeExternalText`。
+ * 按**码点**截断而不是 `.slice()`：后者按 UTF-16 单元切，会把 emoji/生僻字的代理对劈成
+ * 两半，留下孤立代理字符写进存档（渲染成 "�"，且 `validateSave` 的类型检查看不出来）。
+ */
+function clean(raw: unknown, max: number): string {
+  return sanitizeExternalText(raw, max);
 }
 
 /**
@@ -127,7 +146,9 @@ function parseArray<T>(
 
 /** 解析卡片候选。`max` 缺省 CARDS_MAX。 */
 export function parseCards(text: string, opts: { max?: number } = {}): ParseResult<CardCandidate> {
-  const max = Number.isInteger(opts.max) && (opts.max as number) > 0 ? (opts.max as number) : CARDS_MAX;
+  // `opts` 可能是显式 null（默认参数只兜 undefined）——"永不抛"是文件头写下的契约，故 `?? {}`
+  const o = opts ?? {};
+  const max = Number.isInteger(o.max) && (o.max as number) > 0 ? (o.max as number) : CARDS_MAX;
   return parseArray<CardCandidate>(text, max, '卡片', (item) => {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) return null;
     const o = item as Record<string, unknown>;
@@ -147,7 +168,8 @@ export function parseCards(text: string, opts: { max?: number } = {}): ParseResu
 
 /** 解析称号候选。 */
 export function parseNames(text: string, opts: { max?: number } = {}): ParseResult<NameCandidate> {
-  const max = Number.isInteger(opts.max) && (opts.max as number) > 0 ? (opts.max as number) : NAMES_MAX;
+  const o = opts ?? {};
+  const max = Number.isInteger(o.max) && (o.max as number) > 0 ? (o.max as number) : NAMES_MAX;
   return parseArray<NameCandidate>(text, max, '称号', (item) => {
     if (typeof item === 'string') {
       const name = clean(item, 30);
@@ -174,6 +196,9 @@ export function parseEgg(text: string): { ok: true; text: string } | { ok: false
       const o = extracted.value as Record<string, unknown>;
       const inner = clean(o.text ?? o.egg ?? o.content, EGG_MAX);
       if (inner.length > 0) return { ok: true, text: inner };
+      // 长得像 JSON 却取不到正文 ⇒ **拒绝**，不要把 JSON 原文当彩蛋（安全评审判 m-4）：
+      // 那会把 `{"error":"..."}` 之类的机器串写进图鉴，玩家看到的是一段乱码。
+      return { ok: false, reason: '返回的 JSON 里没有正文（text 字段）。' };
     }
   }
   const body = clean(

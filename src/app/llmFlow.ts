@@ -69,12 +69,24 @@ const EGG_SYSTEM = [
   '4. 语言克制、有文气，不堆砌形容词。',
 ].join('\n');
 
-/** 取"卡片正面样例"做上下文（最多 5 条，每条截断到 40 字——数据最小化）。 */
+/**
+ * 粘贴原文的长度上限（评审 m-3）：一次调用就是一次真实付费请求，几千字的长文既贵又慢，
+ * 而辅建卡的收益主要来自"精炼的笔记"。超出部分**截断并明确告知**（不静默丢）。
+ */
+export const PASTE_MAX = 4000;
+
+/** 按码点截断（与 core/llmParse 同一口径：`.slice` 会劈开代理对）。 */
+function clip(text: unknown, max: number): string {
+  const points = [...(typeof text === 'string' ? text : '')];
+  return points.length > max ? points.slice(0, max).join('') : points.join('');
+}
+
+/** 取"卡片正面样例"做上下文（最多 5 条，每条截断到 40 码点——数据最小化 + 码点安全）。 */
 function sampleLine(fronts: readonly string[] | undefined, max = 5): string {
   const list = Array.isArray(fronts) ? fronts.slice(0, max) : [];
   if (list.length === 0) return '';
   return `\n该领域已有卡片的正面样例（仅供体会风格，不要重复它们）：\n${list
-    .map((f) => `- ${String(f).slice(0, 40)}`)
+    .map((f) => `- ${clip(f, 40)}`)
     .join('\n')}`;
 }
 
@@ -85,7 +97,7 @@ export function buildCardPrompt(input: { text: string; deckName: string; max?: n
     { role: 'system', content: `${CARD_SYSTEM}\n7. 这次最多出 ${max} 张。` },
     {
       role: 'user',
-      content: `领域：${String(input.deckName ?? '').slice(0, 30)}\n\n${wrapUntrusted('资料', input.text)}`,
+      content: `领域：${clip(input.deckName, 30)}\n\n${wrapUntrusted('资料', clip(input.text, PASTE_MAX))}`,
     },
   ];
 }
@@ -95,7 +107,7 @@ export function buildNamePrompt(input: { deckName: string; sampleFronts?: readon
     { role: 'system', content: NAME_SYSTEM },
     {
       role: 'user',
-      content: `领域名：${String(input.deckName ?? '').slice(0, 30)}${sampleLine(input.sampleFronts)}`,
+      content: `领域名：${clip(input.deckName, 30)}${sampleLine(input.sampleFronts)}`,
     },
   ];
 }
@@ -105,7 +117,7 @@ export function buildEggPrompt(input: { deckName: string; sampleFronts?: readonl
     { role: 'system', content: EGG_SYSTEM },
     {
       role: 'user',
-      content: `领域名：${String(input.deckName ?? '').slice(0, 30)}${sampleLine(input.sampleFronts)}`,
+      content: `领域名：${clip(input.deckName, 30)}${sampleLine(input.sampleFronts)}`,
     },
   ];
 }

@@ -52,7 +52,10 @@ export interface CodexDeps {
    * AI 彩蛋生成（Plan 5 · T5；宿主接 `app/llmFlow.suggestEgg`）。缺省则隐藏该入口。
    * 它**只回文本**：写入仍要玩家点「用这段」→ `setEgg`。
    */
-  readonly llmEgg?: (deckName: string) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
+  readonly llmEgg?: (
+    deckName: string,
+    sampleFronts?: readonly string[],
+  ) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
   /** 彩蛋写口（宿主接 `app/codexFlow.setEggOnDeck`）。缺省则隐藏该入口。 */
   readonly setEgg?: (deckId: string, text: string) => Promise<{ ok: boolean; reason?: string }>;
   /** toast 存活毫秒（彩蛋回执用；测试给 0 免定时器）。 */
@@ -341,7 +344,12 @@ export function mountCodex(root: HTMLElement, ctrl: GameController, deps: CodexD
     clearPreview(); // 一次只留一份待确认产出（见 eggPreviewEl 的注释）
     render(ctrl.snapshot());
     try {
-      const res = await deps.llmEgg(deck?.name ?? '');
+      // 同 prepare：带上 ≤5 条正面样例（只正面，不发答案）
+      const cardFronts = (ctrl.snapshot().save.cards ?? [])
+        .filter((c) => c && c.deckId === deckId)
+        .slice(0, 5)
+        .map((c) => String(c.front ?? ''));
+      const res = await deps.llmEgg(deck?.name ?? '', cardFronts);
       if (destroyed || eggBusyDeckId !== deckId) return; // 屏已拆/已换目标：结果作废
       if (!res || res.ok !== true) {
         toast(res && typeof res.reason === 'string' && res.reason.length > 0 ? res.reason : 'AI 没能写出彩蛋。');

@@ -339,7 +339,7 @@ describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
     const { deps } = adapters({
       llm: {
         load: () => ({ baseUrl: 'https://api.deepseek.com', apiKey: 'sk-fake', model: 'deepseek-chat' }),
-        save: () => undefined,
+        save: () => true,
         clear: () => undefined,
         test: () => Promise.resolve({ ok: true, text: 'pong' }),
         presets: [],

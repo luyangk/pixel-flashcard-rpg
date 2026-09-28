@@ -189,6 +189,26 @@ describe('mountDecks —— AI 辅建卡', () => {
     expect(rig.addCalls).toEqual([]); // 三条路径都零写入
   });
 
+  it('DA#8 生成在途 → 取消 → 再放行响应：**候选不出现**、零写入（评审 M-1：代际令牌无用例）', async () => {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const rig = makeRig({ initial: { ok: true, value: [cand('f1', 'b1')], truncated: false }, gate });
+    click(ui(rig.root, 'llm-author-open'));
+    (ui(rig.root, 'llm-author-text') as HTMLTextAreaElement).value = '资料';
+    click(ui(rig.root, 'llm-author-run'));
+    click(ui(rig.root, 'llm-author-cancel')); // 玩家改主意了
+    expect(ui(rig.root, 'llm-author').hidden).toBe(true);
+
+    (release as unknown as () => void)(); // 响应这时才回来
+    await flushMicrotasks();
+    // 面板仍关着、候选一个都没有（删掉代际令牌守卫的实现会在这里红：幽灵候选 + 可能被误确认）
+    expect(ui(rig.root, 'llm-author').hidden).toBe(true);
+    expect(all(rig.root, '[data-candidate]')).toHaveLength(0);
+    expect(rig.addCalls).toEqual([]);
+  });
+
   it('DA#5 truncated:true ⇒ 状态行如实提示「已截断为前 N 条」', async () => {
     const rig = makeRig({ initial: { ok: true, value: [cand('f1', 'b1'), cand('f2', 'b2')], truncated: true } });
     await openAndGenerate(rig);

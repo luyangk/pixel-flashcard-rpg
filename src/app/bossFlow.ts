@@ -18,6 +18,7 @@
  */
 import type { Card, Deck, SaveFile } from '@core/types';
 import { MAX_TIME_MS } from '@core/saveMigrate';
+import { sanitizeExternalText } from '@core/llmParse';
 import { bossCheck } from '@core/deckBuild';
 import type { Coordinator } from './persist';
 
@@ -177,7 +178,11 @@ export const BOSS_NAME_MAX = 30;
  */
 export function normalizeBossName(raw: unknown, deckName: string): BossNameResult {
   const fallback = defaultBossName(deckName);
-  const text = typeof raw === 'string' ? raw.trim() : '';
+  // 过 core 的不可见字符黑名单（Plan 5 安全评审判 m-8）：称号由玩家手打或 AI 生成，
+  // 双向隔离符/零宽字符同样能让"屏上看着是 A、存档里是 B"。
+  // **只剥不可见字符、不在这里截断**：超长的处理归下面的长度闸门（回落默认 + ok:false），
+  // 理由是"截断"会静默改写玩家的命名，而"回落默认并告诉他一句"是 Plan 4 定下的口径。
+  const text = sanitizeExternalText(raw, Number.MAX_SAFE_INTEGER);
   if (text.length === 0) return { ok: false, name: fallback, reason: '称号是空的，先用默认的。' };
   if ([...text].length > BOSS_NAME_MAX) {
     return { ok: false, name: fallback, reason: `称号最多 ${BOSS_NAME_MAX} 个字，先用默认的。` };

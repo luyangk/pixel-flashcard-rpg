@@ -34,6 +34,7 @@ import {
 import { saveBeatCursor } from '../app/storyState';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
+import type { FetchLike, LlmConfig } from '../platform/llmTypes';
 import type { HostAdapters } from './hostTypes';
 
 export interface AssembleDeps {
@@ -63,6 +64,21 @@ export interface AssembleDeps {
    */
   readonly pickBackupText?: HostAdapters['pickBackupText'];
   readonly saveTextFile?: HostAdapters['saveTextFile'];
+  /**
+   * LLM 请求的 fetch 注入位（测试用）。存在的理由：**"每次调用现读配置"这条接缝
+   * 在单测里看不见**（测试注入假 chat），安全评审 M15 变异因此逃逸。有了它就能
+   * 直接断言"改完 Key 后下一次请求带的是新 Key"。
+   */
+  readonly llmFetchImpl?: FetchLike;
+  /**
+   * LLM 配置读写的注入位（缺省走 `platform/llmConfig`）。
+   * 存在的理由与 llmFetchImpl 相同：让"每次调用现读配置"这条接缝可被取证。
+   */
+  readonly llmConfigIo?: {
+    readonly load: () => LlmConfig;
+    readonly save: (cfg: LlmConfig) => boolean;
+    readonly clear: () => void;
+  };
   /**
    * AI 面覆盖位（Plan 5 · T4/T5；缺省走真实现：platform/llmConfig + llmHttp + app/llmFlow）。
    * 存在的理由与文件口覆盖位同款：装配链（设置屏的读写、三项 AI 职能的现读配置）要在测试里
@@ -124,8 +140,17 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
    * （测试注入的是假 chat），所以把理由写在这里而不是靠人记。
    */
   function boundChat(): ChatFn {
-    return (messages) => chat({ config: loadLlmConfig(), messages });
+    return (messages) => chat({ config: llmIo.load(), messages, fetchImpl: deps.llmFetchImpl });
   }
+
+  /** 配置读写端口（生产 = platform/llmConfig；测试可注入内存实现）。 */
+  const llmIo =
+    deps.llmConfigIo ??
+    ({
+      load: () => loadLlmConfig(),
+      save: (cfg) => saveLlmConfig(cfg),
+      clear: () => clearLlmConfig(),
+    } as const);
 
   const adapters: HostAdapters = {
     prologueScenes: deps.prologueScenes,
@@ -199,9 +224,9 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     llm:
       deps.llmOverride ??
       ({
-        load: () => loadLlmConfig(),
-        save: (cfg) => saveLlmConfig(cfg),
-        clear: () => clearLlmConfig(),
+        load: () => llmIo.load(),
+        save: (cfg) => llmIo.save(cfg),
+        clear: () => llmIo.clear(),
         // 「测试连接」= 一次最小请求：玩家点它就是想确认"地址 + Key + 模型"三者能打通，
         // 因此只发一条最短的 user 消息（不做别的职能的提示词——那会把测试变成一次内容生成）。
         test: (cfg) => chat({ config: cfg, messages: [{ role: 'user', content: 'ping' }] }),
@@ -210,8 +235,10 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     // 三项职能共用一个"每次调用现读配置"的 chat：玩家刚在设置页改完 Key，下一句就得用新的。
     // 绑定一次配置会让改动要等重启页面才生效（这是最容易漏的一条接缝）。
     llmCards: deps.llmCardsOverride ?? ((input) => suggestCards({ chat: boundChat() }, input)),
-    llmNames: deps.llmNamesOverride ?? ((deckName) => suggestBossNames({ chat: boundChat() }, { deckName })),
-    llmEgg: deps.llmEggOverride ?? ((deckName) => suggestEgg({ chat: boundChat() }, { deckName })),
+    llmNames:
+      deps.llmNamesOverride ??
+      ((deckName, sampleFronts) => suggestBossNames({ chat: boundChat() }, { deckName, sampleFronts })),
+    llmEgg: deps.llmEggOverride ?? ((deckName, sampleFronts) => suggestEgg({ chat: boundChat() }, { deckName, sampleFronts })),
     setEgg: deps.setEggOverride ?? ((deckId, text) => setEggOnDeck(coord, deckId, text)),
   };
 

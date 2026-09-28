@@ -19,7 +19,7 @@
  * 时间与随机一律不读：本模块零时钟、零 DOM（与 app 层同纪律）。
  */
 import type { Deck } from '@core/types';
-import { EGG_MAX } from '@core/llmParse';
+import { EGG_MAX, sanitizeExternalText } from '@core/llmParse';
 import type { Coordinator } from './persist';
 
 /** 写彩蛋的结果面：`reason` 是可直接上屏的大白话。 */
@@ -32,17 +32,15 @@ export interface SetEggResult {
 const READ_ONLY_EGG_REASON = '存档没法读取（只读保护中）：现在改不了彩蛋，你的存档原样保留。';
 
 /**
- * 控制字符与"看起来像空白但不显示"的字符（含零宽、方向控制符、BOM）——一律剥掉。
- * 与 `core/llmParse` 的 CONTROL_RE 同域：那里的产出直接喂到这里，两处不一致就会出现
- * "解析器放行、写口落盘让整包拒"的裂缝。（llmParse 的该常量为模块私有，故此处复刻；
- * 若将来要收敛成一处，应在 core 导出，而不是让写口依赖解析器的私有实现。）
+ * 消毒一段彩蛋正文：剥不可见字符 → 折叠空白 → 去首尾 → 按码点封顶。失败给可上屏 reason。
+ *
+ * **字符黑名单来自 `core/llmParse`（单一来源）**：首版这里复刻了一份正则，评审 I-1 指出
+ * 两处会一起漏掉双向隔离符等字符——"解析器放行、写口落盘"的裂缝就这么来的。
+ * 现在写口直接用 core 的实现，改一处即两处生效。
  */
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\ufeff]/g;
-
-/** 消毒一段彩蛋正文：剥控制字符 → 折叠空白 → 去首尾 → 封顶码点。失败给可上屏 reason。 */
 export function sanitizeEggText(raw: unknown): { ok: true; text: string } | { ok: false; reason: string } {
   if (typeof raw !== 'string') return { ok: false, reason: '彩蛋内容不对（不是一段文字）。' };
-  const collapsed = raw.replace(CONTROL_RE, ' ').replace(/[ \t\r\n]+/g, ' ').trim();
+  const collapsed = sanitizeExternalText(raw, Number.MAX_SAFE_INTEGER);
   if (collapsed.length === 0) return { ok: false, reason: '彩蛋是空的——先让 AI 写一段吧。' };
   const points = [...collapsed];
   if (points.length > EGG_MAX) {

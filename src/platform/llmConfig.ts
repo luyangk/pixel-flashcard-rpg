@@ -68,11 +68,15 @@ export function loadLlmConfig(storage?: Pick<Storage, 'getItem'>): LlmConfig {
   }
 }
 
-/** 写配置（写失败静默：隐私模式/配额满时"这次没记住"不该让设置页炸掉）。 */
-export function saveLlmConfig(cfg: LlmConfig, storage?: Pick<Storage, 'setItem'>): void {
+/**
+ * 写配置。返回**是否真的写进去了**：隐私模式/配额满时返回 false，
+ * 让设置屏能如实说"没能保存"而不是报"已保存"（安全评审判 m-2：首版静默吞掉写失败，
+ * 屏幕上却出现"已保存"，反馈自相矛盾）。永不抛。
+ */
+export function saveLlmConfig(cfg: LlmConfig, storage?: Pick<Storage, 'setItem'>): boolean {
   try {
     const store = storage ?? (typeof localStorage !== 'undefined' ? localStorage : null);
-    if (!store) return;
+    if (!store) return false;
     store.setItem(
       LLM_STORAGE_KEY,
       JSON.stringify({
@@ -81,8 +85,10 @@ export function saveLlmConfig(cfg: LlmConfig, storage?: Pick<Storage, 'setItem'>
         model: str(cfg?.model, DEFAULT_LLM_CONFIG.model) || DEFAULT_LLM_CONFIG.model,
       }),
     );
+    return true;
   } catch {
-    /* 存不下就算了：本模块的产物只影响"下次要重填"，不影响游戏本身 */
+    /* 存不下：调用方据此提示；本模块的产物只影响"下次要重填"，不影响游戏本身 */
+    return false;
   }
 }
 

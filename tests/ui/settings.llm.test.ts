@@ -31,7 +31,11 @@ const BASE: LlmConfig = { baseUrl: 'https://api.deepseek.com', apiKey: STORED_KE
 /** 假 LLM 配置读写口：内存一份配置 + 记录每次保存/测试的入参。 */
 function makeFakeLlm(
   initial: LlmConfig = BASE,
-  opts: { readonly testImpl?: (cfg: LlmConfig) => Promise<ChatResult> } = {},
+  opts: {
+    readonly testImpl?: (cfg: LlmConfig) => Promise<ChatResult>;
+    /** true = 模拟"写不进去"（隐私模式/配额满），用于验证设置屏如实提示。 */
+    readonly saveFails?: boolean;
+  } = {},
 ): {
   deps: LlmSettingsDeps;
   saved: LlmConfig[];
@@ -53,8 +57,10 @@ function makeFakeLlm(
     deps: {
       load: () => ({ ...cfg }),
       save: (next) => {
+        if (opts.saveFails === true) return false; // 模拟隐私模式/配额满
         cfg = { ...next };
         saved.push({ ...next });
+        return true;
       },
       clear: () => {
         cfg = { ...cfg, apiKey: '' };
@@ -140,6 +146,19 @@ describe('mountSettings —— AI 分组：注入面', () => {
     expect(keyInput.value).toBe('');
     expect(keyInput.placeholder).toBe(maskKey('sk-brand-new-key-9876'));
     expect(domLeaks(root, 'sk-brand-new-key-9876')).toEqual([]);
+  });
+
+  it('SL#7b 写失败（隐私模式/配额满）⇒ 如实提示"没能保存"，不报"已保存"（评审 m-2）', () => {
+    const fake = makeFakeLlm(BASE, { saveFails: true });
+    const root = mountWith(fake);
+    (ui(root, 'llm-key') as HTMLInputElement).value = 'sk-new';
+    click(ui(root, 'llm-save'));
+    const text = ui(root, 'toast').textContent ?? '';
+    expect(text).toContain('没能保存');
+    expect(text).not.toContain('已保存。');
+    expect(fake.saved).toHaveLength(0); // 确实一次都没写进去
+    // 写失败时输入框**保留玩家刚敲的 Key**（不然玩家会以为白敲了一遍）
+    expect((ui(root, 'llm-key') as HTMLInputElement).value).toBe('sk-new');
   });
 
   it('SL#4 预设只填地址与模型：不落盘、不碰已敲的 Key；「自定义」清空两者', () => {

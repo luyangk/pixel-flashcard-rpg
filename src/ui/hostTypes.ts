@@ -73,9 +73,18 @@ export interface HostAdapters {
   /** 卡组页「AI 辅建卡」（接 app/llmFlow.suggestCards）。 */
   readonly llmCards?: (input: { text: string; deckName: string; max?: number }) => Promise<ParseResult<CardCandidate>>;
   /** 备战屏「让 AI 起几个名」（接 app/llmFlow.suggestBossNames）。 */
-  readonly llmNames?: (deckName: string) => Promise<ParseResult<NameCandidate>>;
+  /**
+   * 称号建议。`sampleFronts` = 该领域 ≤5 条卡片正面（**只发正面，不发答案**）：
+   * PRD D38 承诺"发领域名 + ≤5 条卡面"，安全评审判 I-2 发现生产上从不传它
+   * （签名只有 deckName）⇒ 提示词拿不到任何领域材料、文档与实际不符。现已接上。
+   */
+  readonly llmNames?: (deckName: string, sampleFronts?: readonly string[]) => Promise<ParseResult<NameCandidate>>;
   /** 藏书阁「让 AI 写彩蛋」（接 app/llmFlow.suggestEgg）。 */
-  readonly llmEgg?: (deckName: string) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
+  /** 彩蛋生成（同样支持 ≤5 条卡面样例，理由见 llmNames）。 */
+  readonly llmEgg?: (
+    deckName: string,
+    sampleFronts?: readonly string[],
+  ) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>;
 
   /* 导入导出与抢救 */
   readonly exportBackup?: () => Promise<ExportAndMarkResult>;

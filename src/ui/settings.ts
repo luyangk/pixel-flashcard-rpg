@@ -34,8 +34,12 @@ import { showToast } from './toast';
 export interface LlmSettingsDeps {
   /** 读当前配置（Key 明文只在内存里过一手，绝不进 DOM）。 */
   readonly load: () => LlmConfig;
-  /** 写配置（宿主接 platform/llmConfig.saveLlmConfig）。 */
-  readonly save: (cfg: LlmConfig) => void;
+  /**
+   * 写配置（宿主接 `platform/llmConfig.saveLlmConfig`）。
+   * **返回是否真的写入**：浏览器隐私模式/配额满会写失败，设置屏要如实说"没能保存"
+   * 而不是报"已保存"（安全评审判 m-2）。
+   */
+  readonly save: (cfg: LlmConfig) => boolean;
   /** 清 Key（保留地址/模型）。 */
   readonly clear: () => void;
   /** 「测试连接」：发一次最小请求，reason 已是人话。 */
@@ -279,11 +283,18 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   }
 
   /** 当前输入框里的配置：Key 留空 ⇒ **沿用已存值**（留空不等于清空，清空要点「清除 Key」）。 */
+  /**
+   * 组装"当前输入框 + 已存值"的配置。**每次现读一次磁盘**（安全评审判 m-6）：
+   * 多标签页下另一个标签点了「清除 Key」时，本标签内存里的副本已过期；
+   * 不重读就会把已清除的 Key 复活。重读只在 Key 输入框为空时影响结果，代价可以忽略。
+   */
   function inputLlmConfig(): LlmConfig {
     const typed = llmKeyInput.value.trim();
+    // Key 留空 ⇒ 沿用"磁盘上当前那份"（现读，不用内存副本：见函数注释的 m-6 理由）
+    const onDisk = typed.length > 0 ? null : readStoredLlm();
     return {
       baseUrl: llmBaseInput.value,
-      apiKey: typed.length > 0 ? typed : storedLlm.apiKey,
+      apiKey: typed.length > 0 ? typed : (onDisk?.apiKey ?? storedLlm.apiKey),
       model: llmModelInput.value,
     };
   }
@@ -302,17 +313,24 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
 
   function onSaveLlm(): void {
     if (destroyed || llmBusy || !llmDeps) return;
+    let written = false;
     try {
-      llmDeps.save(inputLlmConfig());
+      written = llmDeps.save(inputLlmConfig()) === true;
     } catch (e) {
       toast(`没保存：${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    // 回读**真正存下的**那份（platform 侧会 trim 并对空地址/空模型回落默认值），
-    // 于是"屏幕上显示的 = 生效的"；Key 输入框同时清空，DOM 里不残留明文。
-    storedLlm = readStoredLlm();
-    applyStoredLlm();
-    toast('AI 设置已保存。');
+    if (written) {
+      // 回读**真正存下的**那份（platform 侧会 trim 并对空地址/空模型回落默认值），
+      // 于是"屏幕上显示的 = 生效的"；Key 输入框同时清空，DOM 里不残留明文。
+      storedLlm = readStoredLlm();
+      applyStoredLlm();
+      toast('AI 设置已保存。');
+      return;
+    }
+    // 写失败（隐私模式/配额满）：**不回读、不清空输入框、不改掩码**——玩家刚敲的 Key 必须留在框里
+    // （清掉他会以为已保存，下次打开发现要重填）；并如实说"没能保存"（安全评审判 m-2）。
+    toast('没能保存（浏览器可能禁用了本地存储）——请检查一下。');
   }
 
   async function onTestLlm(): Promise<void> {

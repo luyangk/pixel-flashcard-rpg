@@ -33,12 +33,20 @@ function collectTs(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-/** 读一组目录下全部 .ts 的**代码形态**（剥注释与字符串）。 */
-function codeOf(relDirs: readonly string[]): Array<{ file: string; code: string; raw: string }> {
+/**
+ * 读一组**路径**下全部 .ts 的代码形态（剥注释与字符串）。
+ *
+ * 路径既可以是目录（递归），也可以是单个文件——**根文件必须能单独点名**
+ * （安全评审判 I-4：首版只枚举 `src/core|app|ui|stage|platform` 这些子目录，
+ * 于是 `src/main.ts`（入口装配）根本不在任何一条判据里；在那里顺手加一个 fetch
+ * 或 localStorage 都不会被发现）。
+ */
+function codeOf(rels: readonly string[]): Array<{ file: string; code: string; raw: string }> {
   const out: Array<{ file: string; code: string; raw: string }> = [];
-  for (const rel of relDirs) {
-    const dir = join(ROOT, rel);
-    for (const abs of collectTs(dir)) {
+  for (const rel of rels) {
+    const p = join(ROOT, rel);
+    const files = statSync(p).isDirectory() ? collectTs(p) : [p];
+    for (const abs of files) {
       const raw = readFileSync(abs, 'utf8');
       out.push({ file: relative(ROOT, abs), code: stripComments(raw), raw });
     }
@@ -58,7 +66,7 @@ function regexHits(files: Array<{ file: string; code: string }>, re: RegExp): st
 
 describe('LLM 安全不变量', () => {
   it('LS#1 Key 不进存档：core（存档形状）与 app（写存档层）里没有 apiKey 的代码引用', () => {
-    const files = codeOf(['src/core', 'src/app']);
+    const files = codeOf(['src/core', 'src/app', 'src/main.ts']);
     expect(files.length).toBeGreaterThan(10);
     expect(hits(files, 'apiKey')).toEqual([]);
     // 也不该出现"把 Key 塞进 settings/save"这类旁路命名的痕迹
@@ -67,7 +75,7 @@ describe('LLM 安全不变量', () => {
   });
 
   it('LS#2 网络只在 platform：core/app/ui 里没有 fetch / XMLHttpRequest 这类网络标识符', () => {
-    const files = codeOf(['src/core', 'src/app', 'src/ui', 'src/stage']);
+    const files = codeOf(['src/core', 'src/app', 'src/ui', 'src/stage', 'src/main.ts']);
     expect(files.length).toBeGreaterThan(20);
     // 按**标识符**判（`fetch(` 这种字面写法挡不住 `typeof fetch` / `fetchImpl` 之外的别名）
     expect(regexHits(files, /\bfetch\b/)).toEqual([]);
@@ -80,7 +88,7 @@ describe('LLM 安全不变量', () => {
   });
 
   it('LS#3 Key 只经 llmConfig：localStorage 只出现在 platform（且只在 LLM 配置模块）', () => {
-    const files = codeOf(['src/core', 'src/app', 'src/ui', 'src/stage']);
+    const files = codeOf(['src/core', 'src/app', 'src/ui', 'src/stage', 'src/main.ts']);
     expect(hits(files, 'localStorage')).toEqual([]);
     expect(hits(files, 'sessionStorage')).toEqual([]);
 
@@ -107,6 +115,17 @@ describe('LLM 安全不变量', () => {
     }
   });
 
+  it('LS#4b Service Worker 不碰 Key：sw.js 里没有 apiKey/localStorage（它允许 fetch，那是它的职责）', () => {
+    const sw = readFileSync(join(ROOT, 'src/sw.js'), 'utf8');
+    const code = stripComments(sw);
+    expect(code).not.toContain('apiKey');
+    expect(code).not.toContain('localStorage');
+    expect(code).not.toContain('Authorization');
+    // 显式登记豁免：SW 必须用 fetch 才能做离线缓存——所以"网络只在 platform"这条不适用于它，
+    // 但"不碰密钥"这条适用于所有文件。写成断言而不是注释，免得下次有人以为漏扫了。
+    expect(/\bfetch\b/.test(code)).toBe(true);
+  });
+
   it('LS#5 判据有牙：真实违规样例会被同一套判据命中（不是空转的断言）', () => {
     const evil = [
       { file: 'src/app/evil.ts', code: stripComments("export const k = save.settings.apiKey;") },
@@ -120,21 +139,43 @@ describe('LLM 安全不变量', () => {
     expect(regexHits(innocent, /\bfetch\b/)).toEqual([]);
   });
 
-  it('LS#7 人审闸门：LLM 产出没有"自动入库"的旁路（UI 屏必须同时出现 sugg* 与写口调用）', () => {
+  it('LS#7 人审闸门（结构判据）：写口只出现在"确认"函数体里，生成函数体里不许出现写口', () => {
+    /**
+     * 安全评审判 M-3：首版此处只是 `toContain('加入卡库')` 这类**字符串存在性**检查——
+     * 把"生成后自动落库"真的做出来它照样绿（评审实测 M7b 全绿）。现在改为**函数边界**判据：
+     * 抽出生成函数体与确认函数体，断言写口只出现在后者。
+     * 真正的人审保证仍由行为用例守（DA#2/DA#4/PL#2/CX#LLM2…），这条只防结构性回归。
+     */
+    const bodyOf = (src: string, fnName: string): string => {
+      const start = src.indexOf(`function ${fnName}(`);
+      expect(start, `${fnName} 不存在`).toBeGreaterThanOrEqual(0);
+      const rest = src.slice(start + 1);
+      const nextIdx = rest.search(/\n  (?:async )?function /);
+      const body = nextIdx < 0 ? rest : rest.slice(0, nextIdx);
+      // 必须剥注释：下一个函数的 JSDoc 会提到写口名字（例如"`deps.setEgg` → …"），
+      // 不剥就会把注释命中当真（首版就是这么假红了一次）
+      return stripComments(body);
+    };
+
+    // 判据两层：①生成体里不出现写口；②生成体里也不去**调用确认流程**
+    // （只查 ① 会漏掉"生成完自动点确认"这种实现——评审 M7b 的形态，我实测过一次）
     const decks = readFileSync(join(ROOT, 'src/ui/decks.ts'), 'utf8');
+    const authorRun = bodyOf(decks, 'onAuthorRun');
+    expect(authorRun).not.toContain('deps.addCard');
+    expect(authorRun).not.toContain('onAuthorConfirm');
+    expect(bodyOf(decks, 'onAuthorConfirm')).toContain('deps.addCard');
+
     const prepare = readFileSync(join(ROOT, 'src/ui/prepare.ts'), 'utf8');
+    const askNames = bodyOf(prepare, 'onAskNames');
+    expect(askNames).not.toContain('deps.setBossName');
+    expect(askNames).not.toContain('confirmBossName');
+    expect(bodyOf(prepare, 'confirmBossName')).toContain('deps.setBossName');
+
     const codex = readFileSync(join(ROOT, 'src/ui/codex.ts'), 'utf8');
-    // 生成与写入必须是两个不同的动作（同一个函数里"生成完直接写"就会被这条抓住）
-    expect(decks).toContain('llmCards');
-    expect(decks).toContain('addCard');
-    expect(prepare).toContain('llmNames');
-    expect(prepare).toContain('setBossName');
-    expect(codex).toContain('llmEgg');
-    expect(codex).toContain('setEgg');
-    // 写入动作必须由**确认按钮**驱动：三个屏都要有明确的接受/确认类按钮文案
-    expect(decks).toContain('加入卡库');
-    expect(prepare).toContain('就用这个名字');
-    expect(codex).toContain('用这段');
+    const writeEgg = bodyOf(codex, 'onWriteEgg');
+    expect(writeEgg).not.toContain('deps.setEgg');
+    expect(writeEgg).not.toContain('onAcceptEgg');
+    expect(bodyOf(codex, 'onAcceptEgg')).toContain('deps.setEgg');
   });
 
   it('LS#6 计划文档与 UI 文案都如实说明 Key 的存放与代价（本地明文 + 不进备份）', () => {

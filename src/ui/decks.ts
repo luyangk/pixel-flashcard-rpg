@@ -440,6 +440,8 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
         class: 'candidate-input',
         type: 'text',
         placeholder: '正面',
+        // 与 core/llmParse 的 200 码点上限对齐（评审 m-7）：手打能超，但这里给个软约束
+        maxlength: '200',
       }) as HTMLInputElement;
       front.value = candidate.front;
       const back = h('input', {
@@ -447,6 +449,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
         class: 'candidate-input',
         type: 'text',
         placeholder: '背面',
+        maxlength: '200',
       }) as HTMLInputElement;
       back.value = candidate.back;
       // 标签是生成时算出来的分类（PRD §3 的主题筛选依据）：这里只读展示 + 挂在行上，

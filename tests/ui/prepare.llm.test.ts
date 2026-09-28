@@ -16,7 +16,7 @@ import type { SaveFile } from '@core/types';
 import type { NameCandidate, ParseResult } from '@core/llmParse';
 import { defaultBossName } from '../../src/app/bossFlow';
 import { mountPrepare, type PrepareDeps } from '../../src/ui/prepare';
-import { click, flushMicrotasks, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, makeSrs, ui } from './support';
+import { all, click, flushMicrotasks, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, makeSrs, ui } from './support';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -102,6 +102,25 @@ describe('mountPrepare —— AI 起名', () => {
     await flushMicrotasks();
     expect(rig.root.querySelectorAll('[data-name-candidate]')).toHaveLength(1);
     expect(ui(rig.root, 'boss-name-ai-status').textContent).toBe('');
+  });
+
+  it('PL#6 生成在途 → 关窗 → 再放行响应：候选不出现、不写入（评审 M-1）', async () => {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const rig = makeRig({
+      llmNames: () => gate.then(() => ({ ok: true as const, value: [cand('诗酒篇·卷灵')], truncated: false })),
+    });
+    openDialog(rig);
+    click(ui(rig.root, 'boss-name-ai'));
+    // 关窗（用「用默认称号」路径关掉，等同于玩家放弃这次起名）
+    click(ui(rig.root, 'boss-name-default'));
+    await flushMicrotasks();
+
+    (release as unknown as () => void)();
+    await flushMicrotasks();
+    expect(all(rig.root, '[data-name-candidate]')).toHaveLength(0); // 幽灵候选没出现
   });
 
   it('PL#2 点候选**只填输入框**：不调 setBossName、不开战', async () => {

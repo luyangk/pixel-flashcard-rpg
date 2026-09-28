@@ -21,6 +21,7 @@ import { createCoordinator } from '../../src/app/persist';
 import { createGameController } from '../../src/app/gameController';
 import type { GameController, GameIntent } from '../../src/app/controllerTypes';
 import { assembleHost } from '../../src/ui/hostAdapters';
+import type { LlmConfig } from '../../src/platform/llmTypes';
 import arcJson from '../../assets/narrative/arc.json';
 import beatsJson from '../../assets/narrative/beats.json';
 import eggsJson from '../../assets/narrative/eggs.json';
@@ -190,6 +191,62 @@ describe('assembleHost —— 导入链（R-T11-p4-b / R-T11-p4-c）', () => {
     expect(res?.reason ?? '').toContain('重新载入');
     expect(res?.reason ?? '').toContain('刷新页面');
     expect(notices.join('|')).toContain('重新载入'); // 屏上也要说一句（不是只改返回值）
+  });
+});
+
+describe('assembleHost —— LLM 接线（Key 与配置）', () => {
+  it('AD#7 宿主**每次调用现读配置**：改完 Key 后下一次请求就带新 Key（绑定一次的实现必红）', async () => {
+    const calls: Array<Record<string, string>> = [];
+    const fakeFetch = (async (_url: string | URL, init?: RequestInit) => {
+      calls.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response(JSON.stringify({ choices: [{ message: { content: '[]' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    // 内存版配置口：与生产同一条路径（assembleHost 的 llmConfigIo 注入位）
+    let current: LlmConfig = { baseUrl: 'https://a.example', apiKey: 'sk-FIRST', model: 'm1' };
+    const rig = await makeRig();
+    const assembly = assembleHost({
+      ctrl: rig.assembly.ctrl,
+      coord: rig.coord,
+      store: rig.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      llmFetchImpl: fakeFetch,
+      llmConfigIo: {
+        load: () => ({ ...current }),
+        save: (cfg) => {
+          current = { ...cfg };
+          return true;
+        },
+        clear: () => {
+          current = { ...current, apiKey: '' };
+        },
+      },
+    });
+
+    await assembly.adapters.llmCards?.({ text: '资料', deckName: '唐诗' });
+    current = { baseUrl: 'https://b.example', apiKey: 'sk-SECOND', model: 'm2' };
+    await assembly.adapters.llmCards?.({ text: '资料', deckName: '唐诗' });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].Authorization).toBe('Bearer sk-FIRST');
+    // 把 boundChat 里的 loadLlmConfig() 提到闭包外（绑定一次）⇒ 这里会是 FIRST，用例红
+    expect(calls[1].Authorization).toBe('Bearer sk-SECOND');
+    // 顺带钉"现读"对设置屏也成立（同一份 llmIo）
+    expect(assembly.adapters.llm?.load().apiKey).toBe('sk-SECOND');
   });
 });
 

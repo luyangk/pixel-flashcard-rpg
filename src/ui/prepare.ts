@@ -51,7 +51,7 @@ export interface PrepareDeps {
    * AI 起名（Plan 5 · T5；宿主接 `app/llmFlow.suggestBossNames`）。缺省则弹窗里不显示该入口。
    * 它**只回候选**：点候选只把名字填进输入框，入库仍走既有「就用这个名字」→ `setBossName`。
    */
-  readonly llmNames?: (deckName: string) => Promise<ParseResult<NameCandidate>>;
+  readonly llmNames?: (deckName: string, sampleFronts?: readonly string[]) => Promise<ParseResult<NameCandidate>>;
   /** toast 存活毫秒（称号回执用；测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -356,7 +356,13 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     bossNameAiStatusEl.textContent = '正在生成…';
     render(ctrl.snapshot());
     try {
-      const res = await deps.llmNames(deck?.name ?? '');
+      // 带上 ≤5 条卡片正面做样例（PRD D38 的"数据最小化"口径：只发正面、不发答案）。
+      // 安全评审判 I-2：此前宿主签名只有 deckName，于是提示词拿不到任何领域材料。
+      const cardFronts = (ctrl.snapshot().save.cards ?? [])
+        .filter((c) => c && c.deckId === deckId)
+        .slice(0, 5)
+        .map((c) => String(c.front ?? ''));
+      const res = await deps.llmNames(deck?.name ?? '', cardFronts);
       if (destroyed || token !== nameAiToken) return; // 已关窗/重开：结果作废（零写入）
       if (!res || res.ok !== true) {
         bossNameAiStatusEl.textContent =
@@ -403,6 +409,13 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     } finally {
       namingDeckId = null;
       pending = false;
+      // **关窗即作废在途的起名请求**（Plan 5 安全评审判 M-1）：否则响应晚到时会把候选
+      // 渲染进已经关掉（或已换目标）的弹窗——玩家下次开窗会看到上一个领域的幽灵候选。
+      // 开窗时也会 +1，两处共同保证"候选只属于当前这次开窗"。
+      nameAiToken += 1;
+      nameAiBusy = false;
+      bossNameAiStatusEl.textContent = '';
+      bossNameAiListEl.replaceChildren();
       if (!destroyed) render(ctrl.snapshot());
     }
     // 称号写失败不该拦住开局：卷灵称号只是叙事皮（存档里仍是默认模板），战斗照打。

@@ -17,7 +17,7 @@
  * 都**刻意不做**：本作只要短 JSON（最多 20 张卡），流式带来的复杂度远超收益；
  * 自动重试会在限流时雪上加霜，改由玩家自己再点一次。
  */
-import type { ChatMessage, ChatResult, LlmConfig } from './llmTypes';
+import type { ChatMessage, ChatResult, FetchLike, LlmConfig } from './llmTypes';
 
 /** 默认超时：手机网络下 30s 足够；到点就中止，绝不无限转圈。 */
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -26,7 +26,7 @@ export interface ChatDeps {
   readonly config: LlmConfig;
   readonly messages: readonly ChatMessage[];
   /** 注入位（测试用假 fetch；生产不传）。 */
-  readonly fetchImpl?: typeof fetch;
+  readonly fetchImpl?: FetchLike;
   readonly timeoutMs?: number;
   /** 外部中止信号（例如玩家离开页面）；与内部超时合并。 */
   readonly signal?: AbortSignal;
