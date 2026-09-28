@@ -26,8 +26,11 @@
  * ## 落盘语义（R-T4-p3-d）
  * recordRun 与 markExported 都在 mutate 之后用 `flush() && !dirty()` 收口：
  * 返回即"这次改动已在存储里"。flush() 的 true 只承诺"被认领的那批已写"，在途 mutate
- * 的那批还没写，故必须循环到 dirty() 归假（步数上限防并发自旋）。写失败（配额满等）
- * 不抛出：权威位与 dirty 由 coordinator 保持，退避窗会自然重试，调用方拿到的是记录本身。
+ * 的那批还没写，故必须循环到 dirty() 归假（步数上限防并发自旋）。**写失败（配额满等）
+ * 不抛出**：权威位与 dirty 由 coordinator 保持，退避窗会自然重试，调用方拿到的是记录本身。
+ * 唯一的例外是 **C-1 只读态**（存档载入不可迁移 ⇒ coordinator 闩锁只读）：此时 mutate
+ * 抛 `SaveReadOnlyError`，本函数随之抛出——"存档读不出来"必须让调用方看见，不能静默
+ * 当成"这局没记上"。Plan 4 UI 应先看 `coord.readOnly()` 再决定是否让用户继续打。
  *
  * 边界：榜单是**展示派生数据**——截 50（LEADERBOARD_LIMIT）后低分会被挤出榜外，
  * 此时 recordRun 仍返回这条记录（调用方可显示"本局 40 分，未进前 50"）。

@@ -27,11 +27,34 @@
  * Plan 3 · T7 增补：①种子档带上空榜 settings.leaderboard（与 migrateSave 为旧档补的
  * 缺省同形）；②`markExported(nowMs)` 是 meta.lastExportedAt（7 天备份提醒的唯一喂入位）
  * 的生产写入路径，自带 flushToClean 收口——"导出已记时"返回即已在存储里。
+ *
+ * ## 载入路径走 migrateSave（Final Fix Wave · C-1 Critical）
+ * 载入**不再裸 validateSave**：`store.load()` 有档时一律先过 `migrateSave`（补
+ * settings.battle / progress / leaderboard 的缺省），只在 migrateSave **抛错**（真正无法
+ * 迁移）时才 `onRecoverableLoadError` + 种子档接管。原实现直接 validateSave，而它对
+ * T3 起必填的 settings.progress 是"缺席整包拒"——于是"缺 progress 的旧档"被当成坏档，
+ * 种子档接管内存后**任何一次正常写**（markExported / settleAndRecord / recordRun）都会把
+ * 零值种子档写回 store，静默覆盖用户唯一副本（终审实测：1 卡 + plays=9 的旧档载入后
+ * cards=0，markExported 后 stored.cards=0 / stored.plays=0）。migrateSave 会补
+ * battle/progress/leaderboard 默认，但**不补 meta.lastExportedAt**（缺席=从未导出，保持）。
+ *
+ * ## 只读闩锁契约（Final Fix Wave · C-1；白纸黑字的本文件承诺）
+ * 载入失败且**无法迁移**（migrateSave 抛错，或 store.load 本身抛错——存储读不出时同样
+ * 不能假定它是空的）时，coordinator 进入**只读态**：内存由种子档接管（UI 还能开局），
+ * 但**绝不写回存储**——"存储原样保留"从注释里的承诺变成可测的事实。只读态下四个面
+ * 的拒绝形式（tests/app/persist.test.ts C1#3/C1#4 逐条钉住）：
+ * - `readOnly()` → **true**（UI 的判别位，据此提示"存档无法读取，请勿继续写"）；
+ * - `flush()` → **false**；`flushDetailed()` → `{ok:false, reason}`（收口面用失败位，不抛）；
+ * - 写入面 `mutate` / `settleAndRecord` / `markDirty()` → **抛 `SaveReadOnlyError`**
+ *   （fail-closed：写入企图必须显式失败，不得被静默忽略）；
+ * - `markExported(nowMs)` → **返回 false**（它的语义本就是"有没有记上"；M-2 的返回值面）。
+ * 非只读态下这些位一律不出现：`readOnly()` 恒 false，其余行为与既有契约逐字一致。
+ * 只读态是**终态**：本波不提供解锁入口（存储修好属于 UI/平台面，Plan 4 处理）。
  */
 
 import type { Card, SaveFile, Settings } from '@core/types';
 import type { GameStorage } from '@platform/storage';
-import { MAX_TIME_MS, validateSave } from '@core/saveMigrate';
+import { MAX_TIME_MS, migrateSave, validateSave } from '@core/saveMigrate';
 import type { SettleResult } from './growth';
 
 // ---------------------------------------------------------------------------
@@ -64,7 +87,7 @@ const MAX_FLUSH_ROUNDS = 5;
 export interface Coordinator {
   /** 对权威存档做一次可变更新并标脏；fn 可为 async，mutate 之间串行执行（无交错丢更新）。 */
   mutate(fn: (save: SaveFile) => void | Promise<void>): Promise<void>;
-  /** 立即落盘。true = 已写入或本就干净；false = 自检/写入失败（dirty 保持）。 */
+  /** 立即落盘。true = 已写入或本就干净；false = 自检/写入失败（dirty 保持）。只读态恒 false。 */
   flush(): Promise<boolean>;
   /** 是否有未落盘的改动。 */
   dirty(): boolean;
@@ -73,27 +96,62 @@ export interface Coordinator {
 
   // —— 以下为装配层扩展面（T5/T8 消费）——
 
-  /** 内部权威存档本体（受控可变视图：UI 层只读使用，改动须走 mutate/markDirty）。 */
+  /**
+   * 内部权威存档本体（受控可变视图：UI 层只读使用，改动须走 mutate/markDirty）。
+   *
+   * 【M-4 申报】返回的是**活对象**，且 `markDirty()` 是公开面——因此"绕过 mutate 直接改
+   * 权威档再标脏"在类型层是合法的。这条路径会**绕开 mutate 的 ensureDefaultDeck 引用闭合
+   * 兜底**（首张卡落地前补默认领域卡组），直改者必须自行保证 decks/cards 引用闭合，否则
+   * 落盘自检（validateSave）会整包拒。本波不收紧行为（SN#3b 依赖该路径取证）；本面
+   * **仅供测试/受控场景**，Plan 4 直改前须自行保证引用闭合，正常写入一律走 mutate。
+   */
   snapshot(): SaveFile;
-  /** 战斗结算落库编排点（M-2）：写回 cards、累加 progress.exp、plays+1。 */
+  /** 战斗结算落库编排点（M-2）：写回 cards、累加 progress.exp、plays+1。只读态抛 SaveReadOnlyError。 */
   settleAndRecord(result: SettleResult): Promise<void>;
-  /** 外部失控改过 snapshot() 后的显式标脏（正常路径不需要，SN#3b 测试用）。 */
+  /** 外部失控改过 snapshot() 后的显式标脏（正常路径不需要，SN#3b 测试用）。只读态抛 SaveReadOnlyError。 */
   markDirty(): void;
   /**
    * 记下"备份导出成功"的时刻（Plan 3 · T7，R-T5-p3-a）：写 `meta.lastExportedAt`
    * 并收口到"已持久"（flush() && !dirty() 语义，见 R-T4-p3-d）。
    *
    * 这是 7 天提醒闸门 backupReminderDue 的**唯一生产写入位**——没有它，闸门只能靠
-   * 调用方手工改 meta，7 天提醒就是一段死代码。非法时刻（非有限 / 负值）**不写**：
+   * 调用方手工改 meta，7 天提醒就是一段死代码。非法时刻（非有限 / 负值 / 超上界）**不写**：
    * fail-closed 不把脏值放进权威位（脏值会让落盘自检整包失败，连累所有其它改动），
    * 而闸门对缺席/坏值本就 fail-open（宁可多提醒一次），两者方向一致。
+   *
+   * **返回值（M-2）**：true = 已记上**且**收口到落净（存储里确实有了）；false = 没记
+   * （非法时刻 / 只读态）或没落净（写失败，dirty 保持、退避窗会重试）。原实现是
+   * `Promise<void>`：`flushToClean` 的返回值被吞掉，"返回即已持久"成了假承诺——
+   * 导出编排（transfer.exportAndMark）正是靠这一位判定"能不能算导出完成"。
    */
-  markExported(nowMs: number): Promise<void>;
+  markExported(nowMs: number): Promise<boolean>;
   /** flush 的详细结果面（boolean 面由 `=== true` 比较即可判别）。 */
   flushDetailed(): Promise<FlushResult>;
+  /**
+   * 只读态判别位（Final Fix Wave · C-1）：true = 载入时存档无法迁移/无法读取，内存由
+   * 种子档接管且**所有写入面被闩锁拒绝**（见文件头"只读闩锁契约"）。UI 据此提示
+   * "存档无法读取，请勿继续写"并给用户手动导出/抢救的出口。正常存档恒 false。
+   */
+  readOnly(): boolean;
 }
 
 export type FlushResult = { ok: true } | { ok: false; reason: string };
+
+/** 只读态的拒绝文案（flush 的失败位与 SaveReadOnlyError 共用同一句话，口径单一）。 */
+export const READ_ONLY_REASON =
+  '存档无法读取（已进入只读保护）：本次改动没有写入存储，你的存档原样保留。';
+
+/**
+ * 只读态下写入面被拒时抛出的错误（C-1 契约的显式失败面）。
+ * 用独立类型而非裸 Error：调用方（Plan 4 UI）可 `instanceof` 分流——"存档读不出来"
+ * 与"业务回调自己抛错"是两回事，前者要提示勿继续写，后者要修 bug。
+ */
+export class SaveReadOnlyError extends Error {
+  constructor(action?: string) {
+    super(action === undefined ? READ_ONLY_REASON : `${READ_ONLY_REASON}（被拒操作：${action}）`);
+    this.name = 'SaveReadOnlyError';
+  }
+}
 
 export interface CoordinatorOptions {
   /** 时钟注入点（生产传 platform/clock.now；测试传 fake 时钟）。coordinator 自身绝不读钟。 */
@@ -103,8 +161,9 @@ export interface CoordinatorOptions {
   /** debounce 窗长。默认 500。 */
   debounceMs?: number;
   /**
-   * 存储里的档过不了 validateSave 时的回调（reason 为大白话素材，UI 层决定文案）。
-   * 裁决：坏档**不回写**——种子档接管内存，但存储原样保留，给用户手动导出抢救留路。
+   * 存储里的档过不了**迁移 + 校验**时的回调（reason 为大白话素材，UI 层决定文案）。
+   * 裁决：坏档**不回写**——种子档接管内存，coordinator 同时进入只读态（readOnly()===true），
+   * 存储原样保留，给用户手动导出抢救留路。见文件头"只读闩锁契约"。
    */
   onRecoverableLoadError?: (reason: string) => void;
 }
@@ -201,25 +260,33 @@ export async function createCoordinator(
     ? opts.debounceMs
     : DEFAULT_DEBOUNCE_MS;
 
-  // —— 初始态：load() 优先；null → 种子档；坏档 → 种子档接管但不回写 ——
+  // —— 初始态：load() 优先；null → 种子档；**不可迁移/不可读 → 种子档接管 + 只读闩锁** ——
+  // 只读闩锁（C-1）：一旦置位就是终态（本波不提供解锁面），所有写入面据此拒绝。
+  let readOnly = false;
   let save: SaveFile;
   try {
     const loaded = await store.load();
     if (loaded === null) {
       save = seedSave(now());
     } else {
-      const validated = validateSave(loaded);
-      if (validated.ok) {
-        save = validated.save;
-      } else {
-        opts.onRecoverableLoadError?.(validated.reason);
+      // C-1：载入必须过 migrateSave——它对 T3 前的旧形状档补 settings.battle/progress 与
+      // T7 前的 leaderboard 缺省，是"旧档还能开局"的唯一入口。裸 validateSave 会把缺
+      // progress 的旧档整包拒，种子档接管后再被下一次写覆盖（用户唯一副本静默蒸发）。
+      // migrateSave 对已合法新档是同引用透传，故新旧档共用一条路径、无需版本分支。
+      try {
+        save = migrateSave(loaded);
+      } catch (e) {
+        opts.onRecoverableLoadError?.(describeError(e));
         save = seedSave(now());
+        readOnly = true;
       }
     }
   } catch (e) {
-    // load 抛错（IDB 权限突变等）：按空档处理，UI 可经 kind/后续 flush 失败感知
+    // load 抛错（IDB 权限突变等）：**不能按空档处理**——存储读不出来不等于它是空的，
+    // 此时写种子档同样会覆盖用户副本。故同样进只读态，UI 可经 readOnly()/flush 失败感知。
     opts.onRecoverableLoadError?.(`读取存档失败：${describeError(e)}`);
     save = seedSave(now());
+    readOnly = true;
   }
 
   // 攒批硬上界锚点：本批脏数据"首次被排窗"的时刻。maxBatch 的语义是"脏数据悬着的
@@ -314,6 +381,9 @@ export async function createCoordinator(
 
   /** 真正的落盘动作：clone → validate → store.save，全失败面收敛为 {ok:false,reason}。 */
   async function performFlush(): Promise<FlushResult> {
+    // C-1 只读闩锁的第一道闸（flushDetailed 里还有一道，此处是纵深防御）：
+    // 只读态下 store 一个字节都不许动。
+    if (readOnly) return { ok: false, reason: READ_ONLY_REASON };
     if (!dirty) return { ok: true };
     // 快照自检（N-5 推广）：structuredClone 既隔离外部 mutate，也顺带把
     // 不可克隆成员（函数/类实例）炸出来——clone 失败即内容失控，拒绝落盘。
@@ -368,6 +438,10 @@ export async function createCoordinator(
 
   async function flushDetailed(): Promise<FlushResult> {
     clearTimer();
+    // C-1 只读闩锁**必须先于 `!dirty` 早返回**：只读态下 dirty 恒 false，若把这条检查
+    // 放在后面，flush() 会返回 true——对一个不许写的档谎报"已持久"，正是本闩锁要消灭的
+    // 那类假承诺。契约：只读态 flush() 恒 false。
+    if (readOnly) return { ok: false, reason: READ_ONLY_REASON };
     // 并发合流：同一时刻多个 flush 请求共享同一次写（FL#3）——合流的含义是
     // "已被认领的那一批只写一次"。performFlush 在首个 await 前同步取快照并同步清脏
     // （C1 的认领时机），故合流期间新到达的 mutate 不属于本次写，它自己会重新标脏
@@ -400,7 +474,16 @@ export async function createCoordinator(
   }
 
   async function mutate(fn: (save: SaveFile) => void | Promise<void>): Promise<void> {
+    // C-1 只读闩锁：写入企图必须显式失败（fail-closed），不得被静默忽略——
+    // 静默忽略会让 UI 以为"这局打完了、进度记上了"，而存储其实不许写。
+    if (readOnly) throw new SaveReadOnlyError('mutate');
     const run = queueTail.then(async () => {
+      // 【M-3 申报】本函数**无原子性**：fn 若在中途抛错，已经做的那部分改动留在内存里
+      // （不回滚），但走不到下面的标脏 ⇒ 该改动此刻不承诺持久。之所以不为此标脏：
+      // 落盘是**整包**写，下一次任何成功落盘都会把当前内存全量写进 store，那批改动
+      // 顺带落盘，不会丢；而在"fn 抛错"这条纯失败路径上多标一次脏，只会把一次失败的
+      // 读也变成一次无谓的写入（耗电/配额），换来的是零额外安全。调用方若要求
+      // "要么全成、要么不写"，须自行在 fn 内先算后一次性赋值。
       await fn(save);
       // 引用闭合兜底：卡进了档、deck 还没影 ⇒ 补默认领域卡组（validateSave 前置）。
       if (Array.isArray(save.cards) && save.cards.length > 0) ensureDefaultDeck(save);
@@ -421,6 +504,8 @@ export async function createCoordinator(
    * "打过一局"与胜负无关，PRD 的游玩计数即此口径。
    */
   async function settleAndRecord(result: SettleResult): Promise<void> {
+    // C-1 只读闩锁：显式带操作名抛错（比让 mutate 代抛更好定位——"结算是被什么挡下的"）
+    if (readOnly) throw new SaveReadOnlyError('settleAndRecord');
     const nextCards = Array.isArray(result?.cards) ? sanitizeCards(result.cards) : null;
     const gained = nonNegOr0(result?.exp);
     await mutate((s) => {
@@ -453,15 +538,20 @@ export async function createCoordinator(
    * 之后每次落盘自检整包失败 ⇒ dirty 恒 true、`flush()` 恒 false，**无关改动也永久写不进去**
    * （自检失败不走退避自愈路径）。这正是此处注释自称要防的"毒化整包自检、拖住无关改动"，
    * 漏掉的恰是上界那一条。而闸门对"缺席"本就 fail-open（提醒照响），代价只是多提醒一次。
+   *
+   * M-2：返回"有没有记上**并落净**"——原实现吞掉 flushToClean 的返回值却承诺
+   * "返回即已持久"，导出编排无从判定导出是否真的完成。
    */
-  async function markExported(nowMs: number): Promise<void> {
+  async function markExported(nowMs: number): Promise<boolean> {
+    // C-1 只读态：用失败位而非抛错（本函数的语义就是"有没有记上"）。
+    if (readOnly) return false;
     if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || nowMs < 0 || nowMs > MAX_TIME_MS) {
-      return;
+      return false;
     }
     await mutate((s) => {
       s.meta.lastExportedAt = nowMs;
     });
-    await flushToClean();
+    return flushToClean();
   }
 
   return {
@@ -472,10 +562,13 @@ export async function createCoordinator(
     snapshot: () => save,
     settleAndRecord,
     markDirty: () => {
+      // C-1：标脏也是写入面（它会让下一次窗写存储），只读态一律拒绝。
+      if (readOnly) throw new SaveReadOnlyError('markDirty');
       dirty = true;
       armWindow();
     },
     markExported,
     flushDetailed,
+    readOnly: () => readOnly,
   };
 }

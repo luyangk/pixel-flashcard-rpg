@@ -31,7 +31,13 @@ import { createMemoryStorage } from '@platform/memoryStore';
 import { startFight, answerCurrent, type FightView } from '../../src/app/battleFlow';
 import { levelFromExp, playerStatsFor, settleFight } from '../../src/app/growth';
 import type { FlushResult } from '../../src/app/persist';
-import { createCoordinator, DEFAULT_DEBOUNCE_MS, DEFAULT_MAX_BATCH_MS, type Coordinator } from '../../src/app/persist';
+import {
+  createCoordinator,
+  DEFAULT_DEBOUNCE_MS,
+  DEFAULT_MAX_BATCH_MS,
+  SaveReadOnlyError,
+  type Coordinator,
+} from '../../src/app/persist';
 
 // —— 仿真锚点：全部时间由测试显式注入，coordinator 不读时钟 ——
 const NOW = Date.UTC(2026, 9, 26, 4, 0, 0); // tz=+480 → 本地日键 2026-10-26
@@ -224,12 +230,18 @@ describe('createCoordinator 初始态 —— load 优先 / null 走种子档', (
   it('PC#3 已有存档 → 以存储内容初始化（非种子），progress 缺席时补默认而非拒绝', async () => {
     const clock = useFakeClock(NOW);
     const seeded = makeSave([makeCard('x1')], { meta: { savedAt: NOW - 500, plays: 7 } });
+    // M-1：夹具必须**真删** progress——标题承诺的是"迁移路径"，而 makeSave 自带合法
+    // progress 时这条用例只走"已合法新档"分支，迁移承诺无人覆盖（C-1 的根因正由此漏网）。
+    delete (seeded.settings as { progress?: unknown }).progress;
     const inner = createMemoryStorage();
     await seedStore(inner, seeded);
     const coord = await createCoordinator(inner, { now: clock.now });
     expect(coord.snapshot().cards.map((c) => c.id)).toEqual(['x1']);
     expect(coord.snapshot().meta.plays).toBe(7);
+    expect(coord.snapshot().settings.progress).toEqual({ exp: 0 }); // migrateSave 补的默认
+    expect(coord.readOnly()).toBe(false); // 旧档可迁移 ⇒ 不是只读态
     expect(coord.dirty()).toBe(false);
+    expect(validateSave(coord.snapshot()).ok).toBe(true);
   });
 
   it('PC#4 存储里是畸形档（schemaVersion 2）→ 拒绝覆盖灾难：回落种子档并给出 reason', async () => {
@@ -252,6 +264,152 @@ describe('createCoordinator 初始态 —— load 优先 / null 走种子档', (
     expect(coord.snapshot().cards).toEqual([]);
     // 关键：不把种子档静默刷回存储——那会毁掉用户唯一的数据副本
     expect(await inner.load()).not.toEqual(coord.snapshot());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final Fix Wave · C-1 —— 载入路径走 migrateSave + 只读闩锁
+// ---------------------------------------------------------------------------
+
+/**
+ * 旧形状档（T3 前，缺 `settings.progress`）：造一份合法档后**真删** progress。
+ * 这是 C-1 的复现夹具——载入路径不走 migrateSave 时它会被当成坏档整包拒
+ * （validateSave 对 progress 是"缺席整包拒"）。
+ */
+function legacySaveWithoutProgress(cards: Card[], plays: number, savedAt = NOW - 500): SaveFile {
+  const save = makeSave(cards, { meta: { savedAt, plays } });
+  delete (save.settings as { progress?: unknown }).progress;
+  return save;
+}
+
+describe('Final Fix Wave · C-1（终审 Critical）—— 载入走 migrateSave + 只读闩锁', () => {
+  it('C1#1 真缺 progress 的旧档（1 卡 + plays=9）载入：cards/plays 保留，store 逐字节不变', async () => {
+    const clock = useFakeClock(NOW);
+    const inner = createMemoryStorage();
+    const legacy = legacySaveWithoutProgress([makeCard('legacy-1')], 9);
+    await seedStore(inner, legacy);
+    const before = JSON.stringify(await inner.load());
+
+    const coord = await createCoordinator(inner, { now: clock.now });
+
+    // 修复前：validateSave 整包拒 ⇒ 种子档接管 ⇒ live.cards=0 / live.plays=0（用户的档当场"消失"）
+    expect(coord.snapshot().cards.map((c) => c.id)).toEqual(['legacy-1']);
+    expect(coord.snapshot().meta.plays).toBe(9);
+    expect(coord.snapshot().settings.progress).toEqual({ exp: 0 }); // migrateSave 补默认，不是丢档
+    expect(coord.readOnly()).toBe(false); // 可迁移 ⇒ 正常可写
+    expect(coord.dirty()).toBe(false);
+    // 载入本身不写存储（RF#2：store 里永远只有"某次成功 flush 的完整快照"）
+    expect(JSON.stringify(await inner.load())).toBe(before);
+  });
+
+  it('C1#2 旧档载入后的"下一次写"只把用户数据写回去（修复前：种子档覆盖 → cards=0/plays=0）', async () => {
+    const clock = useFakeClock(NOW);
+    const inner = createMemoryStorage();
+    await seedStore(inner, legacySaveWithoutProgress([makeCard('legacy-1')], 9));
+    const coord = await createCoordinator(inner, { now: clock.now });
+
+    expect(await coord.markExported(clock.now())).toBe(true);
+    const stored = (await inner.load())!;
+    expect(stored.cards.map((c) => c.id)).toEqual(['legacy-1']); // 修复前 []
+    expect(stored.meta.plays).toBe(9); // 修复前 0
+    expect(stored.meta.lastExportedAt).toBe(clock.now());
+  });
+
+  it('C1#3 不可恢复坏档（schemaVersion:2）→ 种子档接管 + readOnly 闩锁 + store 逐字节不变', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save({ schemaVersion: 2 } as unknown as SaveFile);
+    const before = JSON.stringify(await raw.load());
+    const { store, saves } = wrapStore(raw);
+
+    const coord = await createCoordinator(store, { now: clock.now });
+
+    // ① 判别位：UI 据此提示"存档无法读取，请勿继续写"
+    expect(coord.readOnly()).toBe(true);
+    // ② 种子档接管内存（UI 还能开局），但**绝不写回**
+    expect(coord.snapshot().cards).toEqual([]);
+    expect(coord.dirty()).toBe(false);
+    expect(coord.lastSavedAt()).toBeNull();
+    // ③ 收口面用失败位（不是抛错）：flush()===false / flushDetailed 带 reason
+    expect(await coord.flush()).toBe(false);
+    const detailed = await coord.flushDetailed();
+    expect(detailed.ok).toBe(false);
+    expect(reasonOf(detailed)).toContain('只读');
+    // ④ 写入面一律 fail-closed 抛 SaveReadOnlyError（mutate / settleAndRecord / markDirty）
+    await expect(coord.mutate((s) => { s.meta.plays = 1; })).rejects.toBeInstanceOf(SaveReadOnlyError);
+    await expect(coord.settleAndRecord({ cards: [makeCard('nope')], exp: 5, won: true })).rejects.toBeInstanceOf(SaveReadOnlyError);
+    expect(() => coord.markDirty()).toThrow(SaveReadOnlyError);
+    // ⑤ markExported 用失败位（它的语义本就是"有没有记上"）
+    expect(await coord.markExported(clock.now())).toBe(false);
+
+    // ⑥ 悬着的窗口走完也不写（"存储原样保留"从承诺变成事实）
+    clock.tick(DEFAULT_MAX_BATCH_MS + DEFAULT_DEBOUNCE_MS + 1);
+    await drainMicrotasks();
+    expect(saves()).toBe(0);
+    expect(JSON.stringify(await raw.load())).toBe(before); // 逐字节不变（含 schemaVersion:2 原档）
+    expect(coord.dirty()).toBe(false);
+  });
+
+  it('C1#4 load() 抛错（存储读不出）同样进只读态：不写入、不假装成功', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save(legacySaveWithoutProgress([makeCard('survivor')], 3));
+    const before = JSON.stringify(await raw.load());
+    const store: GameStorage = {
+      kind: raw.kind,
+      load: () => Promise.reject(new Error('IDB 权限突变')),
+      save: (f) => raw.save(f),
+      clear: () => raw.clear(),
+    };
+    const reported: string[] = [];
+    const coord = await createCoordinator(store, {
+      now: clock.now,
+      onRecoverableLoadError: (r) => reported.push(r),
+    });
+    expect(reported.length).toBe(1);
+    expect(coord.readOnly()).toBe(true);
+    expect(await coord.flush()).toBe(false);
+    expect(JSON.stringify(await raw.load())).toBe(before);
+  });
+
+  it('C1#5 正常存档不受只读闩锁波及：readOnly()===false，写入面照旧', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save(makeSave([makeCard('ok-1')]));
+    const coord = await createCoordinator(raw, { now: clock.now });
+    expect(coord.readOnly()).toBe(false);
+    await coord.mutate((s) => { s.meta.plays = 4; });
+    expect(await coord.flush()).toBe(true);
+    expect((await raw.load())!.meta.plays).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final Fix Wave · M-2 —— markExported 的返回值是"有没有记上并落净"
+// ---------------------------------------------------------------------------
+
+describe('Final Fix Wave · M-2 —— markExported 不再吞掉收口结果', () => {
+  it('M2#1 收口失败（配额满）⇒ 返回 false，脏位保留待退避重试', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save(makeSave([makeCard('a1')]));
+    const coord = await createCoordinator(failingStore(raw), { now: clock.now });
+
+    expect(await coord.markExported(clock.now())).toBe(false);
+    // 权威位里有值，但"已持久"的承诺没兑现 ⇒ dirty 必须留着（Q#4 的退避窗接着兜）
+    expect(coord.snapshot().meta.lastExportedAt).toBe(NOW);
+    expect(coord.dirty()).toBe(true);
+  });
+
+  it('M2#2 成功路径返回 true，且此刻确实已在存储里', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save(makeSave([makeCard('a1')]));
+    const coord = await createCoordinator(raw, { now: clock.now });
+
+    expect(await coord.markExported(NOW)).toBe(true);
+    expect(coord.dirty()).toBe(false);
+    expect((await raw.load())!.meta.lastExportedAt).toBe(NOW);
   });
 });
 
@@ -1052,6 +1210,10 @@ describe('Coordinator 契约面 —— brief Produces 逐字对齐', () => {
     const revived = await createCoordinator(raw, { now: clock.now });
     const expected = makeSave(library);
     expected.settings.progress.exp = 42;
+    // C-1 起载入走 migrateSave：存储里的档缺 settings.leaderboard（T7 前形状）时补 []。
+    // 夹具 makeSave 不带该字段，故期望值必须显式带上这条迁移默认——这不是新行为，
+    // 而是"载入路径与 parseBackup 同规格"的可见结果。
+    expected.settings.leaderboard = [];
     expected.meta = { savedAt: NOW, plays: 3 };
     expect(revived.snapshot()).toEqual(expected);
   });
