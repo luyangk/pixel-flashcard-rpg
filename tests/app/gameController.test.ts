@@ -277,7 +277,7 @@ describe('gameController —— 只读态（D29 数据源）', () => {
   function makeReadOnlyFake(cards: Card[]): { coord: Coordinator; writes: () => number } {
     let writes = 0;
     // 启动即"看起来可写"（readOnly()===false），只有真正写入时才暴露只读。
-    let roActive = (): boolean => false;
+    const roActive = (): boolean => false;
     const save = makeSave(cards);
     const throwRO = (): never => {
       const e = new Error('存档不可写（只读态测试夹具）');
@@ -320,8 +320,7 @@ describe('gameController —— 只读态（D29 数据源）', () => {
     expect(snap.screen).toBe('result');
     expect(snap.readOnly).toBe(true);
     expect(snap.notice).toBe('存档无法读取，本次进度不会保存。');
-    // ② 写路径被 guardedWrite 的只读早退拦住（未触及 coordinator 写面）……或抛后被捕获；
-    //    两种实现都合规，故这里只钉"数据零变化"这一唯一硬事实。
+    // ② catch 分支确实执行过（writes 恰 1，见下），且业务数据零变化（夹具的存档未被改）。
     expect(snap.lastResult?.won).toBe(true); // 结算摘要仍产出（内存态可玩）
     expect(coord.snapshot().settings.progress.exp).toBe(0);
     expect(coord.snapshot().settings.leaderboard ?? []).toHaveLength(0);

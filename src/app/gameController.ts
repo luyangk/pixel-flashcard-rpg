@@ -44,7 +44,7 @@ export interface GameControllerDeps {
   readonly now: () => number;
   /** 本地时区偏移分钟（UTC+8 → +480，R-T4-a 约定）。 */
   readonly tzOffsetMin: number;
-  /** 存档载入时是否已处于只读态（migrateSave 不可恢复失败的场景由 coordinator 判定）。 */
+  /** 提示文案覆盖位（可选）：readOnly=只读保护提示，saveFailed=写入失败提示。 */
   readonly noticeText?: { readonly readOnly: string; readonly saveFailed: string };
 }
 
