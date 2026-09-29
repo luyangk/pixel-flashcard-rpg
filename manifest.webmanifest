@@ -9,7 +9,27 @@
   "background_color": "#0b0e14",
   "theme_color": "#10141c",
   "icons": [
-    { "src": "./assets/sprites/hero.png", "sizes": "32x32", "type": "image/png", "purpose": "any" },
-    { "src": "./assets/sprites/boss-1.png", "sizes": "64x64", "type": "image/png", "purpose": "any" }
-  ]
+    {
+      "src": "./assets/sprites/hero.png",
+      "sizes": "32x32",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/sprites/boss-1.png",
+      "sizes": "64x64",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "share_title",
+      "text": "share_text",
+      "url": "share_url"
+    }
+  }
 }

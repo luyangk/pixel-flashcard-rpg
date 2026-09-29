@@ -132,3 +132,21 @@ describe('构建与注册配置', () => {
     expect(wf).toContain('id-token: write');
   });
 });
+
+/**
+ * Plan 8 · T8：`share_target` 的**参数名必须与解析器逐字一致** —— 改名一侧不改另一侧，
+ * 手机上"分享进来"就会静默失效（而且不报错，最难查）。
+ */
+describe('manifest.webmanifest —— 分享进来（share_target）', () => {
+  const manifest = JSON.parse(read('manifest.webmanifest')) as {
+    share_target?: { action?: string; method?: string; params?: Record<string, string> };
+  };
+
+  it('PWA#8 share_target 是 GET 到 start_url，且参数名与 parseShareQuery 一致', () => {
+    const st = manifest.share_target;
+    expect(st, '缺 share_target ⇒ 手机上分享不到这个 App').toBeTruthy();
+    expect(st?.method).toBe('GET');
+    expect(st?.action).toBe('./'); // 与 start_url 同形（相对路径，Pages 子路径下也对）
+    expect(st?.params).toEqual({ title: 'share_title', text: 'share_text', url: 'share_url' });
+  });
+});
