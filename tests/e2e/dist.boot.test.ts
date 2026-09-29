@@ -406,6 +406,43 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     }
   }, 40_000);
 
+  it('DB#11 产物里的「关于」显示真实构建版本（vite define 漏了 ⇒ 只会是 dev）', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    expect(click('[data-nav="settings"]'), '菜单里没有「设置」入口').toBe(true);
+    await settle();
+
+    // ① 关于组在（hostAdapters 漏接 pwa 口 ⇒ 整组 hidden）
+    expect(q('[data-ui="pwa-group"]')?.hidden, '关于组没显示（pwa 口漏透传）').toBe(false);
+    // ② 版本号是**构建期注入的真实戳**（13 位毫秒），不是占位的 'dev'
+    const version = q('[data-ui="pwa-version"]')?.textContent ?? '';
+    expect(version, `版本行没拿到构建戳：${version}`).toMatch(/\d{13}/);
+    expect(version).not.toContain('dev');
+    // ③ 「检查更新」在；「立即更新」默认藏着（没查过就不该出现）
+    expect(q('[data-ui="pwa-check"]')?.hidden).toBe(false);
+    expect(q('[data-ui="pwa-apply"]')?.hidden, '默认就露出「立即更新」= 给了一个会白刷的按钮').toBe(true);
+
+    // 收尾：回菜单
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+  }, 30_000);
+
   it('DB#5 产物里「重置存档」真的能清档重装（main.ts 漏传 presetContent ⇒ 整组不显示）', async () => {
     const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
     const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;

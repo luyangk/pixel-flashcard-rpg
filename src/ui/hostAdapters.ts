@@ -24,6 +24,7 @@ import { digestHtml } from '../platform/htmlDigest';
 import { clearInbox, loadInbox, saveInbox } from '../platform/inboxStore';
 import { fetchSourceItems } from '../platform/feedFetch';
 import { loadSources, saveSources } from '../platform/sourceStore';
+import { checkForUpdate, pageBuild, reloadPage } from '../platform/pwaUpdate';
 import { fetchPage, type PageFetchResult } from '../platform/pageFetch';
 import { bossFightParams, setBossName } from '../app/bossFlow';
 import { setEggOnDeck } from '../app/codexFlow';
@@ -121,6 +122,8 @@ export interface AssembleDeps {
   readonly inboxOverride?: HostAdapters['inbox'];
   /** 来源库口径（测试用；生产接 platform/feedFetch + platform/sourceStore）。 */
   readonly sourcesOverride?: HostAdapters['sources'];
+  /** 「关于」口径（测试用；生产接 platform/pwaUpdate）。 */
+  readonly pwaOverride?: HostAdapters['pwa'];
   /**
    * 「采新卡」生成口的覆盖位（Plan 8 · T9）。与 `llmCardsOverride` 同款理由：
    * 装配链里的"额度写回"是**本函数自己的逻辑**，要能在不联网的前提下穷举；
@@ -385,6 +388,12 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
      * 来源库（D53）：读订阅源走 `platform/feedFetch`，玩家那份库走 `platform/sourceStore`。
      * `fetchItems` **不注入 fetchImpl** —— 生产就该用真 fetch；测试用 override 换掉整口。
      */
+    /** 「关于」（D54）：版本显示 + 检查更新（只查不刷；`apply` 才 reload）。 */
+    pwa: deps.pwaOverride ?? {
+      version: pageBuild,
+      check: () => checkForUpdate(),
+      apply: reloadPage,
+    },
     sources: deps.sourcesOverride ?? {
       fetchItems: (source) => fetchSourceItems(source),
       library: { load: loadSources, save: saveSources },

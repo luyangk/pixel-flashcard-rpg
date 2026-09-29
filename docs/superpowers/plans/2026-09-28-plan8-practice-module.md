@@ -334,3 +334,36 @@ Modify `src/ui/practiceCollect.ts`、`src/ui/host.ts`、`src/ui/hostTypes.ts`、
       ③ fetch 抛错不算 blocked；④ HN 自帖不退回讨论页；⑤ 合并时无视墓碑；⑥ 不打「需读取服务」标；
       ⑦ 读不到时不提"读取服务"；⑧ 「用这篇」一律去抓链接；⑨ 不校验 kind；⑩ **生产装配漏接 `sources` 口**（产物级）
 - [x] 真产物：**DB#10** 在 `dist/` 里进采新卡 → 来源库区块可见、>5 条内置源、无 CORS 的源带标、维护入口在
+
+---
+
+### Task 16: PWA 更新的可见性（D54）
+
+**用户原话：**「安装的 pwa 需要如何更新？」
+
+**这一问暴露的是可观测性缺口**：更新本身早就是自动的（`skipWaiting` + `clients.claim` + 导航 network-first），
+但屏上**没有任何版本信息** ⇒「刷了没变」到底是"还没更新"还是"更新了但没变化"，玩家无从分辨。
+
+**本次反问时量到的两条事实（都写进 README）：**
+- 线上 `index.html` 与 `sw.js` 都是 **`cache-control: max-age=600`** ⇒ 发版后 **10 分钟内**刷新可能仍是旧页
+  （所以"等十来分钟再打开"才是可靠动作）；
+- 我们的 SW 在 `install` 里就 `skipWaiting()` ⇒ 新版**不会**停在 `registration.waiting`，
+  检查更新必须按「**缓存名变了**」判（按 `waiting` 判会永远回"已是最新" —— PU#2 钉住）。
+
+**口径：**
+- 版本戳**一个构建只算一次**：`vite.config.ts` 的 `BUILD` 同时用于 SW 的缓存名 `zx-xia-<戳>`
+  与页面的 `define: __ZX_XIA_BUILD__` ⇒"显示的版本"与"跑着的缓存"必然一致；
+- 设置页新增「关于」分组：**当前版本** + **「检查更新」**；发现新版才露出**「立即更新」**（点了才 reload）
+  —— **绝不自动刷新**（打一半的一局不能被刷掉）；
+- 环境没有 SW（开发版/隐私模式）⇒ 如实说"不用更新"，不假装"已是最新"。
+
+**Files:** Add `src/platform/pwaUpdate.ts`；Modify `vite.config.ts`（`BUILD` + `define`）、
+`src/ui/settings.ts`、`src/ui/host.ts`、`src/ui/hostTypes.ts`、`src/ui/hostAdapters.ts`、
+`tests/e2e/dist.boot.test.ts`、README、PRD
+
+- [x] Step 1 失败测试：PU#1–#6（无 SW 不假装 / 缓存名变=新版 / 没变=最新 / 断网说实话 / pageBuild / reload 不崩）、
+      SU#1–#4（口齐才显示 / 发现新版才露「立即更新」且点了才 apply / 已是最新不露 / 不支持如实说）
+- [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] 变异自检（5 条全部会红）：① 没 SW 时说"已是最新"；② 按 `waiting` 判新版（永远说已是最新）；
+      ③ `update()` 抛错谎报"已是最新"；④ 一查就自动刷新；⑤ 「已是最新」也露「立即更新」
+- [x] 真产物：**DB#11** 版本行必须是 **13 位构建戳**（`define` 漏了只会是 `dev`），且默认不露「立即更新」

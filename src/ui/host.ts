@@ -284,6 +284,7 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
             return mountSettings(root, ctrl, {
               onNav: () => onNav('menu'),
               llm: deps.llm,
+              pwa: deps.pwa,
               setAnswerMode: deps.setAnswerMode,
               llmQuotaText: quotaText,
               setTier: deps.setTier,

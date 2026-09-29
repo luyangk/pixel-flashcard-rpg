@@ -132,6 +132,16 @@ export interface HostAdapters {
   /* AI（Plan 5 · T4/T5；全部可选——没有它们时对应 UI 整块隐藏） */
   /** 设置屏「AI（可选）」分组的读写口（Key 的唯一存放点 + 唯一网络出口）。 */
   readonly llm?: LlmSettingsDeps;
+  /** 设置屏「关于」分组（D54）：版本 + 检查更新（查 SW，不刷新页面）。 */
+  readonly pwa?: {
+    readonly version: () => string;
+    readonly check: () => Promise<{
+      readonly status: 'updated' | 'current' | 'unsupported';
+      readonly build: string | null;
+      readonly message: string;
+    }>;
+    readonly apply: () => void;
+  };
   /** 卡组页「AI 辅建卡」（接 app/llmFlow.suggestCards）。 */
   readonly llmCards?: (input: { text: string; deckName: string; max?: number }) => Promise<ParseResult<CardCandidate>>;
   /** 备战屏「让 AI 起几个名」（接 app/llmFlow.suggestBossNames）。 */

@@ -22,6 +22,22 @@
 4. 之后从**主屏图标**打开：全屏无地址栏；断网也能开；「分享 → 知识侠客」也会出现在
    微信/浏览器的分享面板里（这是 `share_target`，**只有真正装成应用才有**）。
 
+### 怎么更新（以及怎么确认自己更新了）
+
+**不用你做什么**：更新全在网页层，主屏图标只是个壳。发版后**重新打开一次**（或连着网下拉刷新）就是新版
+—— 正在打的那一局不会被自动刷新，所以它会停在旧版直到你自己刷。
+
+三点要知道的：
+
+- GitHub Pages 给 `index.html`/`sw.js` 都发 `cache-control: max-age=600`，所以**刚发版 10 分钟内**刷新
+  可能还是旧页；**等十来分钟再打开**就一定是新版；
+- 断网时打开的是缓存里的旧页（离线可用的代价，属正常）；
+- ⚠️ **别用"清除站点数据/清除并重置"来催更新** —— 那会连 IndexedDB 里的存档一起删掉。真要做任何清数据
+  操作，先在「设置 → 存档 → 导出备份」。其实你不需要：重新打开就够。
+
+**「设置 → 关于」**里有**当前版本**（就是构建戳，与离线缓存名同源）与**「检查更新」**按钮：查完若发现新版，
+会提示你并出现**「立即更新」**（点了才重新加载页面 —— 不会在你打一半时突然刷新）。
+
 几点如实说明：
 
 - **点了「安装」提示"正在安装"、之后就没了、主屏也找不到图标？** 这不是游戏的问题，是**网络**：
@@ -251,7 +267,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **85 文件 / 1250 用例**；另有 10 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **87 文件 / 1260 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -270,6 +286,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D54 PWA 更新可见（设置页「关于」：当前版本 + 检查更新，**不自动刷新**） | `tests/platform/pwaUpdate.test.ts`（PU#1–#6）、`tests/ui/settings.update.test.ts`（SU#1–#4）、`tests/e2e/dist.boot.test.ts` · DB#11（真产物里版本号是 **13 位构建戳而非 dev** —— vite `define` 漏了必红）、5 条变异全部会红 |
 | D53 采新卡的来源库（内置 AI/机器学习领域 + 直连/需读取服务两档 + 玩家可维护） | `docs/SOURCES.md`（逐条实测）、`tests/core/sourceItem.test.ts`、`tests/platform/feedFetch.test.ts`、`tests/app/sourceLibrary.test.ts`、`tests/platform/sourceStore.test.ts`、`tests/ui/practiceSources.test.ts`、`tests/e2e/dist.boot.test.ts` · DB#10（真产物里内置源与标都在） |
 | D51 装到主屏能装成**应用**（清单在站点根 + 图标 192/512/maskable） | `tests/tooling/pwa.test.ts` PW#2/#2b/#2c（真实像素尺寸 / ≥192 / 清单位置，5 条变异全部会红）、`python3 pixel-art/app-icon/build.py --check`（图标幂等） |
 | D50 练功多领域合练 + 看旧卡里显式的「← 换领域」 | `tests/ui/practice.test.ts` PR#17–#23（换领域保勾选 / 跨域并集 / 移出本次 / 合计上限 / 列表页开练 / 清空 / 取消不被加回）、`tests/e2e/dist.boot.test.ts` · DB#7（真产物里换领域后两域合练） |

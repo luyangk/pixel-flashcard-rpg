@@ -26,6 +26,15 @@ import { defineConfig, type Plugin } from 'vite';
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 
 /**
+ * 本次构建的版本戳（同一次构建里 SW 缓存名与页面里显示的版本**必须是同一个数**）。
+ *
+ * 为什么要单独提出来：玩家问"我更新到新版了吗"，答案只能靠"页面里的版本号"与
+ * "SW 的缓存名"对得上 —— 两个来源若各算各的时间戳，就会出现"显示新版本、其实跑旧缓存"
+ * 这种最糟糕的状态（PRD D54）。SW 用 `zx-xia-<BUILD>` 当缓存名，页面用 `__ZX_XIA_BUILD__`。
+ */
+const BUILD = String(Date.now());
+
+/**
  * 路径别名——**必须与 visconfig(tsconfig) 的 `compilerOptions.paths` 和
  * `vitest.config.ts` 的 `resolve.alias` 三处一致**。
  *
@@ -65,13 +74,9 @@ function copyAssets(): Plugin {
  * 不需要手工维护文件列表（列表一旦漏项，离线就会缺素材——比漏更糟的是静默缺）。
  */
 function injectServiceWorker(): Plugin {
-  let version = '';
   return {
     name: 'zx-xia:inject-sw',
     apply: 'build',
-    buildStart() {
-      version = String(Date.now());
-    },
     closeBundle() {
       const src = `${ROOT}src/sw.js`;
       const distDir = `${ROOT}dist`;
@@ -87,15 +92,20 @@ function injectServiceWorker(): Plugin {
       };
       walk(distDir, '');
       const code = readFileSync(src, 'utf8')
-        .replace('__ZX_XIA_SW_VERSION__', version)
+        .replace('__ZX_XIA_SW_VERSION__', BUILD)
         .replace('__ZX_XIA_PRECACHE__', JSON.stringify(files));
       writeFileSync(`${distDir}/sw.js`, code);
-      console.log(`✔ sw injected: ${files.length} 个预缓存项，版本 ${version}`);
+      console.log(`✔ sw injected: ${files.length} 个预缓存项，版本 ${BUILD}`);
     },
   };
 }
 
 export default defineConfig({
+  /**
+   * 把构建戳注入页面代码（`platform/pwaUpdate` 读它显示"当前版本"）。
+   * 与 SW 的缓存名同源（同一个 `BUILD`）—— 见上面那段注释。
+   */
+  define: { __ZX_XIA_BUILD__: JSON.stringify(BUILD) },
   // **相对基址**：GitHub Pages 把项目发到 `/<仓库名>/` 子路径下。写死 `/bundle/...`
   // 的绝对路径会在子路径里 404（Plan 5 上线前的已知缺口，终审 I 项登记过）。
   // 相对 base 同时兼容"整个 dist 拷到任意子目录/本地 file:// 之外"的用法；

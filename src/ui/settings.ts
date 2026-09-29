@@ -88,6 +88,16 @@ export interface SettingsDeps {
    * 额度是给玩家的承诺，屏上要看得见；缺省则不显示该行。
    */
   readonly llmQuotaText?: () => string;
+  /**
+   * 「关于」分组（D54）：当前版本 + 检查更新。
+   * `version` = 页面这一份的构建戳；`check` = 查一次 SW（**不刷新页面**）；`apply` = 重新加载页面。
+   * 缺任一 ⇒ 整组隐藏（同其它分组：不显示点了没反应的入口）。
+   */
+  readonly pwa?: {
+    readonly version: () => string;
+    readonly check: () => Promise<{ readonly status: 'updated' | 'current' | 'unsupported'; readonly build: string | null; readonly message: string }>;
+    readonly apply: () => void;
+  };
   /** toast 存活毫秒（测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -301,6 +311,33 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     resetActionsEl,
   ]);
 
+  /* ------------------------------------------------------------ 关于（D54：版本与更新） */
+  const pwaVersionEl = h('p', { 'data-ui': 'pwa-version', class: 'field-hint' });
+  const pwaCheckBtn = h('button', { 'data-ui': 'pwa-check', class: 'collect-btn', type: 'button' }, '检查更新') as HTMLButtonElement;
+  const pwaApplyBtn = h(
+    'button',
+    { 'data-ui': 'pwa-apply', class: 'collect-btn', type: 'button' },
+    '立即更新',
+  ) as HTMLButtonElement;
+  const pwaStatusEl = h('p', { 'data-ui': 'pwa-status', class: 'field-hint' });
+  pwaCheckBtn.addEventListener('click', () => void onCheckUpdate());
+  pwaApplyBtn.addEventListener('click', () => {
+    if (destroyed) return;
+    deps.pwa?.apply();
+  });
+  const pwaEl = h('section', { 'data-ui': 'pwa-group', class: 'settings-group' }, [
+    h('h3', { class: 'field-title' }, '关于'),
+    h(
+      'p',
+      { class: 'field-hint' },
+      '装到主屏后更新发生在网页层：重新打开一次就会拿到新版（正在打的那一局不会被自动刷新）。' +
+        '版本号与离线缓存是同一批，可用「检查更新」核对。',
+    ),
+    pwaVersionEl,
+    h('div', { class: 'save-actions' }, [pwaCheckBtn, pwaApplyBtn]),
+    pwaStatusEl,
+  ]);
+
   /* ------------------------------------------------------------ AI（可选，Plan 5 · T4） */
   const llmBaseInput = h('input', {
     'data-ui': 'llm-base',
@@ -399,9 +436,34 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     paramEl,
     storyEl,
     llmEl,
+    pwaEl,
     saveEl,
   ]);
   root.appendChild(screen);
+
+  /** 「立即更新」是否可见（只有检查到新版才露）。 */
+  let pwaApplyVisible = false;
+
+  /** 检查更新（D54）：只查不刷 —— 发现新版才露出「立即更新」。 */
+  async function onCheckUpdate(): Promise<void> {
+    if (destroyed || busy || deps.pwa === undefined) return;
+    busy = true;
+    pwaCheckBtn.disabled = true;
+    pwaStatusEl.textContent = '正在检查…';
+    setHidden(pwaStatusEl, false);
+    try {
+      const res = await deps.pwa.check();
+      if (destroyed) return;
+      pwaStatusEl.textContent = res.message;
+      pwaApplyVisible = res.status === 'updated';
+    } finally {
+      busy = false;
+      if (!destroyed) {
+        pwaCheckBtn.disabled = false;
+        render(ctrl.snapshot());
+      }
+    }
+  }
 
   /* ------------------------------------------------------------ 渲染与写入 */
   function toast(text: string): void {
@@ -685,6 +747,16 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
       setHidden(llmQuotaTextEl, false);
     } else {
       setHidden(llmQuotaTextEl, true);
+    }
+
+    // 关于组（D54）：三个口齐才显示；缺省整组收起（不显示点了没反应的入口）
+    const pwaReady = deps.pwa !== undefined && typeof deps.pwa.check === 'function';
+    setHidden(pwaEl, !pwaReady);
+    if (pwaReady) {
+      pwaVersionEl.textContent = `当前版本：${deps.pwa?.version() ?? '未知'}`;
+      // 「立即更新」只在**检查过且真的发现新版**之后才露（平时它没有意义，也免得误触刷新）
+      setHidden(pwaApplyBtn, !pwaApplyVisible);
+      pwaCheckBtn.disabled = busy;
     }
 
     // 存档组：只有宿主给了重置口才显示；未确认时只露一个按钮（不把"危险按钮"摆在最前）
