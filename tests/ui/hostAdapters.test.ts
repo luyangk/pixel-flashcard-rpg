@@ -28,6 +28,7 @@ import eggsJson from '../../assets/narrative/eggs.json';
 import presetJson from '../../assets/content/preset.json';
 import prologueJson from '../../assets/narrative/prologue.json';
 import { localDayString } from '@core/reviewLedger';
+import { fetchPage } from '../../src/platform/pageFetch';
 import { makeCard, makeDeck, makeSave } from './support';
 
 const NOW = Date.UTC(2026, 9, 27, 10, 0, 0);
@@ -521,5 +522,126 @@ describe('assembleHost —— 问答判卷与作答模式（Plan 6 · T7）', ()
     expect((await store.load())?.settings.answerMode).toBe('qa');
     await assembly.adapters.setAnswerMode?.('qa'); // 同值
     expect(coord.dirty()).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 8 · T9 */
+
+/**
+ * 采新卡的装配面（Plan 8 · T9）。
+ *
+ * 判别力：
+ * - AD#12 **额度真的写回存档**：生成一次后 `settings.llmQuota.cards` 必须增加，
+ *   且第二次生成用的是新额度（不写回 ⇒ 额度永远不涨，200 张/天的承诺是假的）；
+ * - AD#13 读取服务**只在玩家配了它的时候才带**（默认空串 = 不启用：不该把链接外发给第三方）；
+ * - AD#14 `addCard` 支持 `hotspot` + `url`（溯源字段真的落进 `source`）。
+ */
+describe('assembleHost —— 采新卡接线（Plan 8 · T9）', () => {
+  async function collectRig(opts: { readerUrl?: string; readerKey?: string } = {}) {
+    const calls: Array<{ url: string; auth?: string }> = [];
+    const fakeFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, auth: (init?.headers as Record<string, string> | undefined)?.Authorization });
+      if (u.startsWith('https://reader.example/')) {
+        return new Response('读取服务给的纯文本正文', { status: 200, headers: { 'Content-Type': 'text/plain' } });
+      }
+      throw new TypeError('Failed to fetch'); // 直读被 CORS 拦
+    }) as unknown as typeof fetch;
+
+    const store = createMemoryStorage();
+    await store.save(makeSave());
+    const coord = await createCoordinator(store, { now: () => NOW, debounceMs: 0 });
+    const ctrl = await createGameController({ coord, rng: () => 0.5, now: () => NOW, tzOffsetMin: 480 });
+    const chatCalls: number[] = [];
+    let current: LlmConfig = {
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'sk-fake',
+      model: 'deepseek-flash',
+      readerUrl: opts.readerUrl ?? '',
+      readerKey: opts.readerKey ?? '',
+    };
+    const assembly = assembleHost({
+      ctrl,
+      coord,
+      store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      fetchPageImpl: (url, o) => fetchPage(url, { fetchImpl: fakeFetch, ...(o ?? {}) }),
+      llmConfigIo: {
+        load: () => ({ ...current }),
+        save: (cfg) => {
+          current = { ...cfg };
+          return true;
+        },
+        clear: () => {
+          current = { ...current, apiKey: '' };
+        },
+      },
+      // 生成口覆盖：本用例要钉的是**装配层自己的"额度写回"**（提示词/分块各有专门用例）
+      collectCardsOverride: () => {
+        chatCalls.push(1);
+        return Promise.resolve({
+          ok: true,
+          candidates: [{ front: 'f', back: 'b', tags: [], choices: ['错'] }],
+          quota: { day: localDayString(NOW, 480), cards: 1, judges: 0 },
+          requests: 1,
+          truncated: false,
+        });
+      },
+    });
+    return { assembly, coord, store, calls, chatCalls };
+  }
+
+  it('AD#12 生成一次 ⇒ 候选回来了且**额度写回存档**；第二次用的是新额度', async () => {
+    const { assembly, coord } = await collectRig();
+    const before = coord.snapshot().settings.llmQuota?.cards ?? 0;
+    const res = await assembly.adapters.collectCards?.({ text: '一段资料', deckName: '唐诗' });
+    expect(res?.ok).toBe(true);
+    const after = coord.snapshot().settings.llmQuota?.cards ?? 0;
+    expect(after).toBe(before + 1); // 1 张候选 ⇒ 记 1
+  });
+
+  it('AD#13 没配读取服务 ⇒ 直读被拦就是被拦（链接不外发）', async () => {
+    const { assembly, calls } = await collectRig();
+    const res = await assembly.adapters.ingestUrl?.('https://mp.weixin.qq.com/s/abc');
+    expect(res?.kind).toBe('blocked');
+    if (res?.kind === 'blocked') expect(res.blocked).toBe(true);
+    expect(calls.map((c) => c.url)).toEqual(['https://mp.weixin.qq.com/s/abc']); // 只有直读那一次
+  });
+
+  it('AD#13b 配了读取服务 ⇒ 被拦后经它兜底，且带的是读取服务自己的 Key', async () => {
+    const { assembly, calls } = await collectRig({ readerUrl: 'https://reader.example/', readerKey: 'rk-1' });
+    const res = await assembly.adapters.ingestUrl?.('https://mp.weixin.qq.com/s/abc');
+    expect(res?.kind).toBe('article');
+    if (res?.kind === 'article') expect(res.via).toBe('reader');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.url).toBe(`https://reader.example/${encodeURIComponent('https://mp.weixin.qq.com/s/abc')}`);
+    expect(calls[1]?.auth).toBe('Bearer rk-1'); // 不是玩家那把 LLM Key（sk-fake）
+  });
+
+  it('AD#14 addCard 落 hotspot 与 url（溯源字段真的进 source）', async () => {
+    const { assembly, coord } = await collectRig();
+    const res = await assembly.adapters.addCard?.({
+      front: 'f',
+      back: 'b',
+      deckId: 'deck-a',
+      id: 'new-1',
+      sourceType: 'hotspot',
+      url: 'https://news.example/a',
+    });
+    expect(res?.ok).toBe(true);
+    const card = coord.snapshot().cards.find((c) => c.id === 'new-1');
+    expect(card?.source?.type).toBe('hotspot');
+    expect(card?.source?.url).toBe('https://news.example/a');
   });
 });

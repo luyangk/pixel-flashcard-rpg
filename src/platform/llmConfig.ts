@@ -24,6 +24,8 @@ export const LLM_STORAGE_KEY = 'zx-xia.llm.v1';
 export const DEFAULT_LLM_CONFIG: LlmConfig = {
   baseUrl: 'https://api.deepseek.com',
   apiKey: '',
+  readerUrl: '',
+  readerKey: '',
   // 【2026-09 实测修正】官方目录现在只有 `deepseek-flash`（= DeepSeek-V4.1-Flash）与
   // `deepseek-v4-pro`；旧名 `deepseek-chat` 已不被接受（会得到 400）。
   // 用户实测就是这个坑，因此这里必须跟官方目录对齐——并在设置页提供「拉取模型列表」，
@@ -66,6 +68,9 @@ export function loadLlmConfig(storage?: Pick<Storage, 'getItem'>): LlmConfig {
       baseUrl: str(o.baseUrl, DEFAULT_LLM_CONFIG.baseUrl) || DEFAULT_LLM_CONFIG.baseUrl,
       apiKey: str(o.apiKey, ''), // 空串是合法状态（未设置）
       model: str(o.model, DEFAULT_LLM_CONFIG.model) || DEFAULT_LLM_CONFIG.model,
+      // 读取服务（可选）：**空串 = 不启用**，故不做"空串回落默认"（那会让玩家关不掉它）
+      readerUrl: str(o.readerUrl, ''),
+      readerKey: str(o.readerKey, ''),
     };
   } catch {
     return { ...DEFAULT_LLM_CONFIG };
@@ -87,6 +92,8 @@ export function saveLlmConfig(cfg: LlmConfig, storage?: Pick<Storage, 'setItem'>
         baseUrl: str(cfg?.baseUrl, DEFAULT_LLM_CONFIG.baseUrl) || DEFAULT_LLM_CONFIG.baseUrl,
         apiKey: str(cfg?.apiKey, ''),
         model: str(cfg?.model, DEFAULT_LLM_CONFIG.model) || DEFAULT_LLM_CONFIG.model,
+        readerUrl: str(cfg?.readerUrl, ''),
+        readerKey: str(cfg?.readerKey, ''),
       }),
     );
     return true;

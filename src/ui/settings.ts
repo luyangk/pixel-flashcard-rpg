@@ -141,6 +141,17 @@ const ANSWER_MODE_QA_HINT =
   '这会把这张卡的答案与你的输入发给你自己配置的服务商（只在问答模式、只在你点提交时）。';
 const ANSWER_MODE_QA_BLOCKED = '还没配 AI（下面的「AI（可选）」填好 Key 就能用问答模式）。';
 
+/**
+ * 可选的「读取服务」（Plan 8 · D43）。**默认关闭**，且打开时必须如实告知：
+ * 链接会经过这台第三方服务转成正文 —— 隐私的账由玩家自己算，我们不替他决定。
+ */
+const READER_HINT =
+  '可选：公众号/新闻这些站点不允许网页直读（浏览器的跨域限制，实测如此），' +
+  '所以「练功 → 采新卡」里给链接时常常只能拿到"请粘贴正文"。' +
+  '若你愿意把链接交给一个第三方读取服务（例如自建网关、r.jina.ai），在这里填它的地址：' +
+  '填了之后抓不到会自动经它转一手（**链接会外发给这台服务**，请自行判断是否接受）。留空 = 不启用。';
+const READER_KEY_HINT = '读取服务自己的 Key（该服务不需要鉴权就留空）；与上面的 AI Key 各存各的。';
+
 /** 存档分组的一句话说明（与「重看序章」的区别是玩家最容易搞混的点）。 */
 const SAVE_HINT =
   '想从头再玩一遍（重打第一场教学局、等级与榜单归零）就用下面的「重置存档」；' +
@@ -179,7 +190,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   /** 重置/导出在途：这期间整组按钮禁用（连点两次就会连清两遍）。 */
   let saveBusy = false;
   /** 当前**已存**的配置（Key 只在这份内存副本里过手，绝不写进任何 DOM 属性/文本）。 */
-  let storedLlm: LlmConfig = { baseUrl: '', apiKey: '', model: '' };
+  let storedLlm: LlmConfig = { baseUrl: '', apiKey: '', model: '', readerUrl: '', readerKey: '' };
 
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
   const headerEl = h('header', { class: 'settings-header' }, [
@@ -343,6 +354,20 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     { 'data-ui': 'llm-models-fetch', class: 'llm-models-fetch', type: 'button' },
     '拉取模型列表',
   ) as HTMLButtonElement;
+  const readerUrlInput = h('input', {
+    'data-ui': 'llm-reader-url',
+    class: 'llm-input',
+    type: 'text',
+    placeholder: 'https://r.jina.ai/（留空 = 不启用）',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  const readerKeyInput = h('input', {
+    'data-ui': 'llm-reader-key',
+    class: 'llm-input',
+    type: 'password',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+
   const llmEl = h('section', { 'data-ui': 'llm-group', class: 'settings-group', hidden: !canLlm }, [
     h('h3', { class: 'field-title' }, 'AI（可选）'),
     h('p', { class: 'field-hint' }, LLM_KEY_HINT),
@@ -355,6 +380,11 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     llmModelsStatusEl,
     llmModelsListEl,
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, 'API Key'), llmKeyInput]),
+    h('h4', { class: 'field-title' }, '读取服务（可选）'),
+    h('p', { 'data-ui': 'llm-reader-hint', class: 'field-hint' }, READER_HINT),
+    h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '服务地址'), readerUrlInput]),
+    h('p', { class: 'field-hint' }, READER_KEY_HINT),
+    h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '服务 Key'), readerKeyInput]),
     h('div', { class: 'llm-actions' }, [llmSaveBtn, llmTestBtn, llmClearBtn]),
   ]);
 
@@ -419,11 +449,13 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
   function readStoredLlm(): LlmConfig {
     try {
       const cfg = llmDeps?.load();
-      if (!cfg || typeof cfg !== 'object') return { baseUrl: '', apiKey: '', model: '' };
+      if (!cfg || typeof cfg !== 'object') return { baseUrl: '', apiKey: '', model: '', readerUrl: '', readerKey: '' };
       return {
         baseUrl: typeof cfg.baseUrl === 'string' ? cfg.baseUrl : '',
         apiKey: typeof cfg.apiKey === 'string' ? cfg.apiKey : '',
         model: typeof cfg.model === 'string' ? cfg.model : '',
+        readerUrl: typeof cfg.readerUrl === 'string' ? cfg.readerUrl : '',
+        readerKey: typeof cfg.readerKey === 'string' ? cfg.readerKey : '',
       };
     } catch {
       return { baseUrl: '', apiKey: '', model: '' };
@@ -436,6 +468,10 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     llmModelInput.value = storedLlm.model;
     llmKeyInput.value = '';
     llmKeyInput.placeholder = maskKey(storedLlm.apiKey);
+    // 读取服务：地址照抄；它的 Key 同样**永不回显**（只出现在掩码 placeholder 里）
+    readerUrlInput.value = storedLlm.readerUrl ?? '';
+    readerKeyInput.value = '';
+    readerKeyInput.placeholder = maskKey(storedLlm.readerKey ?? '');
   }
 
   /** 当前输入框里的配置：Key 留空 ⇒ **沿用已存值**（留空不等于清空，清空要点「清除 Key」）。 */
@@ -448,10 +484,15 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     const typed = llmKeyInput.value.trim();
     // Key 留空 ⇒ 沿用"磁盘上当前那份"（现读，不用内存副本：见函数注释的 m-6 理由）
     const onDisk = typed.length > 0 ? null : readStoredLlm();
+    const typedReaderKey = readerKeyInput.value.trim();
     return {
       baseUrl: llmBaseInput.value,
       apiKey: typed.length > 0 ? typed : (onDisk?.apiKey ?? storedLlm.apiKey),
       model: llmModelInput.value,
+      // 清空地址 = 关掉读取服务（如实生效，不"回落默认"）
+      readerUrl: readerUrlInput.value.trim(),
+      readerKey:
+        typedReaderKey.length > 0 ? typedReaderKey : (onDisk?.readerKey ?? storedLlm.readerKey ?? ''),
     };
   }
 

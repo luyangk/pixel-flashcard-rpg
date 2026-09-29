@@ -592,3 +592,73 @@ describe('mountHost —— 练功入口与 onDrill 透传（Plan 7 · T6）', ()
     expect(seen[0].sort()).toEqual(['c1', 'c2']);
   });
 });
+
+/* ------------------------------------------------------------------ Plan 8 · T9 */
+
+/**
+ * 练功屏「采新卡」的宿主透传（Plan 8 · T9）。
+ *
+ * 判别力：采新卡整块依赖（ingestUrl/collectCards/inbox/addCard/addDeck）**缺一个就整块收起** ——
+ * 漏透传 = 生产里"采新卡"是死的（点了没反应/入口不显示），而屏级单测全绿。
+ */
+describe('mountHost —— 采新卡透传（Plan 8 · T9）', () => {
+  it('HS#C1 五个口齐 ⇒ 采新卡分区可用；缺 collectCards ⇒ 整块收起', () => {
+    const base = makeSave();
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: {
+          ...base,
+          settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    const seen: string[] = [];
+    const { deps } = adapters({
+      ingestUrl: () => {
+        seen.push('ingest');
+        return Promise.resolve({ kind: 'blocked', url: 'u', reason: 'r', blocked: true });
+      },
+      collectCards: () =>
+        Promise.resolve({
+          ok: true,
+          candidates: [],
+          quota: { day: '', cards: 0, judges: 0 },
+          requests: 0,
+          truncated: false,
+        }),
+      inbox: { load: () => [], save: () => true, clear: () => undefined },
+      addCard: () => Promise.resolve({ ok: true, value: makeCard('x') }),
+    });
+    const root = makeRoot();
+    mountHost(root, ctrl, deps);
+    click(root.querySelector('[data-nav="practice"]') as HTMLElement);
+    // 分区条在（说明整块 collect 依赖透传成功）
+    expect(ui(root, 'practice-tabs').hidden).toBe(false);
+    click(ui(root, 'tab-collect'));
+    expect(root.querySelector('[data-ui="practice-collect"]')).not.toBeNull();
+    // 真的能走到注入的抓取口
+    (ui(root, 'source-url') as HTMLInputElement).value = 'https://x.example/a';
+    click(ui(root, 'source-go'));
+    return flushMicrotasks().then(() => {
+      expect(seen).toEqual(['ingest']);
+      document.body.replaceChildren();
+
+      // 缺 collectCards ⇒ 分区条整块收起（不显示点了没反应的入口）
+      const ctrl2 = makeCtrl(
+        makeSnap({
+          screen: 'menu',
+          save: {
+            ...base,
+            settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+          },
+        }),
+      );
+      const { deps: deps2 } = adapters({});
+      const root2 = makeRoot();
+      mountHost(root2, ctrl2, deps2);
+      click(root2.querySelector('[data-nav="practice"]') as HTMLElement);
+      expect(ui(root2, 'practice-tabs').hidden).toBe(true);
+    });
+  });
+});

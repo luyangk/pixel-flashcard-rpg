@@ -55,7 +55,9 @@ export interface AddCardInput {
    * 域与 `saveMigrate.SOURCE_TYPES` 一致（那边已含 `'llm'`）；域外值一律回落 `'manual'`
    * ——写口不做"猜意图"的事，脏值也不能让落盘自检整包拒。
    */
-  readonly sourceType?: 'manual' | 'llm';
+  readonly sourceType?: 'manual' | 'llm' | 'hotspot';
+  /** 来源链接（Plan 8 · D43：`sourceType: 'hotspot'` 时存进 `SourceInfo.url` 供溯源）。 */
+  readonly url?: string;
 }
 
 /** 建领域的入参。 */
@@ -139,7 +141,11 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
     return { ok: false, reason: '加卡失败：卡片编号和已有的一张撞了。' };
   }
 
-  const sourceType: 'manual' | 'llm' = input.sourceType === 'llm' ? 'llm' : 'manual';
+  const sourceType: 'manual' | 'llm' | 'hotspot' =
+    input.sourceType === 'llm' ? 'llm' : input.sourceType === 'hotspot' ? 'hotspot' : 'manual';
+  // 链接只收 http(s)：与待读清单/抓取口同一口径（`javascript:` 之类永远不该进溯源字段）
+  const sourceUrl =
+    typeof input.url === 'string' && /^https?:\/\//i.test(input.url.trim()) ? input.url.trim() : undefined;
   // 干扰项：净化后为空 ⇒ 不写字段（与 Card.choices 的"可选位、不补默认"同一口径）
   const choices = sanitizeChoices(input.choices, back);
   const card: Card = {
@@ -147,7 +153,7 @@ export async function addCard(coord: Coordinator, input: AddCardInput): Promise<
     deckId: input.deckId,
     front: input.front,
     back: input.back,
-    source: { type: sourceType, createdAt: input.nowMs },
+    source: { type: sourceType, createdAt: input.nowMs, ...(sourceUrl === undefined ? {} : { url: sourceUrl }) },
     srs: createInitialSRS(input.nowMs, input.sm2Params),
     tags,
     // 只在净化后有内容时才带这个字段：`choices: []` 与"没有干扰项"是两回事，

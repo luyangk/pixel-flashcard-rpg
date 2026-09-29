@@ -11,6 +11,14 @@ export interface LlmConfig {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly model: string;
+  /**
+   * 可选的"读取服务"（Plan 8 · T1/T9，D43）：玩家自己填的网页转正文服务
+   * （如 `https://r.jina.ai/` 或自建网关）。**默认空 = 不启用**：抓不到就如实说，
+   * 而不是把链接悄悄发给第三方。它与 LLM 的 Key 互不串用（各带各的）。
+   */
+  readonly readerUrl?: string;
+  /** 读取服务自己的 Key（可为空 = 该服务不需要鉴权）。同样只存 localStorage、不进备份。 */
+  readonly readerKey?: string;
 }
 
 /** 一条对话消息（只用到 system/user 两种角色——本作不做多轮）。 */

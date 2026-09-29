@@ -37,6 +37,7 @@ import presetJson from '../assets/content/preset.json';
 import { createGameController } from './app/gameController';
 import { createCoordinator } from './app/persist';
 import { installPresetContent, isFreshLibrary } from './app/presetContent';
+import { parseShareQuery } from './app/shareIntake';
 import { loadSprites } from './platform/assets';
 import { now as clockNow } from './platform/clock';
 import { tzOffsetMin } from './platform/env';
@@ -78,6 +79,9 @@ async function boot(): Promise<void> {
   });
   const sprites = await loadSprites();
 
+  // 系统分享进来（PWA share_target，Plan 8 · T8）：解析一次交给装配层，采新卡区会预填。
+  const sharedInput = parseShareQuery(typeof location !== 'undefined' ? location.search : '');
+
   let host: HostHandle | null = null;
   const { ctrl, adapters } = assembleHost({
     ctrl: rawCtrl,
@@ -96,6 +100,7 @@ async function boot(): Promise<void> {
     // 「重置存档」的最后一步要重新灌预置内容，所以把原文交给装配层（缺它整组不显示）
     presetContent: presetJson,
     hostRef: () => host, // 「重看序章」用它把序章当场挂回来
+    sharedInput,
     onNotice: (text) => showToast(root, text, { ms: 8000 }),
   });
 

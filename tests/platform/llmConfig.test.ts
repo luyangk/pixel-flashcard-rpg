@@ -75,6 +75,9 @@ describe('loadLlmConfig —— 坏值一律回落', () => {
       baseUrl: 'https://api.deepseek.com/',
       apiKey: '',
       model: 'deepseek-chat',
+      // 读取服务（Plan 8 · T9）：缺席 ⇒ 空串 = **不启用**（不是"回落某个默认服务"）
+      readerUrl: '',
+      readerKey: '',
     });
     expect(isLlmReady(loadLlmConfig(store))).toBe(false); // 没 Key 不算就绪
   });
@@ -95,12 +98,24 @@ describe('saveLlmConfig / clearLlmConfig', () => {
     const store = fakeStorage();
     saveLlmConfig({ baseUrl: 'https://x.example/v1', apiKey: 'sk-secret', model: 'm1' }, store);
     expect(Object.keys(store.dump())).toEqual([LLM_STORAGE_KEY]);
-    expect(loadLlmConfig(store)).toEqual({ baseUrl: 'https://x.example/v1', apiKey: 'sk-secret', model: 'm1' });
+    expect(loadLlmConfig(store)).toEqual({
+      baseUrl: 'https://x.example/v1',
+      apiKey: 'sk-secret',
+      model: 'm1',
+      readerUrl: '',
+      readerKey: '',
+    });
 
     // clear 需要能读旧值，故这里用真 localStorage 走一遍（假 store 只实现 setItem）
     localStorage.setItem(LLM_STORAGE_KEY, JSON.stringify({ baseUrl: 'https://x.example/v1', apiKey: 'sk-secret', model: 'm1' }));
     clearLlmConfig(localStorage);
-    expect(loadLlmConfig(localStorage)).toEqual({ baseUrl: 'https://x.example/v1', apiKey: '', model: 'm1' });
+    expect(loadLlmConfig(localStorage)).toEqual({
+      baseUrl: 'https://x.example/v1',
+      apiKey: '',
+      model: 'm1',
+      readerUrl: '',
+      readerKey: '',
+    });
     expect(localStorage.getItem(LLM_STORAGE_KEY)).not.toContain('sk-secret'); // Key 真的没了
   });
 

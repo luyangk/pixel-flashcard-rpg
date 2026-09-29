@@ -11,11 +11,15 @@ import type { Rng } from '@core/rng';
 import type { CardCandidate, NameCandidate, ParseResult } from '@core/llmParse';
 import type { ChatResult, LlmConfig } from '../platform/llmTypes';
 import type { BossNameResult } from '../app/bossFlow';
+import type { IngestResult } from '../app/ingestFlow';
+import type { CollectResult } from '../app/knowledgeFlow';
 import type { LibraryResult } from '../app/library';
 import type { ResetSaveResult } from '../app/resetFlow';
 import type { SettingsWriteResult } from '../app/settingsFlow';
 import type { ExportAndMarkResult, ImportAndSaveResult } from '../app/transfer';
+import type { InboxItem } from '../platform/inboxStore';
 import type { StageSprites } from '../stage/renderer';
+import type { SharedInput } from '../ui/practiceCollect';
 import type { BattleScreenWindow } from './battleScreen';
 import type { BeatEntry } from './beats';
 import type { ArcAct } from './codex';
@@ -51,10 +55,17 @@ export interface HostAdapters {
     back: string;
     deckId: string;
     id: string;
-    /** Plan 5 · T4：AI 辅建卡标 `'llm'`；手写不传（缺省 `'manual'`）。 */
-    sourceType?: 'manual' | 'llm';
+    /**
+     * Plan 5 · T4：AI 辅建卡标 `'llm'`；Plan 8：从链接采集来的标 `'hotspot'`（带 url 溯源）；
+     * 手写不传（缺省 `'manual'`）。
+     */
+    sourceType?: 'manual' | 'llm' | 'hotspot';
     /** 主题标签（AI 辅建带过来；PRD §3 主题筛选的依据）。缺省 = 无标签。 */
     tags?: readonly string[];
+    /** 干扰项（Plan 6 · D41）。 */
+    choices?: readonly string[];
+    /** 来源标 `hotspot`（Plan 8：从链接采集来的卡）+ 来源链接（可溯源）。 */
+    url?: string;
   }) => Promise<LibraryResult<Card>>;
   readonly addDeck?: (input: { name: string; id: string }) => Promise<LibraryResult<Deck>>;
   /** 领域改名（Plan 5 追加：用户实测反馈"新建领域后不知道如何删除或修改"）。 */
@@ -80,6 +91,29 @@ export interface HostAdapters {
   readonly onDrill?: (input: { readonly cardIds: readonly string[] }) => void;
   /** 练功屏顶部的今日额度行（与设置页同一句口径）。 */
   readonly practiceQuotaText?: () => string;
+  /* ---- 采新卡（Plan 8 · T9）：抓取 / 生成 / 清单 / 就地编辑 ---- */
+  /** 抓一个链接（接 `app/ingestFlow.ingestUrl` + `platform/pageFetch`，含可选读取服务）。 */
+  readonly ingestUrl?: (url: string) => Promise<IngestResult>;
+  /** 从正文生成候选卡（接 `app/knowledgeFlow.collectCards`；额度当场写回存档）。 */
+  readonly collectCards?: (input: {
+    readonly text: string;
+    readonly deckName: string;
+    readonly want?: number;
+  }) => Promise<CollectResult>;
+  /** 待读清单（接 `platform/inboxStore`）。 */
+  readonly inbox?: {
+    readonly load: () => readonly InboxItem[];
+    readonly save: (items: readonly InboxItem[]) => boolean;
+    readonly clear: () => void;
+  };
+  /** 就地改正一张卡（接 `app/library.updateCard`）。 */
+  readonly updateCard?: (input: {
+    readonly cardId: string;
+    readonly front: string;
+    readonly back: string;
+  }) => Promise<LibraryResult<Card>>;
+  /** 系统分享进来的内容（`main.ts` 从 query 解析；缺省 null）。 */
+  readonly sharedInput?: SharedInput | null;
 
   /* AI（Plan 5 · T4/T5；全部可选——没有它们时对应 UI 整块隐藏） */
   /** 设置屏「AI（可选）」分组的读写口（Key 的唯一存放点 + 唯一网络出口）。 */

@@ -26,7 +26,14 @@ afterEach(() => {
 });
 
 const STORED_KEY = 'sk-secret-abcdef123456'; // 明文只允许存在于"假存储"里，DOM 里出现即算泄漏
-const BASE: LlmConfig = { baseUrl: 'https://api.deepseek.com', apiKey: STORED_KEY, model: 'deepseek-chat' };
+const BASE: LlmConfig = {
+  baseUrl: 'https://api.deepseek.com',
+  apiKey: STORED_KEY,
+  model: 'deepseek-chat',
+  // 读取服务（Plan 8 · T9）：假配置层与真实现同形，省得形状断言与生产悄悄分叉
+  readerUrl: '',
+  readerKey: '',
+};
 
 /** 假 LLM 配置读写口：内存一份配置 + 记录每次保存/测试的入参。 */
 function makeFakeLlm(
@@ -133,7 +140,14 @@ describe('mountSettings —— AI 分组：注入面', () => {
     click(ui(root, 'llm-save'));
 
     expect(fake.saved).toEqual([
-      { baseUrl: 'https://gateway.example/v1', apiKey: STORED_KEY, model: 'qwen-plus' },
+      {
+        baseUrl: 'https://gateway.example/v1',
+        apiKey: STORED_KEY,
+        model: 'qwen-plus',
+        // 读取服务（Plan 8 · T9）：空串 = 不启用；两个输入框都没填 ⇒ 原样带空
+        readerUrl: '',
+        readerKey: '',
+      },
     ]);
     expect(fake.cfg().apiKey).toBe(STORED_KEY); // 留空 ≠ 抹掉
     expect(ui(root, 'toast').textContent).toBe('AI 设置已保存。');
@@ -244,7 +258,13 @@ describe('mountSettings —— AI 分组：注入面', () => {
     const root = mountWith(fake);
 
     click(ui(root, 'llm-clear'));
-    expect(fake.cfg()).toEqual({ baseUrl: BASE.baseUrl, apiKey: '', model: BASE.model });
+    expect(fake.cfg()).toEqual({
+      baseUrl: BASE.baseUrl,
+      apiKey: '',
+      model: BASE.model,
+      readerUrl: '',
+      readerKey: '',
+    });
     expect((ui(root, 'llm-key') as HTMLInputElement).placeholder).toBe('（未设置）');
     expect(ui(root, 'toast').textContent).toBe('已清除。');
     expect(domLeaks(root, STORED_KEY)).toEqual([]); // 清完更不该有明文
@@ -259,7 +279,15 @@ describe('mountSettings —— AI 分组：注入面', () => {
 
     click(ui(root, 'llm-test'));
     await flushMicrotasks();
-    expect(fake.tested).toEqual([{ baseUrl: 'https://gateway.example/v1', apiKey: 'sk-typed-in-box', model: 'my-model' }]);
+    expect(fake.tested).toEqual([
+      {
+        baseUrl: 'https://gateway.example/v1',
+        apiKey: 'sk-typed-in-box',
+        model: 'my-model',
+        readerUrl: '',
+        readerKey: '',
+      },
+    ]);
     expect(ui(root, 'toast').textContent).toBe('连接正常。');
 
     fake.setTestResult({ ok: false, reason: 'Key 不对或没有权限（401/403）——去设置页检查一下。' });
@@ -298,5 +326,46 @@ describe('mountSettings —— AI 分组：注入面', () => {
     // 也要说清"留空保存 = 不改 Key"，否则玩家会以为空框就是删 Key
     expect(text).toContain('留空');
     expect(all(root, '[data-ui="llm-clear"]')).toHaveLength(1);
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 8 · T9 */
+
+/**
+ * 设置页「读取服务」（Plan 8 · T9 / D43）。
+ *
+ * 判别力：
+ * - SL#R1 地址与 AI 配置一起保存（留空 = 不启用）；
+ * - SL#R2 它的 Key **同样永不回显**（只以掩码出现在 placeholder）；
+ * - SL#R3 屏上如实写明"链接会外发给这台服务"（隐私的账要让玩家知道自己在算什么）。
+ */
+describe('mountSettings —— 读取服务（Plan 8 · T9）', () => {
+  it('SL#R1 保存时带上读取服务地址；留空即不启用', () => {
+    const fake = makeFakeLlm();
+    const root = mountWith(fake);
+    (ui(root, 'llm-reader-url') as HTMLInputElement).value = 'https://reader.example/';
+    click(ui(root, 'llm-save'));
+    expect(fake.cfg().readerUrl).toBe('https://reader.example/');
+
+    (ui(root, 'llm-reader-url') as HTMLInputElement).value = '';
+    click(ui(root, 'llm-save'));
+    expect(fake.cfg().readerUrl).toBe('');
+  });
+
+  it('SL#R2 读取服务的 Key 不回显：password + 掩码 placeholder + DOM 无明文', () => {
+    const fake = makeFakeLlm({ ...BASE, readerUrl: 'https://reader.example/', readerKey: 'rk-secret-9999' });
+    const root = mountWith(fake);
+    const keyInput = ui(root, 'llm-reader-key') as HTMLInputElement;
+    expect(keyInput.type).toBe('password');
+    expect(keyInput.value).toBe('');
+    expect(keyInput.placeholder).toContain('…'); // 掩码
+    expect(domLeaks(root, 'rk-secret-9999')).toEqual([]);
+  });
+
+  it('SL#R3 屏上说明"链接会外发"（不藏着）', () => {
+    const root = mountWith(makeFakeLlm());
+    const hint = ui(root, 'llm-reader-hint').textContent ?? '';
+    expect(hint).toContain('外发');
+    expect(hint).toMatch(/第三方|读取服务/);
   });
 });

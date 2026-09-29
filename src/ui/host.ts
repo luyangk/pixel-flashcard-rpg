@@ -231,6 +231,21 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               onNav: () => onNav('menu'),
               onDrill: deps.onDrill,
               quotaText: deps.practiceQuotaText,
+              updateCard: deps.updateCard,
+              // 采新卡整块（Plan 8 · T9）：抓取 / 生成 / 清单 / 入库——**缺一个就整块收起**
+              // （缺省不显示点了没反应的入口；漏透传 = 生产里功能是死的而单测全绿）
+              collect:
+                deps.ingestUrl === undefined || deps.collectCards === undefined
+                  ? undefined
+                  : {
+                      ingestUrl: deps.ingestUrl,
+                      collectCards: deps.collectCards,
+                      inbox: deps.inbox,
+                      addCard: deps.addCard,
+                      addDeck: deps.addDeck,
+                      newId: deps.newId,
+                      sharedInput: deps.sharedInput ?? null,
+                    },
               now: deps.now,
               tzOffsetMin: deps.tzOffsetMin,
               toastMs: deps.toastMs,

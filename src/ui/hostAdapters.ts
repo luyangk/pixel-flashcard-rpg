@@ -20,6 +20,9 @@ import type { GameStorage } from '@platform/storage';
 import { clearLlmConfig, LLM_PRESETS, loadLlmConfig, saveLlmConfig } from '../platform/llmConfig';
 import { chat, listModels } from '../platform/llmHttp';
 import { addCard, addDeck, removeCard, removeDeck, renameDeck } from '../app/library';
+import { digestHtml } from '../platform/htmlDigest';
+import { clearInbox, loadInbox, saveInbox } from '../platform/inboxStore';
+import { fetchPage, type PageFetchResult } from '../platform/pageFetch';
 import { bossFightParams, setBossName } from '../app/bossFlow';
 import { setEggOnDeck } from '../app/codexFlow';
 import { judgeAnswer, suggestBossNames, suggestCards, suggestEgg, type ChatFn } from '../app/llmFlow';
@@ -34,6 +37,9 @@ import {
   setSm2Params,
 } from '../app/settingsFlow';
 import { saveBeatCursor } from '../app/storyState';
+import { ingestUrl } from '../app/ingestFlow';
+import { collectCards } from '../app/knowledgeFlow';
+import { updateCard } from '../app/library';
 import { DAILY_CARD_CAP, DAILY_JUDGE_CAP, planJudge, remainingCards, remainingJudges } from '../app/quota';
 import { resetSave } from '../app/resetFlow';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
@@ -41,6 +47,7 @@ import type { StageSprites } from '../stage/renderer';
 import type { FetchLike, LlmConfig } from '../platform/llmTypes';
 import { backupFileName } from './decks';
 import type { HostAdapters } from './hostTypes';
+import type { SharedInput } from './practiceCollect';
 
 export interface AssembleDeps {
   /** 已建好的控制器（本函数会包一层，用于记住"上一局的开局参数"）。 */
@@ -106,6 +113,18 @@ export interface AssembleDeps {
   readonly judgeOverride?: HostAdapters['judge'];
   /** 作答模式写口的覆盖位（一般不需要：真实现就是 settingsFlow 的薄封装）。 */
   readonly setAnswerModeOverride?: HostAdapters['setAnswerMode'];
+  /** 网页抓取口的覆盖位（Plan 8 · T9）：装配链要能在测试里穷举"读取服务怎么接"。 */
+  readonly fetchPageImpl?: (url: string, opts?: Parameters<typeof fetchPage>[1]) => Promise<PageFetchResult>;
+  /** 待读清单的覆盖位（缺省走 platform/inboxStore）。 */
+  readonly inboxOverride?: HostAdapters['inbox'];
+  /**
+   * 「采新卡」生成口的覆盖位（Plan 8 · T9）。与 `llmCardsOverride` 同款理由：
+   * 装配链里的"额度写回"是**本函数自己的逻辑**，要能在不联网的前提下穷举；
+   * 提示词/分块/去重那部分各有自己的用例（`tests/app/knowledgeFlow.test.ts`）。
+   */
+  readonly collectCardsOverride?: HostAdapters['collectCards'];
+  /** 系统分享进来的内容（main.ts 从 query 解析；缺省 null）。 */
+  readonly sharedInput?: SharedInput | null;
 }
 
 export interface HostAssembly {
@@ -211,6 +230,7 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     // core 的 FALLBACK_PARAMS，于是"设置页改了 initialEase"对新手写卡毫无效果。
     addCard: (input) =>
       addCard(coord, { ...input, nowMs: now(), sm2Params: coord.snapshot().settings.sm2Params }),
+    sharedInput: deps.sharedInput ?? null,
     addDeck: (input) => addDeck(coord, input),
     renameDeck: (input) => renameDeck(coord, input),
     removeDeck: (input) => removeDeck(coord, input),
@@ -308,6 +328,56 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       ((deckName, sampleFronts) => suggestBossNames({ chat: boundChat() }, { deckName, sampleFronts })),
     llmEgg: deps.llmEggOverride ?? ((deckName, sampleFronts) => suggestEgg({ chat: boundChat() }, { deckName, sampleFronts })),
     setEgg: deps.setEggOverride ?? ((deckId, text) => setEggOnDeck(coord, deckId, text)),
+
+    /* ---- 采新卡：抓取 / 生成 / 清单 / 就地编辑（Plan 8 · T9） ---- */
+    /**
+     * 抓一个链接。**读取服务只在玩家配了它的时候才带**（默认空串 = 不启用）：
+     * 那是"把链接发给第三方"，必须由玩家自己开（设置页里也如实写了这一点）。
+     */
+    ingestUrl: (url) =>
+      ingestUrl(
+        {
+          fetchPage: (target) => {
+            const cfg = llmIo.load();
+            const readerUrl = typeof cfg.readerUrl === 'string' ? cfg.readerUrl.trim() : '';
+            const fetchImpl = deps.fetchPageImpl ?? fetchPage;
+            return fetchImpl(
+              target,
+              readerUrl.length === 0
+                ? undefined
+                : { reader: { url: readerUrl, key: typeof cfg.readerKey === 'string' ? cfg.readerKey : '' } },
+            );
+          },
+          digestHtml,
+        },
+        url,
+      ),
+    /**
+     * 生成候选卡：额度**生成前读、生成后写回**（次数/张数都记在存档里）。
+     * 与判卷口同款纪律：`boundChat()` 每次现读配置。
+     */
+    collectCards: async (input) => {
+      const generate =
+        deps.collectCardsOverride ??
+        ((i: { text: string; deckName: string; want?: number }) =>
+          collectCards({ chat: boundChat() }, {
+            text: i.text,
+            deckName: i.deckName,
+            want: i.want,
+            quota: coord.snapshot().settings.llmQuota,
+            nowMs: now(),
+            tzOffsetMin,
+          }));
+      const res = await generate({
+        text: input.text,
+        deckName: input.deckName,
+        want: input.want,
+      });
+      if (res.ok) await setLlmQuota(coord, res.quota);
+      return res;
+    },
+    inbox: deps.inboxOverride ?? { load: loadInbox, save: saveInbox, clear: clearInbox },
+    updateCard: (input) => updateCard(coord, input),
 
     /* ---- 作答模式（Plan 6 · T7） ---- */
     setAnswerMode: deps.setAnswerModeOverride ?? ((mode) => setAnswerMode(coord, mode)),
