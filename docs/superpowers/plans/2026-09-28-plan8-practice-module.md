@@ -290,6 +290,11 @@ Modify `tests/tooling/pwa.test.ts`、`assets/README.md`、`README.md`、`docs/PR
       ⇒ 铸造从未完成；同一台设备实测 `webapks.google.com` / `www.google.com` / `play.google.com` **全部不可达**
       ⇒ 结论：安卓"装成应用"要经过 Google 的 WebAPK 铸造服务器，国内网络下必然静默失败。**不是清单/图标的问题**
       （已核对线上清单 200 + MIME `application/manifest+json` + 三张图标 200）。登记为 D52，并补了两条不依赖 Google 的替代路。
+- [x] **结案（2026-09-29）**：玩家自行把安装搞定了。设备端核对到 **`org.chromium.webapk.afe34305ea8c767da_v2`**
+      （标签「知识侠客」，uid=10274）—— **真 WebAPK**，不是书签快捷方式 ⇒ `share_target`「分享 → 知识侠客」具备。
+      与 D52 的判断一致：卡点在"能不能到 Google 那条网络"，不在清单/图标。
+      **仍未目视核对**：主屏图标外观、分享面板里的名字、装好后各屏的渲染 —— 屏幕读取权限未开
+      （DSHA「配置」页 →「屏幕操作权限」，或系统设置 → 无障碍 → DSHA 配对助手）。
 - [x] 玩家拍板（2026-09-29）：**走① 挂梯子再点一次「安装应用」**。我这边配合两件事：
       ① 玩家挂上代理后，我从**同一台设备**复测 `webapks.google.com` / `www.google.com` 可达性
       （容器与手机同一网络出口；若我这边仍不通而 Chrome 能开 Google，说明代理是"分应用"模式，不影响安装）；
