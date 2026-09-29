@@ -43,6 +43,16 @@
 - 文案由**同一个函数**（`practiceCollect.choicesLineOf`）产出，两处不许各写一份（迟早分叉）。
 - 变异自检 3 条全部会红（不显示 / 条件写反 / 只列第一条）。
 
+**T1c（玩家确认根因后追加）：30 张预置卡自带 90 条干扰项 + 老档回填**。
+玩家实测确认："预置知识没有通过大模型生成选项，都为空，所以战斗补充的时候同领域答案凑不齐"。
+- 内容侧：`assets/content/preset.json` 里 30 张卡各补 **3 条同领域、像常见误解**的干扰项
+  （逐条自检：不重复、不等于答案、每条 ≤30 字；`PC#3c` 机器化守住这四条）；
+- 加载侧：`PresetCardContent.choices` + `validateContent` 形状校验（空白/非字符串/超条数/超长一律整份拒）
+  + `buildPresetEntities` 经 `sanitizeChoices` 带进卡（`PC#3d` 守住"加载器漏传"）；
+- **老档回填** `backfillPresetChoices`：预置内容只在**空库首灌**时进档，老玩家的 30 张卡永远没有选项 ——
+  所以启动时跑一遍"只补缺"的回填（只认 `source.type === 'preset'` + 现在无选项；一次批量写；
+  没有要补的就不碰存档）。PC#6–#8 与 PC#7b 钉住它；变异自检 3 条会红（覆盖玩家重出 / 只认 id 不认来源 / 加载器漏传）。
+
 **已落地（commit 见 git log）**：+12 用例；`src/ui/battleScreen.ts` 池子改同领域、`src/core/llmParse.ts` 新增
 `parseChoices`、`src/app/llmFlow.ts` prompt 锁领域 + `suggestChoices`、`src/app/library.ts` 新增 `setCardChoices`、
 `src/ui/practice.ts` 与 `src/ui/hostAdapters.ts` 接线（含 1 张卡额度记账）。

@@ -10,12 +10,13 @@
  * - PC#5 只读态不灌**也不抛**（启动路径上抛异常 = 白屏）。
  */
 import { describe, expect, it } from 'vitest';
-import type { SaveFile } from '@core/types';
+import type { Card, SaveFile } from '@core/types';
 import type { GameStorage } from '@platform/storage';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { validateSave } from '@core/saveMigrate';
 import { createCoordinator, type Coordinator } from '../../src/app/persist';
 import {
+  backfillPresetChoices,
   buildPresetEntities,
   contentCardCount,
   installPresetContent,
@@ -97,6 +98,12 @@ describe('validateContent —— 逐项有牙', () => {
       ['卡背面为空', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: '' }] }] }],
       ['tags 非字符串数组', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: 'b', tags: [1] }] }] }],
       ['cards 不是数组', { decks: [{ id: 'd1', name: '甲', cards: 'x' }] }],
+      // D56：干扰项的形状也要拦（内容文件是手写的 —— 空白项/非字符串/超条数/超长都该当场红）
+      ['choices 不是数组', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: 'b', choices: 'x' }] }] }],
+      ['choices 有空白项', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: 'b', choices: ['  '] }] }] }],
+      ['choices 有非字符串', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: 'b', choices: [1] }] }] }],
+      ['choices 超过上限', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: 'b', choices: Array(9).fill('x') }] }] }],
+      ['choices 超长', { decks: [{ id: 'd1', name: '甲', cards: [{ id: 'c', front: 'f', back: 'b', choices: ['字'.repeat(201)] }] }] }],
     ];
     for (const [why, bad] of cases) {
       const res = validateContent(bad);
@@ -140,6 +147,33 @@ describe('真实内容文件（assets/content/preset.json）', () => {
     // 引导领域（阈值特调 15）必须有足够卡数才可能在 3 天内达标
     const guide = checked.content.decks.find((d) => d.id === 'preset-life');
     expect(guide?.cards.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('PC#3c **每张预置卡都自带 3 条干扰项**（同领域、不重复、不等于答案、长度可控）', () => {
+    // 为什么这条是硬契约：预置卡没有自带 choices 时，战斗只能吃池子 ——
+    // 多领域合练就会串味（现场："生活常识的题里出现 AI 的选项"）。这条守着"开局就有选项"。
+    const cards = presetJson.decks.flatMap((d) => d.cards);
+    expect(cards).toHaveLength(30);
+    for (const c of cards) {
+      const choices = c.choices ?? [];
+      expect(choices.length, `${c.id} 的干扰项不是 3 条`).toBe(3);
+      expect(new Set(choices).size, `${c.id} 的干扰项内部重复`).toBe(3);
+      for (const ch of choices) {
+        expect(ch.trim().length, `${c.id} 有空白干扰项`).toBeGreaterThan(0);
+        expect(ch, `${c.id} 的干扰项与答案相同`).not.toBe(c.back);
+        expect(Array.from(ch).length, `${c.id} 的干扰项过长：${ch}`).toBeLessThanOrEqual(30);
+      }
+    }
+  });
+
+  it('PC#3d 预置干扰项会被**带进卡里**（加载器漏传 = 玩家看到的还是池子凑的选项）', async () => {
+    const checked = validateContent(presetJson);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const { cards } = buildPresetEntities(checked.content, NOW);
+    const life01 = cards.find((c) => c.id === 'life-01');
+    expect(life01?.choices).toHaveLength(3);
+    expect(life01?.choices).toContain('云层太高，雷声被云挡住了');
   });
 
   it('PC#3b 引导域至少有 3 张卡含 ASCII 数字（假记忆演出的素材来源；终审 I-1）', () => {
@@ -236,5 +270,93 @@ describe('installPresetContent —— 只在空库灌', () => {
     const res = await installPresetContent(coord, presetJson, NOW);
     expect(res.installed).toBe(false);
     if (!res.installed) expect(res.reason).toContain('只读');
+  });
+});
+
+/* ------------------------------------------------------------------ D56：老档回填干扰项 */
+
+/**
+ * 判别力：
+ * - PC#6 老档（预置卡没有选项）⇒ 一次回填后每张预置卡都有 3 条，且**一次落盘**；
+ * - PC#7 **只补缺**：玩家重出过的选项、手写卡、已删的卡一律不动；
+ * - PC#8 幂等：第二遍 `filled === 0` 且**零写入**（否则每次启动都会刷 savedAt）。
+ */
+describe('backfillPresetChoices —— 给已有存档补干扰项（D56）', () => {
+  /** 一张最小的卡（本文件没有共享夹具，就地写一份最省的）。 */
+  const cardOf = (id: string, sourceType: 'preset' | 'manual', choices?: string[]): Card => ({
+    id,
+    deckId: 'preset-life',
+    front: `q-${id}`,
+    back: `a-${id}`,
+    tags: [],
+    source: { type: sourceType, createdAt: NOW },
+    ...(choices === undefined ? {} : { choices }),
+    srs: { stability: 'new', due: NOW, ease: 2.5, interval: 0, reps: 0, lapses: 0, effectiveReviewDays: [] },
+  });
+
+  /** 老档：预置卡（无选项）+ 一张手写卡。 */
+  function legacySave(): SaveFile {
+    return {
+      ...emptySave(),
+      decks: [{ id: 'preset-life', name: '生活常识', isPreset: true }],
+      cards: [cardOf('life-01', 'preset'), cardOf('life-02', 'preset'), cardOf('mine', 'manual')],
+    };
+  }
+
+  it('PC#6 老档一次回填：每个预置卡补上 3 条，手写卡不动，一次落盘', async () => {
+    const inner = createMemoryStorage();
+    await inner.save(legacySave());
+    const wrapped = wrapStore(inner);
+    const coord = await createCoordinator(wrapped.store, { now: () => NOW, debounceMs: 0 });
+
+    const res = await backfillPresetChoices(coord, presetJson);
+    expect(res.filled).toBe(2);
+    await coord.flush();
+
+    const after = coord.snapshot().cards;
+    expect(after.find((c) => c.id === 'life-01')?.choices).toHaveLength(3);
+    expect(after.find((c) => c.id === 'life-02')?.choices).toHaveLength(3);
+    expect(after.find((c) => c.id === 'mine')?.choices).toBeUndefined();
+    expect(wrapped.writes()).toBe(1); // 一次批量写，不是两张卡两次
+  });
+
+  it('PC#7 只补缺：玩家重出过的选项原样保留', async () => {
+    const seed = legacySave();
+    seed.cards[0].choices = ['我自己重出的'];
+    const inner = createMemoryStorage();
+    await inner.save(seed);
+    const coord = await createCoordinator(inner, { now: () => NOW, debounceMs: 0 });
+
+    const res = await backfillPresetChoices(coord, presetJson);
+    expect(res.filled).toBe(1); // 只有 life-02 缺
+    expect(coord.snapshot().cards.find((c) => c.id === 'life-01')?.choices).toEqual(['我自己重出的']);
+  });
+
+  it('PC#7b 同 id 但不是预置卡（例如从别人的备份导进来）⇒ 绝不动它', async () => {
+    const seed = legacySave();
+    // id 撞上预置卡，但来源是手写 ⇒ 回填必须按**来源**判断，不能只看 id
+    seed.cards[1] = { ...seed.cards[1], source: { type: 'manual', createdAt: NOW } };
+    const inner = createMemoryStorage();
+    await inner.save(seed);
+    const coord = await createCoordinator(inner, { now: () => NOW, debounceMs: 0 });
+
+    const res = await backfillPresetChoices(coord, presetJson);
+    expect(res.filled).toBe(1); // 只有 life-01
+    expect(coord.snapshot().cards.find((c) => c.id === 'life-02')?.choices).toBeUndefined();
+  });
+
+  it('PC#8 幂等：第二遍零改动、零写入', async () => {
+    const inner = createMemoryStorage();
+    await inner.save(legacySave());
+    const wrapped = wrapStore(inner);
+    const coord = await createCoordinator(wrapped.store, { now: () => NOW, debounceMs: 0 });
+
+    await backfillPresetChoices(coord, presetJson);
+    await coord.flush();
+    const writesAfterFirst = wrapped.writes();
+    const second = await backfillPresetChoices(coord, presetJson);
+    await coord.flush();
+    expect(second.filled).toBe(0);
+    expect(wrapped.writes()).toBe(writesAfterFirst);
   });
 });

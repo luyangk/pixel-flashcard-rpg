@@ -36,7 +36,7 @@ import presetJson from '../assets/content/preset.json';
 
 import { createGameController } from './app/gameController';
 import { createCoordinator } from './app/persist';
-import { installPresetContent, isFreshLibrary } from './app/presetContent';
+import { backfillPresetChoices, installPresetContent, isFreshLibrary } from './app/presetContent';
 import { parseShareQuery } from './app/shareIntake';
 import { loadSprites } from './platform/assets';
 import { now as clockNow } from './platform/clock';
@@ -69,6 +69,10 @@ async function boot(): Promise<void> {
   const wasFresh = isFreshLibrary(coord.snapshot());
   const installed = await installPresetContent(coord, presetJson, clockNow());
   if (installed.installed) await coord.flush();
+  // 老玩家的预置卡补干扰项（D56）：内容文件新增的 choices 只在"空库首灌"时进档，
+  // 所以已经玩起来的存档需要这一遍"只补缺"的回填（幂等、无改动时不写盘）。
+  const backfilled = await backfillPresetChoices(coord, presetJson);
+  if (backfilled.filled > 0) await coord.flush();
   const notice = wasFresh && !installed.installed ? installed.reason : null;
 
   const rawCtrl = await createGameController({

@@ -19,6 +19,7 @@
 import type { Card, Deck, SaveFile } from '@core/types';
 import { MAX_TIME_MS } from '@core/saveMigrate';
 import { createInitialSRS } from '@core/sm2';
+import { CHOICES_MAX, CHOICE_TEXT_MAX, sanitizeChoices } from '@core/llmParse';
 import type { Coordinator } from './persist';
 
 /** 内容文件里的一张卡（只有文案与 id；溯源与 SRS 由代码生成）。 */
@@ -27,6 +28,14 @@ export interface PresetCardContent {
   readonly front: string;
   readonly back: string;
   readonly tags?: readonly string[];
+  /**
+   * 干扰项（D56）：**每张预置卡都必须自带**。
+   *
+   * 为什么预置卡尤其需要它：战斗里的干扰项顺序是「卡上自带 → 同领域其他卡」，
+   * 而预置卡原来是空的 ⇒ 只能吃池子；多领域合练时就会串味（现场症状：生活常识的题里
+   * 出现 AI 的选项）。写进内容文件后，每张预置卡一开局就有**同领域、像常见误解**的选项。
+   */
+  readonly choices?: readonly string[];
 }
 
 /** 内容文件里的一个领域。 */
@@ -84,6 +93,16 @@ export function validateContent(content: unknown): { ok: true; content: PresetCo
       cardIds.add(card.id);
       if (typeof card.front !== 'string' || card.front.trim().length === 0) return bad(`卡 ${card.id} 的正面为空`);
       if (typeof card.back !== 'string' || card.back.trim().length === 0) return bad(`卡 ${card.id} 的背面为空`);
+      const choices = card.choices;
+      if (choices !== undefined) {
+        if (!Array.isArray(choices) || choices.some((c) => typeof c !== 'string' || c.trim().length === 0)) {
+          return bad(`卡 ${card.id} 的 choices 不是非空字符串数组`);
+        }
+        if (choices.length > CHOICES_MAX) return bad(`卡 ${card.id} 的 choices 超过 ${CHOICES_MAX} 条`);
+        if (choices.some((c) => Array.from(c).length > CHOICE_TEXT_MAX)) {
+          return bad(`卡 ${card.id} 的 choices 有条目超过 ${CHOICE_TEXT_MAX} 字`);
+        }
+      }
       const tags = card.tags;
       if (tags !== undefined && (!Array.isArray(tags) || tags.some((t) => typeof t !== 'string'))) {
         return bad(`卡 ${card.id} 的 tags 不是字符串数组`); // validateSave: tags 逐项字符串
@@ -127,10 +146,57 @@ export function buildPresetEntities(
         source: { type: 'preset', createdAt: nowMs },
         srs: createInitialSRS(nowMs),
         tags: Array.isArray(c.tags) ? [...c.tags] : [],
+        // 与生成卡同一套消毒：去空白、去掉与答案相同的、去重、按上限截断
+        ...(sanitizeChoices(c.choices, c.back).length > 0
+          ? { choices: sanitizeChoices(c.choices, c.back) }
+          : {}),
       });
     }
   }
   return { decks, cards };
+}
+
+/**
+ * 给**已经装过**预置内容的存档补上干扰项（D56）。
+ *
+ * 为什么必须有这一步：预置内容只在**空库首次启动**时灌入，所以"把 choices 写进内容文件"
+ * 只对新玩家生效；老玩家的 30 张预置卡永远停在"没有选项"的状态，于是战斗只能吃池子
+ * —— 正是现场那个"生活常识的题里出现 AI 选项"的另一半原因。
+ *
+ * 三条纪律：
+ * 1. **只补缺**：只在"这张卡是预置卡、现在没有 choices、内容文件里给了"时才写
+ *    （玩家自己重出过的选项一律不动 —— 他的编辑永远优先）；
+ * 2. **没有要补的就完全不碰存档**（零写入：免得每次启动都刷 savedAt）；
+ * 3. **一次 mutate 批量完成**（30 张卡一次落盘，不是 30 次写）。
+ *
+ * 幂等：跑第二遍时所有预置卡都已有选项 ⇒ `filled === 0` 且不写。
+ */
+export async function backfillPresetChoices(
+  coord: Coordinator,
+  content: PresetContent,
+): Promise<{ readonly filled: number }> {
+  const byId = new Map<string, string[]>();
+  for (const deck of content?.decks ?? []) {
+    for (const card of deck?.cards ?? []) {
+      const cleaned = sanitizeChoices(card?.choices, card?.back ?? '');
+      if (cleaned.length > 0) byId.set(card.id, cleaned);
+    }
+  }
+  if (byId.size === 0) return { filled: 0 };
+
+  const missing = (coord.snapshot().cards ?? []).filter(
+    (c) => c && c.source?.type === 'preset' && (c.choices ?? []).length === 0 && byId.has(c.id),
+  );
+  if (missing.length === 0) return { filled: 0 }; // 零写入
+
+  await coord.mutate((s) => {
+    for (const c of s.cards) {
+      if (!c || c.source?.type !== 'preset' || (c.choices ?? []).length > 0) continue;
+      const fill = byId.get(c.id);
+      if (fill !== undefined) c.choices = [...fill];
+    }
+  });
+  return { filled: missing.length };
 }
 
 /**
