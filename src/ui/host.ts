@@ -115,6 +115,11 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
   if (!root || !ctrl) throw new Error('mount-host: root/controller required');
 
   let route: HostRoute = deps.initialRoute ?? 'menu';
+  /**
+   * 练功屏「落在哪个分区」（D49）。两个入口来路不同：菜单进来是「看旧卡」（默认），
+   * 卡组页的「采新卡」按钮进来要**直接开在采新卡分区**（不是落在首页让人自己找）。
+   */
+  let practiceTab: 'browse' | 'collect' = 'browse';
   let prologueActive = needsPrologue(ctrl.snapshot().save);
   let destroyed = false;
   let currentKey = '';
@@ -144,7 +149,17 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
 
   function onNav(target: HostRoute): void {
     if (destroyed) return;
+    // 从菜单/其它一级屏进练功屏：一律回到默认分区（免得"上次从卡组页来"的记忆赖着不走）
+    if (target === 'practice') practiceTab = 'browse';
     route = target;
+    sync(ctrl.snapshot());
+  }
+
+  /** 卡组页的「采新卡」入口：切到练功屏并让它开在采新卡分区。 */
+  function onCollect(): void {
+    if (destroyed) return;
+    practiceTab = 'collect';
+    route = 'practice';
     sync(ctrl.snapshot());
   }
 
@@ -211,6 +226,7 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
           case 'decks':
             return mountDecks(root, ctrl, {
               onNav: () => onNav('menu'),
+              onCollect: deps.ingestUrl === undefined || deps.collectCards === undefined ? undefined : onCollect,
               addCard: deps.addCard,
               llmCards: deps.llmCards,
               addDeck: deps.addDeck,
@@ -229,6 +245,7 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
           case 'practice':
             return mountPractice(root, ctrl, {
               onNav: () => onNav('menu'),
+              initialTab: practiceTab,
               onDrill: deps.onDrill,
               quotaText: deps.practiceQuotaText,
               updateCard: deps.updateCard,

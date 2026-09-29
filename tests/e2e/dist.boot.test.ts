@@ -377,4 +377,49 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     expect(text).toContain('4 个领域');
     expect(text).toContain('30 张卡');
   }, 30_000);
+
+  it('DB#9 产物里卡组页的「采新卡」入口真的通：点进去直接落在采新卡分区（D49）', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 24; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    // 从任意一级屏回菜单 → 卡组（不依赖上一个用例停在哪儿）
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    expect(click('[data-nav="decks"]'), '菜单里没有「卡组」入口').toBe(true);
+    await settle();
+
+    // ① 入口在（main.ts 漏传 ingestUrl/collectCards ⇒ 整块收起，点了没反应）
+    const entry = q('[data-ui="collect-entry"]');
+    expect(entry, '卡组页没有采新卡入口').not.toBeNull();
+    expect(entry?.hidden, '入口收起了（采集口没透传到卡组页）').toBe(false);
+    expect(entry?.textContent ?? '', '入口文案不完整').toContain('采新卡');
+
+    // ② 点了要**直接落在采新卡分区**（只切屏不落分区 = 用户还得自己找一遍）
+    expect(click('[data-ui="collect-open"]')).toBe(true);
+    await settle();
+    expect(q('[data-ui="practice-tabs"]'), '没切到练功屏').not.toBeNull();
+    expect(q('[data-ui="tab-collect"]')?.getAttribute('aria-pressed'), '没落在采新卡分区').toBe('true');
+    expect(q('[data-ui="practice-collect"]'), '采新卡子分区没挂上').not.toBeNull();
+
+    // 收尾：回菜单（别把后续用例留在练功屏上）
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+  }, 40_000);
 });

@@ -29,7 +29,7 @@
 | 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | ✅ 已完成：离线 + Pages 上线 + 三项 AI 职能（自带 Key）；另含两处实测反馈修复：数值改进（D39）与「重置存档」（D40） |
 | 6 | 作答模式：选择题（默认）/ 问答模式（LLM 判卷）/ 直接看答案；四档自评下线 | PRD §3.1、§9 | ✅ 已完成（D41/D42/D45）：卡上自带干扰项、判定回"缺了哪些要点"、判定 300 次/天到顶回落自评 |
 | 7 | 木桩练功：练功入口 + 看旧卡 + 勾选练这一域（不判胜负、不推进卷灵达标） | PRD §4.5、D46 | ✅ 已完成：core 新形态 `drill`+`cleared` / 木人桩精灵（22/22 幂等）/ 练功屏 / 端到端冒烟 |
-| 8 | 练功模块：采新卡（玩家驱动摄入 + 待读清单 + 分享进来）与看旧卡就地编辑 | PRD §4.2/§4.5、D43/D47 | ✅ 已完成：抓取/解析/分类/分块生成/额度/待读清单/采新卡屏/就地编辑/分享进来 + 真产物 DB#8 |
+| 8 | 练功模块：采新卡（玩家驱动摄入 + 待读清单 + 分享进来）与看旧卡就地编辑 | PRD §4.2/§4.5、D43/D47 | ✅ 已完成：抓取/解析/分类/分块生成/额度/待读清单/采新卡屏/就地编辑/分享进来 + 真产物 DB#8；**卡组页也开了一个采新卡入口**（D49，真产物 DB#9） |
 
 > 注 1：Plan 1 的原始路线图把"叙事系统"与"LLM 管线"单列为 Plan 3/4；实际执行时 Plan 3 改为
 > 装配层（数据流主干），这两块随渲染层并入 Plan 4。
@@ -93,7 +93,9 @@ npm run dev -- --host 0.0.0.0
 
 ### 采新卡：把外面的知识带进来
 
-练功屏的第二个分区「采新卡」（需要你在「设置 → AI」里配好 Key）。三条路，都走同一条管线：
+练功屏的第二个分区「采新卡」（需要你在「设置 → AI」里配好 Key）。**卡组页也开了同一个入口**
+（列表下方的「采新卡（从链接 / 文章）」→「去练功 → 采新卡」）——建卡的事都归在一起，
+从卡组页点进去**直接落在采新卡分区**，不用再自己切一次。三条路，都走同一条管线：
 **抓到正文 → AI 改写成候选卡 → 你逐条勾选 → 存入某个领域**。
 
 | 你怎么给来源 | 实际会发生什么 |
@@ -189,7 +191,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **73 文件 / 1200 用例**；另有 8 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **80 文件 / 1204 用例**；另有 9 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -208,6 +210,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D49 卡组页的「采新卡」入口（与 AI 辅建卡并排，点了直接落在采新卡分区） | `tests/ui/decks.test.ts` · DC#E1/#E2、`tests/ui/host.test.ts` · HS#E2/#E3、`tests/e2e/dist.boot.test.ts` · DB#9（真产物里点通并核对落点） |
 
 ## 素材与叙事
 

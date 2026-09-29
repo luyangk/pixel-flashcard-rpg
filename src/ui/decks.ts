@@ -36,6 +36,11 @@ export interface DecksDeps {
   readonly pageSize?: number;
   /** 返回上一屏（缺省不显示返回按钮）。 */
   readonly onNav?: (target: 'menu') => void;
+  /**
+   * 「采新卡」入口（D49：用户反馈"都是建卡嘛"）——跳到练功屏的采新卡分区。
+   * 缺省 ⇒ 整块隐藏（不显示点了没反应的入口，与全仓其它入口同款纪律）。
+   */
+  readonly onCollect?: () => void;
   /** 加卡写口（宿主接 app/library.addCard）。缺省则加卡表单不显示。 */
   readonly addCard?: (input: {
     front: string;
@@ -235,6 +240,31 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     authorEl,
   ]);
 
+  /**
+   * 「采新卡」入口（D49）。为什么放在**辅建卡旁边**：两者是同一件事（建卡）的两种来源 ——
+   * 上面那个把"你粘的文字"变成卡，这个把"链接/文章"变成卡，入口分居两屏等于让人记路。
+   */
+  const collectOpenBtn = h(
+    'button',
+    { 'data-ui': 'collect-open', class: 'collect-open', type: 'button' },
+    '去练功 → 采新卡',
+  ) as HTMLButtonElement;
+  collectOpenBtn.addEventListener('click', () => deps.onCollect?.());
+  const collectEntryEl = h(
+    'section',
+    { 'data-ui': 'collect-entry', class: 'settings-group', hidden: typeof deps.onCollect !== 'function' },
+    [
+      h('h3', { class: 'field-title' }, '采新卡（从链接 / 文章）'),
+      h(
+        'p',
+        { class: 'field-hint' },
+        '给一个链接或粘一段正文，就能生成候选卡；抓不到会告诉你下一步。' +
+          '与上面的「AI 辅建卡」共用每日额度，候选同样要你逐条确认才入库。',
+      ),
+      collectOpenBtn,
+    ],
+  );
+
   const screen = h('div', { 'data-ui': 'decks-screen', class: 'decks-screen' }, [
     headerEl,
     decksManageEl,
@@ -244,6 +274,7 @@ export function mountDecks(root: HTMLElement, ctrl: GameController, deps: DecksD
     addFormEl,
     newDeckEl,
     authorSectionEl,
+    collectEntryEl,
     transferEl,
   ]);
   root.appendChild(screen);

@@ -27,6 +27,11 @@ export const DRILL_POOL_MAX = 25;
 export interface PracticeDeps {
   /** 返回主菜单。 */
   readonly onNav?: (target: 'menu') => void;
+  /**
+   * 初始分区（D49）。卡组页的「采新卡」入口要求"直接开在采新卡分区"；
+   * 缺省 `'browse'`（从菜单进来就是看旧卡）。
+   */
+  readonly initialTab?: 'browse' | 'collect';
   /** 「练这一域」：把勾选的卡交给宿主开局（宿主接 startFight({mode:'drill', cardIds})）。 */
   readonly onDrill?: (input: { readonly cardIds: readonly string[] }) => void;
   /** 「今日新知识额度」那一行（Plan 8 用；缺省则不显示）。 */
@@ -186,7 +191,7 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
   );
 
   /* ------------------------------------------------------------ 分区切换（看旧卡 / 采新卡） */
-  let tab: 'browse' | 'collect' = 'browse';
+  let tab: 'browse' | 'collect' = deps.initialTab === 'collect' ? 'collect' : 'browse';
   const tabBrowseBtn = h('button', { 'data-ui': 'tab-browse', class: 'tab-btn', type: 'button' }, '看旧卡') as HTMLButtonElement;
   const tabCollectBtn = h('button', { 'data-ui': 'tab-collect', class: 'tab-btn', type: 'button' }, '采新卡') as HTMLButtonElement;
   const tabsEl = h('div', { 'data-ui': 'practice-tabs', class: 'tabs' }, [tabBrowseBtn, tabCollectBtn]);

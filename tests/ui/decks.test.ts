@@ -352,3 +352,48 @@ describe('mountDecks —— 防连点（RF#3 的卡组页面）', () => {
     expect(ui(root, 'toast').textContent).toContain('只读保护');
   });
 });
+
+/* ------------------------------------------------------------------ Plan 8 · T12 */
+
+/**
+ * 卡组页的「采新卡」入口（D49：用户反馈"都是建卡嘛"）。
+ *
+ * 判别力：
+ * - DC#E1 注入 `onCollect` ⇒ 入口可见且点击调它（缺省 ⇒ **隐藏**：不显示点了没反应的入口）；
+ * - DC#E2 它挂在「AI 辅建卡」附近（同一件事的两种来源，入口不该分居两屏）。
+ */
+describe('mountDecks —— 采新卡入口（Plan 8 · T12 / D49）', () => {
+  function mountWith(over: Record<string, unknown> = {}) {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ save: makeSave({ decks: [makeDeck('d1', '唐诗')], cards: [makeCard('c1')] }) }));
+    mountDecks(root, ctrl, over as never);
+    return root;
+  }
+
+  it('DC#E1 注入 onCollect ⇒ 入口可见、点了调它；缺省 ⇒ 隐藏', () => {
+    const calls: number[] = [];
+    const shown = mountWith({ onCollect: () => void calls.push(1) });
+    expect(ui(shown, 'collect-entry').hidden).toBe(false);
+    expect(ui(shown, 'collect-open').hidden).toBe(false);
+    click(ui(shown, 'collect-open'));
+    expect(calls).toEqual([1]);
+
+    const bare = mountWith();
+    expect(ui(bare, 'collect-entry').hidden).toBe(true);
+  });
+
+  it('DC#E2 入口就在「AI 辅建卡」附近（同一件事的两种来源）', () => {
+    const root = mountWith({
+      onCollect: () => undefined,
+      // 辅建卡需要 addCard + llmCards 两个口才显示（与既有纪律一致）
+      addCard: () => Promise.resolve({ ok: true, value: makeCard('x') }),
+      llmCards: () => Promise.resolve({ ok: true, value: [], truncated: false }),
+    });
+    const author = root.querySelector('[data-ui="llm-author-section"]') as HTMLElement | null;
+    const entry = root.querySelector('[data-ui="collect-entry"]') as HTMLElement | null;
+    expect(author).not.toBeNull();
+    expect(entry).not.toBeNull();
+    // 两者相邻：入口紧跟在辅建卡 section 之后
+    expect(author?.nextElementSibling).toBe(entry);
+  });
+});

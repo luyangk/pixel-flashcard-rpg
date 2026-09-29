@@ -210,5 +210,25 @@ export function parseShareQuery(search: string): SharedInput | null;
   自动聚焦粘贴框、以及一行指向"粘贴正文 / 可选读取服务"的提示；
 - 「打开原文」走注入的 `openUrl`（缺省 `window.open(url, '_blank', 'noopener')`），以便测试取证。
 
-- [ ] Step 1 失败测试：PF#5c 4MB 以内接受、4MB 以上拒绝（文案含"太大"）；PC#11 被拦后出现「打开原文去复制」且点了真的打开该链接、粘贴框自动获得焦点
-- [ ] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] Step 1 失败测试：PF#5c 4MB 以内接受、4MB 以上拒绝（文案含"太大"）；PC#11 被拦后出现「打开原文去复制」且点了真的打开该链接、粘贴框自动获得焦点
+- [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit（`1652fe0`）+ 推送 → CI/Deploy 双绿，线上产物已核对含「打开原文去复制」「粘到下面的框里」
+
+---
+
+### Task 12: 卡组页也开一个「采新卡」入口（D49）
+
+**Files:** Modify `src/ui/decks.ts`、`src/ui/host.ts`、`tests/ui/decks.test.ts`（或 `decks.author.test.ts`）、`tests/ui/host.test.ts`；`README.md`
+
+**口径：**
+- 卡组页在「AI 辅建卡」下方并排一块 `[data-ui="collect-entry"]`：一句话（"给链接或粘正文；
+  抓不到会给你下一步；和上面的 AI 辅建卡共用每日额度"）+ 按钮 `[data-ui="collect-open"]`
+  「去练功 → 采新卡」；
+- 只在**宿主给了 `onCollect`** 时显示（缺省不显示点了没反应的入口，与全仓其它入口同款纪律）；
+- 宿主：`onCollect` = 切到 `practice` 路由并让练功屏**直接开在采新卡分区**（不是落在首页让人自己找）；
+  从菜单进练功屏时仍默认落在「看旧卡」；
+- 不复制任何生成逻辑：第二个入口只是**导航 + 落地分区**。
+
+- [x] Step 1 失败测试：**DC#E1** 注入 `onCollect` ⇒ 入口可见、文案齐全、点击真的调它；**DC#E2** 缺省 ⇒ 收起；**HS#E2** 从卡组页点入口 ⇒ 落在练功屏且**采新卡分区已打开**（`practice-collect` 存在）、随后从菜单进练功屏 ⇒ 仍落在「看旧卡」（落点记忆不残留）；**HS#E3** 没接采集口 ⇒ 卡组页入口收起、接上就露出
+- [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] 变异自检（每条都真的会红）：① `hidden: false` 写死 ⇒ DC#E2/HS#E3 红；② 入口只切路由不切分区 ⇒ HS#E2 红；③ 从菜单进练功屏沿用上次落点 ⇒ HS#E2 红；④ 宿主无条件透传 `onCollect` ⇒ HS#E3 红
+- [x] 真产物兜底：**DB#9** 在 `dist/` 里从菜单进卡组 → 入口可见 → 点进去 `tab-collect` 已按下且 `practice-collect` 挂上（`main.ts` 漏传采集口 ⇒ 红）

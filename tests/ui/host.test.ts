@@ -662,3 +662,109 @@ describe('mountHost —— 采新卡透传（Plan 8 · T9）', () => {
     });
   });
 });
+
+/* ------------------------------------------------------------------ Plan 8 · T12 */
+
+/**
+ * 卡组页「采新卡」入口的落点（D49）。
+ *
+ * 判别力：
+ * - HS#E1 从**卡组页**点「去练功 → 采新卡」⇒ 落在练功屏且**采新卡分区已打开**
+ *   （只切屏不落分区 = 用户还得自己找一遍，等于没做）；
+ * - HS#E2 从**菜单**进练功屏 ⇒ 仍落在「看旧卡」（不被上一次的落点记忆带走）。
+ */
+describe('mountHost —— 采新卡入口的落点（Plan 8 · T12）', () => {
+  const collectStubs = {
+    ingestUrl: () => Promise.resolve({ kind: 'blocked' as const, url: 'u', reason: 'r', blocked: true }),
+    collectCards: () =>
+      Promise.resolve({
+        ok: true as const,
+        candidates: [],
+        quota: { day: '', cards: 0, judges: 0 },
+        requests: 0,
+        truncated: false,
+      }),
+  };
+
+  function boot(onDecks: () => void, depsExtra: Record<string, unknown> = {}) {
+    const base = makeSave();
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: {
+          ...base,
+          settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    const { deps } = adapters({ ...collectStubs, ...depsExtra });
+    const root = makeRoot();
+    mountHost(root, ctrl, deps);
+    onDecks();
+    return root;
+  }
+
+  it('HS#E2 菜单进练功屏 ⇒ 默认落在「看旧卡」；卡组页入口 ⇒ 直接落在采新卡', async () => {
+    const base = makeSave();
+    const mk = () => {
+      const ctrl = makeCtrl(
+        makeSnap({
+          screen: 'menu',
+          save: {
+            ...base,
+            settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+          },
+        }),
+      );
+      const { deps } = adapters(collectStubs);
+      const root = makeRoot();
+      mountHost(root, ctrl, deps);
+      return root;
+    };
+    // ① 菜单 → 练功：默认看旧卡
+    const a = mk();
+    click(a.querySelector('[data-nav="practice"]') as HTMLElement);
+    expect(ui(a, 'tab-browse').getAttribute('aria-pressed')).toBe('true');
+    expect(a.querySelector('[data-ui="practice-collect"]')).toBeNull();
+
+    // ② 卡组页 → 入口：直接落在采新卡
+    const b = mk();
+    click(b.querySelector('[data-nav="decks"]') as HTMLElement);
+    expect(ui(b, 'collect-entry').hidden).toBe(false);
+    click(ui(b, 'collect-open'));
+    expect(ui(b, 'tab-collect').getAttribute('aria-pressed')).toBe('true');
+    expect(b.querySelector('[data-ui="practice-collect"]')).not.toBeNull();
+
+    // ③ 再回菜单进练功：落点记忆不残留（仍看旧卡）。
+    // 练功屏的返回是**两段式**（采新卡 → 看旧卡 → 菜单，见 PR#11），所以要按两下
+    click(ui(b, 'back'));
+    expect(ui(b, 'tab-browse').getAttribute('aria-pressed')).toBe('true'); // 只按一下仍在练功屏
+    click(ui(b, 'back'));
+    click(b.querySelector('[data-nav="practice"]') as HTMLElement);
+    expect(ui(b, 'tab-browse').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('HS#E3 没接采集口 ⇒ 卡组页的采新卡入口收起（不显示点了没反应的入口）', () => {
+    const base = makeSave();
+    const mk = (extra: Record<string, unknown>) => {
+      const ctrl = makeCtrl(
+        makeSnap({
+          screen: 'menu',
+          save: {
+            ...base,
+            settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+          },
+        }),
+      );
+      const { deps } = adapters(extra);
+      const root = makeRoot();
+      mountHost(root, ctrl, deps);
+      click(root.querySelector('[data-nav="decks"]') as HTMLElement);
+      return root;
+    };
+    // 没接 ingestUrl / collectCards ⇒ 入口收起
+    expect(ui(mk({}), 'collect-entry').hidden).toBe(true);
+    // 对照：接上采集口 ⇒ 同一位置露出来（收起不是因为卡组页整块没渲染）
+    expect(ui(mk(collectStubs), 'collect-entry').hidden).toBe(false);
+  });
+});
