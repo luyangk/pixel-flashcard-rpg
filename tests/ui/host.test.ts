@@ -116,7 +116,7 @@ describe('mountHost —— 序章（needsPrologue 闭环）', () => {
 
     // 控制器推的回执快照（prologueSeen=true）⇒ 菜单上场
     ctrl.push(snapMenu());
-    expect(all(root, '[data-nav]')).toHaveLength(4);
+    expect(all(root, '[data-nav]')).toHaveLength(5);
   });
 
   it('HS#2b 已看过序章（prologueSeen=true）直接进菜单', () => {
@@ -125,7 +125,7 @@ describe('mountHost —— 序章（needsPrologue 闭环）', () => {
     const { deps } = adapters();
     mountHost(root, ctrl, deps);
     expect(root.querySelector('[data-ui="prologue-screen"]')).toBeNull();
-    expect(all(root, '[data-nav]')).toHaveLength(4);
+    expect(all(root, '[data-nav]')).toHaveLength(5);
   });
 });
 
@@ -551,5 +551,44 @@ describe('mountHost —— 木桩练完不演假记忆（Plan 7 · T5）', () =>
       expect(spy.walks() > 0, `${c.mode} 是否真的挑过假记忆素材`).toBe(c.expectFake);
       document.body.replaceChildren();
     }
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 7 · T6 */
+
+/**
+ * 练功屏的宿主接线（Plan 7 · T6）。
+ *
+ * 判别力：菜单里必须有「练功」入口（漏了 = 玩家到不了这一屏），且**勾选后点「练这一域」
+ * 必须真的走到 `onDrill`**（宿主漏透传 = 按钮永远禁用/点了没反应，而屏级单测全绿）。
+ */
+describe('mountHost —— 练功入口与 onDrill 透传（Plan 7 · T6）', () => {
+  it('HS#P1 菜单有「练功」；进屏后勾选并开练 ⇒ 走到注入的 onDrill', () => {
+    const root = makeRoot();
+    const base = makeSave();
+    const cards = [
+      makeCard('c1', { srs: { ...makeSave().cards[0].srs, stability: 'new', due: 0 } }),
+      makeCard('c2', { srs: { ...makeSave().cards[0].srs, stability: 'new', due: 0 } }),
+    ];
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: { ...base, settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } }, cards },
+      }),
+    );
+    const seen: string[][] = [];
+    const { deps } = adapters({ onDrill: ({ cardIds }) => void seen.push([...cardIds]) });
+    mountHost(root, ctrl, deps);
+
+    const entry = root.querySelector('[data-nav="practice"]') as HTMLElement | null;
+    expect(entry, '菜单里没有「练功」入口').not.toBeNull();
+    entry?.click();
+    expect(root.querySelector('[data-ui="practice-screen"]')).not.toBeNull();
+
+    // 打开第一个领域 → 勾选默认就有了 → 开练
+    click(root.querySelector('[data-deck]') as HTMLElement);
+    click(ui(root, 'drill-start'));
+    expect(seen).toHaveLength(1);
+    expect(seen[0].sort()).toEqual(['c1', 'c2']);
   });
 });

@@ -40,7 +40,7 @@ function saveWithLeaderboard(count: number) {
 }
 
 describe('mountMenu —— 四入口', () => {
-  it('MN#1 四个入口各自的导航目标正确（缺一个或对不上都算红）', () => {
+  it('MN#1 五个入口各自的导航目标正确（缺一个或对不上都算红）', () => {
     const root = makeRoot();
     const nav: MenuTarget[] = [];
     const ctrl = makeCtrl(makeSnap());
@@ -48,10 +48,17 @@ describe('mountMenu —— 四入口', () => {
 
     expect(ui(root, 'menu-title').textContent).toBe('知识侠客');
     const entries = all(root, '[data-nav]');
-    expect(entries.map((e) => e.getAttribute('data-nav'))).toEqual(['prepare', 'decks', 'codex', 'settings']);
-    expect(entries.map((e) => e.textContent)).toEqual(['开始复习', '卡组', '藏书阁', '设置']); // LORE §8：功能界面用大白话
+    expect(entries.map((e) => e.getAttribute('data-nav'))).toEqual([
+      'prepare',
+      'decks',
+      'practice',
+      'codex',
+      'settings',
+    ]);
+    // 「练功」是 D44 登记的唯一术语例外（用户指定的词），其余四个继续走大白话（LORE §8）
+    expect(entries.map((e) => e.textContent)).toEqual(['开始复习', '卡组', '练功', '藏书阁', '设置']);
     for (const e of entries) click(e);
-    expect(nav).toEqual(['prepare', 'decks', 'codex', 'settings']);
+    expect(nav).toEqual(['prepare', 'decks', 'practice', 'codex', 'settings']);
   });
 });
 
@@ -185,7 +192,7 @@ describe('mountMenu —— 拆除', () => {
     const root = makeRoot();
     const ctrl = makeCtrl(makeSnap({ save: saveWithLeaderboard(3) }));
     const handle = mountMenu(root, ctrl, { onNav: () => undefined });
-    expect(all(root, '[data-nav]')).toHaveLength(4);
+    expect(all(root, '[data-nav]')).toHaveLength(5);
 
     handle.unmount();
     expect(all(root, '[data-nav]')).toHaveLength(0);

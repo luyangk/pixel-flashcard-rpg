@@ -73,6 +73,13 @@ export interface HostAdapters {
   readonly onBeatDrawn?: (cursor: number) => void;
   readonly onReplay?: () => void;
   readonly onPractice?: (deckId: string) => void;
+  /**
+   * 「练这一域」（Plan 7 · T6）：把练功屏勾选的卡交给控制器开局
+   * （`startFight({ mode:'drill', cardIds })`）。缺省 ⇒ 练功屏的按钮禁用。
+   */
+  readonly onDrill?: (input: { readonly cardIds: readonly string[] }) => void;
+  /** 练功屏顶部的今日额度行（与设置页同一句口径）。 */
+  readonly practiceQuotaText?: () => string;
 
   /* AI（Plan 5 · T4/T5；全部可选——没有它们时对应 UI 整块隐藏） */
   /** 设置屏「AI（可选）」分组的读写口（Key 的唯一存放点 + 唯一网络出口）。 */

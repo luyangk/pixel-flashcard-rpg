@@ -34,7 +34,7 @@ import {
   setSm2Params,
 } from '../app/settingsFlow';
 import { saveBeatCursor } from '../app/storyState';
-import { planJudge } from '../app/quota';
+import { DAILY_CARD_CAP, DAILY_JUDGE_CAP, planJudge, remainingCards, remainingJudges } from '../app/quota';
 import { resetSave } from '../app/resetFlow';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
@@ -228,6 +228,16 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     },
     onBeatDrawn: (cursor) => void saveBeatCursor(coord, cursor).catch(() => undefined),
     onReplay: () => void wrapped.intent({ type: 'startFight', ...last }).catch(() => undefined),
+    /**
+     * 「练这一域」（Plan 7 · T6）：走**显式卡池**的木桩练功 —— 玩家勾的那几张就是那几张，
+     * 不经过 80/20 抽样（`startFight` 的 cardIds 分支）。
+     */
+    onDrill: ({ cardIds }) =>
+      void wrapped
+        .intent({ type: 'startFight', size: cardIds.length, cardIds: [...cardIds], mode: 'drill' })
+        .catch(() => undefined),
+    practiceQuotaText: () =>
+      `今日：生成剩 ${remainingCards(coord.snapshot().settings.llmQuota, now(), tzOffsetMin)} / ${DAILY_CARD_CAP} · 判定剩 ${remainingJudges(coord.snapshot().settings.llmQuota, now(), tzOffsetMin)} / ${DAILY_JUDGE_CAP}`,
     onPractice: (deckId) => {
       const p = bossFightParams(coord.snapshot(), deckId);
       void wrapped

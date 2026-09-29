@@ -30,6 +30,7 @@ import type { ArcAct } from './codex';
 import { mountCodex } from './codex';
 import { mountDecks } from './decks';
 import { mountMenu } from './menu';
+import { mountPractice } from './practice';
 import { mountPrepare } from './prepare';
 import { mountPrologue, type PrologueScene } from './prologue';
 import { mountReadOnlyBar } from './readOnly';
@@ -40,7 +41,7 @@ import type { HostAdapters } from './hostTypes';
 export type { HostAdapters } from './hostTypes';
 
 /** 屏内导航的本地路由（不含会话位；会话位的优先级见 resolveView）。 */
-export type HostRoute = 'menu' | 'prepare' | 'decks' | 'codex' | 'settings';
+export type HostRoute = 'menu' | 'prepare' | 'decks' | 'codex' | 'practice' | 'settings';
 
 /** 当前该显示什么。 */
 export type HostView =
@@ -129,6 +130,18 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
     toastMs: deps.toastMs,
   });
 
+  /**
+   * 今日额度的唯一口径（设置页与练功屏共用同一句）：**现算**——跨天与记账后都要跟手，
+   * 缓存一行会让玩家看到昨天的数字。
+   */
+  function quotaText(): string {
+    const q = ctrl.snapshot().save?.settings?.llmQuota;
+    const nowMs = deps.now();
+    const left = remainingCards(q, nowMs, deps.tzOffsetMin);
+    const judges = remainingJudges(q, nowMs, deps.tzOffsetMin);
+    return `今日：生成剩 ${left} / ${DAILY_CARD_CAP} · 判定剩 ${judges} / ${DAILY_JUDGE_CAP}`;
+  }
+
   function onNav(target: HostRoute): void {
     if (destroyed) return;
     route = target;
@@ -213,6 +226,15 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               newId: deps.newId,
               toastMs: deps.toastMs,
             });
+          case 'practice':
+            return mountPractice(root, ctrl, {
+              onNav: () => onNav('menu'),
+              onDrill: deps.onDrill,
+              quotaText: deps.practiceQuotaText,
+              now: deps.now,
+              tzOffsetMin: deps.tzOffsetMin,
+              toastMs: deps.toastMs,
+            });
           case 'codex':
             return mountCodex(root, ctrl, {
               onNav: () => onNav('menu'),
@@ -229,14 +251,7 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               onNav: () => onNav('menu'),
               llm: deps.llm,
               setAnswerMode: deps.setAnswerMode,
-              // 今日额度：**现算**（跨天/记账后都要跟手，缓存一行会让玩家看到昨天的数）
-              llmQuotaText: () => {
-                const q = ctrl.snapshot().save?.settings?.llmQuota;
-                const nowMs = deps.now();
-                const left = remainingCards(q, nowMs, deps.tzOffsetMin);
-                const judges = remainingJudges(q, nowMs, deps.tzOffsetMin);
-                return `今日：生成剩 ${left} / ${DAILY_CARD_CAP} · 判定剩 ${judges} / ${DAILY_JUDGE_CAP}`;
-              },
+              llmQuotaText: quotaText,
               setTier: deps.setTier,
               setParams: deps.setParams,
               setPoolSize: deps.setPoolSize,

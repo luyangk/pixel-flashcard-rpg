@@ -212,7 +212,7 @@ describe('E2E#1 冷启动 → 预置内容 → 序章 → 菜单', () => {
     expect(h.ctrl.snapshot().save.settings.story.prologueSeen).toBe(true);
     expect(h.root.querySelector('[data-ui="menu-screen"]')).not.toBeNull();
     // 菜单上四入口齐备，本地榜为空
-    expect(h.root.querySelectorAll('[data-nav]')).toHaveLength(4);
+    expect(h.root.querySelectorAll('[data-nav]')).toHaveLength(5); // 开始复习/卡组/练功/藏书阁/设置
     expect(h.root.querySelectorAll('[data-ui="rank-row"]')).toHaveLength(0);
     h.host.unmount();
   });

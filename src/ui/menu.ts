@@ -19,7 +19,7 @@ import { levelFromExp, playerStatsFor } from '../app/growth';
 import { h } from './dom';
 
 /** 屏内导航目标（宿主壳的切屏词表；'prepare' 也走 host，控制器不替宿主决定何时开局）。 */
-export type MenuTarget = 'prepare' | 'decks' | 'codex' | 'settings';
+export type MenuTarget = 'prepare' | 'decks' | 'codex' | 'practice' | 'settings';
 
 export interface MenuDeps {
   /** 屏内导航回调（宿主壳实现；必填——菜单的全部入口都得有去处）。 */
@@ -45,6 +45,9 @@ const ENTRIES: ReadonlyArray<{ readonly target: MenuTarget; readonly label: stri
   // 大白话反而更准。
   { target: 'prepare', label: '开始复习' },
   { target: 'decks', label: '卡组' },
+  // 「练功」= 用户指定的入口名（D44 的**登记例外**：LORE §8 要求功能界面走大白话，
+  // 但产品负责人明确要这个词，例外只开在入口标签与屏标题这两个字面上——屏内文案照旧大白话）。
+  { target: 'practice', label: '练功' },
   { target: 'codex', label: '藏书阁' },
   { target: 'settings', label: '设置' },
 ];

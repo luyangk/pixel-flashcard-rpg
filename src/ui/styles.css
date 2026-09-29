@@ -925,3 +925,67 @@ h1 {
   color: #c8a165;
   letter-spacing: 0.04em;
 }
+
+/* ---------------------------------------------------- 练功屏（Plan 7 · T6） */
+.practice-decks,
+.practice-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* 领域行：整行可点（手机上比小按钮好按） */
+.practice-deck {
+  text-align: left;
+  min-height: 2.75rem;
+}
+
+.practice-deck-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* 卡行：勾选框 + 正面 + 背面 + 元信息（四列在窄屏上会被挤，故用两行布局） */
+.practice-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.practice-pick {
+  width: 1.4rem;
+  height: 1.4rem;
+  margin: 0;
+}
+
+.practice-front {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.practice-back {
+  grid-column: 2;
+  font-size: 0.9rem;
+  color: var(--paper-dim);
+  word-break: break-word;
+}
+
+.practice-meta {
+  grid-column: 2;
+  font-size: 0.78rem;
+  color: var(--wash);
+}
+
+.drill-start {
+  margin-top: auto;
+  font-size: 1.05rem;
+  padding: 0.9rem;
+  border-color: #c8a165;
+  background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
+}

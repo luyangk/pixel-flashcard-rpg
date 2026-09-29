@@ -153,8 +153,8 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
       await new Promise((r) => setTimeout(r, 100));
     }
     expect(win.document.querySelector('[data-ui="menu-screen"]'), '序章演完后没进菜单').not.toBeNull();
-    // 菜单上四入口齐备（产物里的屏组件确实渲染了，而不是空壳）
-    expect(win.document.querySelectorAll('[data-nav]')).toHaveLength(4);
+    // 菜单上五入口齐备（产物里的屏组件确实渲染了，而不是空壳）
+    expect(win.document.querySelectorAll('[data-nav]')).toHaveLength(5);
     // 新装玩家拿到了预置内容（六维面板不是占位符）
     expect(win.document.querySelector('[data-stat="level"]')?.textContent).toBe('1');
   }, 30_000);
