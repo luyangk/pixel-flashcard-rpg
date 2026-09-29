@@ -17,9 +17,15 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8');
+/** 读 PNG 的 IHDR 真实像素尺寸（**不听 manifest 一面之词**：声明错了 Chrome 会拒收图标）。 */
+const pngSize = (rel: string): { w: number; h: number } => {
+  const buf = readFileSync(join(ROOT, rel));
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return { w: 0, h: 0 };
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+};
 
 describe('manifest.webmanifest —— 装到主屏的最小充分条件', () => {
-  const manifest = JSON.parse(read('manifest.webmanifest')) as {
+  const manifest = JSON.parse(read('public/manifest.webmanifest')) as {
     name?: string;
     short_name?: string;
     start_url?: string;
@@ -28,7 +34,7 @@ describe('manifest.webmanifest —— 装到主屏的最小充分条件', () => 
     orientation?: string;
     background_color?: string;
     theme_color?: string;
-    icons?: Array<{ src: string; sizes: string; type: string }>;
+    icons?: Array<{ src: string; sizes: string; type: string; purpose?: string }>;
   };
 
   it('PW#1 必备字段齐：名称/启动地址/独立显示/竖屏/主题色', () => {
@@ -43,7 +49,7 @@ describe('manifest.webmanifest —— 装到主屏的最小充分条件', () => 
     expect(manifest.background_color).toBeTruthy();
   });
 
-  it('PW#2 图标真实存在（声明的路径不能是空头支票）', () => {
+  it('PW#2 图标真实存在、声明尺寸与真实像素一致（声明的路径不能是空头支票）', () => {
     expect(Array.isArray(manifest.icons)).toBe(true);
     expect(manifest.icons?.length ?? 0).toBeGreaterThan(0);
     for (const icon of manifest.icons ?? []) {
@@ -51,7 +57,47 @@ describe('manifest.webmanifest —— 装到主屏的最小充分条件', () => 
       expect(icon.sizes).toMatch(/^\d+x\d+$/);
       const rel = icon.src.replace(/^\.\//, '');
       expect(existsSync(join(ROOT, rel)), `缺图标：${icon.src}`).toBe(true);
+      const { w, h } = pngSize(rel);
+      expect(`${w}x${h}`, `声明的 sizes 与真实像素不一致：${icon.src}`).toBe(icon.sizes);
     }
+  });
+
+  /**
+   * PW#2b：**尺寸下限**这条是"能不能装成应用"的前提，不是审美偏好。
+   *
+   * Chrome 判定可安装时有图标尺寸下限（Lighthouse 的判据是至少一张 192×192；Chromium 内部
+   * 下限 144px）。低于下限时 Chrome 只给一个**书签快捷方式**——而 `share_target`
+   * （「分享 → 知识侠客」）**只在 WebAPK 上存在**。这就是 2026-09 前那份 32×32/64×64 清单的病根：
+   * 结构测试全绿，手机上却装不成应用，分享入口永远不出现。
+   */
+  it('PW#2b 至少一张 ≥192 的 any 图标 + 一张 maskable（低于下限 ⇒ 只能装成快捷方式，没有分享入口）', () => {
+    const icons = manifest.icons ?? [];
+    const anyBig = icons.filter((i) => (i.purpose ?? 'any').includes('any') && Number(i.sizes.split('x')[0]) >= 192);
+    expect(anyBig.length, '没有 ≥192 的 any 图标 ⇒ Chrome 不会给出真正的应用安装').toBeGreaterThan(0);
+    const maskable = icons.filter((i) => (i.purpose ?? '').includes('maskable'));
+    expect(maskable.length, '缺 maskable 图标 ⇒ Android 自适应图标会被裁成白底方块').toBeGreaterThan(0);
+    for (const i of [...anyBig, ...maskable]) {
+      expect(Number(i.sizes.split('x')[0]), `图标小于 Chromium 的 144px 下限：${i.src}`).toBeGreaterThanOrEqual(144);
+    }
+  });
+
+  /**
+   * PW#2c：**清单必须待在站点根**（`public/`），不能在仓库根。
+   *
+   * 这是现场量出来的 bug：清单放在仓库根时，Vite 会把它当资源处理、改名塞进 `dist/bundle/`，
+   * 于是清单里**所有相对 URL**（`start_url` / `scope` / `icons[]` / `share_target.action`）
+   * 都按 `/bundle/` 解析 —— 线上实测 `…/bundle/assets/sprites/hero.png` 与 `…/bundle/` 双双 **404**。
+   * 放进 `public/` 后它落在站点根，相对 URL 才指向真正的游戏入口与素材。
+   */
+  it('PW#2c 清单在 public/（站点根）而不是仓库根：否则相对 URL 全按 /bundle/ 解析 ⇒ 404', () => {
+    expect(
+      existsSync(join(ROOT, 'public', 'manifest.webmanifest')),
+      '清单必须在 public/manifest.webmanifest（构建后落在站点根）',
+    ).toBe(true);
+    expect(
+      existsSync(join(ROOT, 'manifest.webmanifest')),
+      '仓库根不能再放一份清单：Vite 会把它改名塞进 dist/bundle/，相对 URL 全部错位',
+    ).toBe(false);
   });
 });
 
@@ -138,7 +184,7 @@ describe('构建与注册配置', () => {
  * 手机上"分享进来"就会静默失效（而且不报错，最难查）。
  */
 describe('manifest.webmanifest —— 分享进来（share_target）', () => {
-  const manifest = JSON.parse(read('manifest.webmanifest')) as {
+  const manifest = JSON.parse(read('public/manifest.webmanifest')) as {
     share_target?: { action?: string; method?: string; params?: Record<string, string> };
   };
 

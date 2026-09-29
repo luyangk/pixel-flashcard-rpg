@@ -9,9 +9,29 @@
 **手机浏览器直接打开：<https://luyangk.github.io/pixel-flashcard-rpg/>**
 （GitHub Pages，main 分支推送后自动发布。）
 
-想当 App 用：在浏览器菜单里选「添加到主屏幕」——之后从图标启动是全屏无地址栏的，
+想当 App 用：见下面的「装到主屏」。装好后从图标启动是全屏无地址栏的，
 而且**第二次打开不需要联网**（Service Worker 会把页面、脚本、样式与全部素材缓存下来；
 存档一直在本机 IndexedDB，从不上传）。首次打开建议连着 Wi-Fi 等它加载完再看一眼。
+
+### 装到主屏（Android Chrome，四步）
+
+1. **Chrome** 打开 <https://luyangk.github.io/pixel-flashcard-rpg/>，等游戏进到菜单（素材要下载完）；
+2. 点右上角 **⋮** 菜单 → **「安装应用」**（有的版本写「添加到主屏幕」/「安装」）；
+3. 弹窗里确认「安装」——主屏上会出现一张**闪卡图标**（墨底、折角宣纸、朱砂印），
+   和普通 App 一样能拖进文件夹、进最近任务；
+4. 之后从**主屏图标**打开：全屏无地址栏；断网也能开；「分享 → 知识侠客」也会出现在
+   微信/浏览器的分享面板里（这是 `share_target`，**只有真正装成应用才有**）。
+
+几点如实说明：
+
+- **为什么菜单里写的是"安装应用"而不是"添加到主屏幕"**：只有**图标齐备**（至少一张 192×192）
+  时 Chrome 才把它当**应用**装（WebAPK）；图标不达标时 Chrome 只给一个**书签快捷方式**，
+  那样**不会有分享入口**。2026-09 之前本作的清单只声明了 32×32/64×64，正好踩这个坑
+  （现场实测：清单里的图标按 `/bundle/assets/...` 解析 ⇒ 404），现已补齐 192/512/maskable 三张（D51）。
+- 小米/华为等国产 ROM 的 Chrome 菜单文案略有差异，找带**安装**字样的那一项（不是"添加书签"）。
+- **iOS Safari 装不了分享入口**：iOS 的 PWA 不支持 `share_target`，只能"添加到主屏幕"当全屏网页用；
+  采新卡在 iPhone 上请走"复制链接 → 在采新卡里粘贴"这条路。
+- 桌面 Chrome / Edge 地址栏右侧也有安装图标（⊕ / 显示器图标），效果相同。
 
 技术底座是四层分离：`src/core/` 纯 TypeScript 逻辑核（零 DOM、零平台 API、时间与随机全部入参化）、
 `src/platform/` 平台能力抽象（IndexedDB / 内存存储、时钟、时区、随机播种、图片与文件口）、
@@ -26,7 +46,7 @@
 | 2 | SRS 调度与战斗循环：备战配池（80/20）、确定性回合制战斗、经验与 Boss 触发、headless 数值模拟 | PRD §2/§3/§6.3–6.5 | ✅ 已完成 |
 | 3 | 游戏装配层（App Wiring）：会话编排、全库口径属性派生、复习落账链、攒批持久化、7 天备份提醒、本地战绩榜、假记忆素材池 | PRD §2.2–2.4/§5/§6.1/§6.5、LORE §5.5 | ✅ 已完成 |
 | 4 | 界面层：DOM/Canvas 渲染与叙事呈现（序章→菜单→备战→战斗→结算→卡组→藏书阁→设置）、Boss 净化与图鉴、只读保护（D29）、像素素材集 | PRD §3/§7/§9、LORE §5/§6 | ✅ 已完成（LLM 管线移至 Plan 5，见下） |
-| 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | ✅ 已完成：离线 + Pages 上线 + 三项 AI 职能（自带 Key）；另含两处实测反馈修复：数值改进（D39）与「重置存档」（D40） |
+| 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | ✅ 已完成：离线 + Pages 上线 + 三项 AI 职能（自带 Key）；另含实测反馈修复：数值改进（D39）、「重置存档」（D40）、**装到主屏的两处硬伤（D51：清单必须在站点根 + 图标 ≥192/512/maskable，否则只能装成坏书签、且没有分享入口）** |
 | 6 | 作答模式：选择题（默认）/ 问答模式（LLM 判卷）/ 直接看答案；四档自评下线 | PRD §3.1、§9 | ✅ 已完成（D41/D42/D45）：卡上自带干扰项、判定回"缺了哪些要点"、判定 300 次/天到顶回落自评 |
 | 7 | 木桩练功：练功入口 + 看旧卡 + 勾选开练（不判胜负、不推进卷灵达标）；**领域可多选合练**（D50） | PRD §4.5、D46/D50 | ✅ 已完成：core 新形态 `drill`+`cleared` / 木人桩精灵（22/22 幂等）/ 练功屏 / 端到端冒烟；多领域合练与「← 换领域」见 D50（`tests/ui/practice.test.ts` PR#17–#23、真产物 DB#7） |
 | 8 | 练功模块：采新卡（玩家驱动摄入 + 待读清单 + 分享进来）与看旧卡就地编辑 | PRD §4.2/§4.5、D43/D47 | ✅ 已完成：抓取/解析/分类/分块生成/额度/待读清单/采新卡屏/就地编辑/分享进来 + 真产物 DB#8；**卡组页也开了一个采新卡入口**（D49，真产物 DB#9） |
@@ -196,7 +216,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **80 文件 / 1211 用例**；另有 9 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **80 文件 / 1213 用例**；另有 9 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -215,6 +235,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D51 装到主屏能装成**应用**（清单在站点根 + 图标 192/512/maskable） | `tests/tooling/pwa.test.ts` PW#2/#2b/#2c（真实像素尺寸 / ≥192 / 清单位置，5 条变异全部会红）、`python3 pixel-art/app-icon/build.py --check`（图标幂等） |
 | D50 练功多领域合练 + 看旧卡里显式的「← 换领域」 | `tests/ui/practice.test.ts` PR#17–#23（换领域保勾选 / 跨域并集 / 移出本次 / 合计上限 / 列表页开练 / 清空 / 取消不被加回）、`tests/e2e/dist.boot.test.ts` · DB#7（真产物里换领域后两域合练） |
 | D49 卡组页的「采新卡」入口（与 AI 辅建卡并排，点了直接落在采新卡分区） | `tests/ui/decks.test.ts` · DC#E1/#E2、`tests/ui/host.test.ts` · HS#E2/#E3、`tests/e2e/dist.boot.test.ts` · DB#9（真产物里点通并核对落点） |
 
@@ -223,6 +244,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 - `assets/sprites/`：像素素材（hero 32²、小怪 4 × 32²、卷灵 4 × 64²、可平铺荒原 64²、
   序章 8 屏与暗线三幕各 64²），由 `scripts/gen-sprites.mjs`（pixel-art-studio 管线）生成，
   重跑幂等；规格表与调色板见 `assets/README.md`，契约测试见 `tests/assets/`。
+- 主屏图标（`assets/icons/`，D51）：`python3 pixel-art/app-icon/build.py` 重生成，`--check` 逐字节幂等。
 - `assets/narrative/`：序章八屏剧本（`prologue.json`，与 `docs/LORE.md` §5.1 逐字一致）、
   战报碎片池（`beats.json` 30 条）、三幕暗线（`arc.json`）、图鉴彩蛋（`eggs.json`）、
   假记忆词替换表（`fake-words.json`）。

@@ -256,3 +256,35 @@ export function parseShareQuery(search: string): SharedInput | null;
 - [x] Step 2 红 → Step 3 实现（先把底部条改成常驻 + 派生式 `selection()`）→ Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
 - [x] 变异自检（6 条**全部**会红）：① 换领域时清空勾选；② 上限按**每个领域**各算 25；③ 移除领域时不清该域勾选记录；④ `dropped` 不生效（取消的又被自动补齐）；⑤ 底部条只在卡列表里显示；⑥ 卡列表里没有「换领域」入口
 - [x] 真产物扩展：**DB#7** 改成「打开 A → 换领域 → 打开 B → 手动勾一张 → 底部条报『来自 2 个领域』→ 开练」
+
+---
+
+### Task 14: 装到主屏真的能装成应用（D51）
+
+**现场问题（用户原话）：**「装到主屏这事如何操作？」——查这一步时量出两处硬伤。
+
+**量到的事实（都是线上实测，不是推断）：**
+- 线上清单地址是 `…/bundle/manifest-JjRQfse6.webmanifest`（Vite 把仓库根的清单当资源改名塞进 `bundle/`），
+  而清单里 `start_url` / `scope` / `share_target.action` 都是 `./`、图标是 `./assets/sprites/hero.png`
+  ⇒ 按 manifest 自身位置解析：`…/bundle/assets/sprites/hero.png` **404**、`…/bundle/` **404**；
+  真实素材 `…/assets/sprites/hero.png` 是 **200**；
+- 清单只声明 32×32 / 64×64 图标 ⇒ 低于 Chrome 的安装判据（Lighthouse 192 / Chromium 内部 144px），
+  只会得到**书签快捷方式**，而 `share_target`（D47 承诺的「分享进来」）**只在 WebAPK 上存在**。
+
+**口径与改动：**
+- 清单搬到 `public/manifest.webmanifest`（构建后落在站点根，相对 URL 才指向真正的入口与素材）；
+- 图标三张：`assets/icons/icon-192.png`、`icon-512.png`、`icon-maskable-512.png`，
+  由 `pixel-art/app-icon/build.py` 从 64×64 像素原画整数放大生成（`--check` 幂等）；
+- 清单 `icons[]` 换成上面三张（`purpose` 分 any / maskable）。
+
+**Files:** Add `public/manifest.webmanifest`、`pixel-art/app-icon/build.py`、`assets/icons/*.png`；
+Modify `tests/tooling/pwa.test.ts`、`assets/README.md`、`README.md`、`docs/PRD.md`
+
+- [x] Step 1 失败测试：PW#2 声明尺寸必须等于 PNG 真实像素；PW#2b 至少一张 ≥192 的 any + 一张 maskable；
+      PW#2c 清单必须在 `public/`、仓库根不许有第二份
+- [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] 变异自检（5 条全部会红）：① 只声明 64×64 图标；② `sizes` 与真实像素不符；③ 去掉 maskable；
+      ④ 清单搬回仓库根；⑤ 两份清单并存（index.html 又会指向被改名的 bundle 那份）
+- [ ] 真机验收（**需要玩家本人**）：手机上按 README「装到主屏」四步走一遍，确认①菜单里出现带"安装"字样的项、
+      ②主屏出现闪卡图标、③分享面板里出现「知识侠客」。我没有屏幕读取权限（设备回"你拒绝了这次屏幕读取"），
+      这三条不能由我代劳，也不在 CI 覆盖面内 —— 如实登记为"未经目视核对"。
