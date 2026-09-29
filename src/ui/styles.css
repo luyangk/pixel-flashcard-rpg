@@ -1287,3 +1287,22 @@ h1 {
   color: var(--paper);
   margin: 0;
 }
+
+/* 候选审阅里的原文面板（D60）：等宽、可滚动、限高（长文不把屏撑爆） */
+.cand-source {
+  max-height: 40vh;
+  overflow: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-900, #0b0e14);
+}
+
+.cand-source-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--paper-dim);
+}

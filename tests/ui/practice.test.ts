@@ -585,3 +585,31 @@ describe('mountPractice —— 卡行里的干扰项（D56 补）', () => {
     expect(line).not.toContain('旧干扰项'); // 旧的不许留着（否则玩家以为没生效）
   });
 });
+
+/* ------------------------------------------------------------------ D60：卡上的「看原文」 */
+
+/**
+ * 判别力：
+ * - PR#S1 卡上有来源链接 ⇒ 显示「看原文」且点了真的打开**那个**链接；
+ * - PR#S2 没有链接（手写/预置卡）⇒ **不显示**按钮（不显示点了没反应的入口）。
+ */
+describe('mountPractice —— 卡上的看原文（D60）', () => {
+  it('PR#S1 有链接 ⇒ 显示并打开它', () => {
+    const opened: string[] = [];
+    const { root } = setup(
+      [card('c1', { source: { type: 'llm', createdAt: NOW, url: 'https://huggingface.co/papers/1' } })],
+      { openUrl: (u) => void opened.push(u) },
+    );
+    openFirstDeck(root);
+    const btn = root.querySelector('[data-ui="card-source"]') as HTMLElement | null;
+    expect(btn).not.toBeNull();
+    btn?.click();
+    expect(opened).toEqual(['https://huggingface.co/papers/1']);
+  });
+
+  it('PR#S2 没有链接 ⇒ 不显示按钮', () => {
+    const { root } = setup([card('c1', { source: { type: 'preset', createdAt: NOW } })]);
+    openFirstDeck(root);
+    expect(root.querySelector('[data-ui="card-source"]')).toBeNull();
+  });
+});

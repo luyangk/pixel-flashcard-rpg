@@ -250,6 +250,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               initialTab: practiceTab,
               onDrill: deps.onDrill,
               refreshChoices: deps.refreshChoices,
+              // D60：卡上的「看原文」（有来源链接才显示）
+              openUrl: deps.openUrl,
               quotaText: deps.practiceQuotaText,
               updateCard: deps.updateCard,
               // 采新卡整块（Plan 8 · T9）：抓取 / 生成 / 清单 / 入库——**缺一个就整块收起**

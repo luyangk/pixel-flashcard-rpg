@@ -436,3 +436,69 @@ describe('mountPracticeCollect —— 两段式的进度（D59）', () => {
     expect(seen[1]).toContain('出卡');
   });
 });
+
+/* ------------------------------------------------------------------ D60：候选审阅看原文 */
+
+/**
+ * 判别力：
+ * - PC#14 手里有正文（粘的/抓的）⇒ 「看原文」可展开，内容就是**当次那份正文**；
+ * - PC#15 被跨域拦下（没有正文）⇒ 不假装有内嵌，给「打开原文去复制」；
+ * - PC#16 面板内容跟着**新的一批**候选走（张冠李戴 = 玩家照着错的原文判断总结对不对）。
+ */
+describe('mountPracticeCollect —— 候选审阅看原文（D60）', () => {
+  it('PC#14 有正文 ⇒ 展开内嵌当次正文，再点收起', async () => {
+    const rig = makeRig({
+      ingest: (url) =>
+        Promise.resolve({ kind: 'article', title: '一篇', text: '这是抓到的正文甲。', url, via: 'direct' }),
+    });
+    (rig.root.querySelector('[data-ui="source-url"]') as HTMLInputElement).value = 'https://x.example/a';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+
+    const toggle = rig.root.querySelector('[data-ui="cand-source-toggle"]') as HTMLElement;
+    expect(toggle).not.toBeNull();
+    expect(ui(rig.root, 'cand-source').hidden).toBe(true); // 默认收起（不挡住候选列表）
+
+    click(toggle);
+    expect(ui(rig.root, 'cand-source').hidden).toBe(false);
+    expect(ui(rig.root, 'cand-source-body').textContent).toBe('这是抓到的正文甲。');
+    expect(toggle.textContent).toContain('收起');
+
+    click(toggle);
+    expect(ui(rig.root, 'cand-source').hidden).toBe(true);
+  });
+
+  it('PC#15 没有正文（被拦）⇒ 不做假的空面板，给「打开原文去复制」', async () => {
+    const rig = makeRig(); // 缺省 ingest = blocked
+    (rig.root.querySelector('[data-ui="source-url"]') as HTMLInputElement).value = 'https://mp.weixin.qq.com/s/x';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect((rig.root.querySelector('[data-ui="cand-source-toggle"]') as HTMLElement).hidden).toBe(true);
+    expect(ui(rig.root, 'ingest-open').hidden).toBe(false);
+  });
+
+  it('PC#16 面板内容跟着新一批候选走（不张冠李戴）', async () => {
+    let n = 0;
+    const rig = makeRig({
+      ingest: (url) => {
+        n += 1;
+        return Promise.resolve({ kind: 'article', title: `第${n}篇`, text: `正文${n}`, url, via: 'direct' });
+      },
+    });
+    const input = rig.root.querySelector('[data-ui="source-url"]') as HTMLInputElement;
+    input.value = 'https://x.example/1';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+    click(rig.root.querySelector('[data-ui="cand-source-toggle"]') as HTMLElement);
+    expect(ui(rig.root, 'cand-source-body').textContent).toBe('正文1');
+
+    input.value = 'https://x.example/2';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+    // 新一批 ⇒ 面板收起、内容是新的
+    expect(ui(rig.root, 'cand-source').hidden).toBe(true);
+    click(rig.root.querySelector('[data-ui="cand-source-toggle"]') as HTMLElement);
+    expect(ui(rig.root, 'cand-source-body').textContent).toBe('正文2');
+  });
+});

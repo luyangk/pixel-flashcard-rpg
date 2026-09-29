@@ -133,6 +133,13 @@ export function mountPracticeCollect(
    * 为什么不用 url 匹配：只粘了正文的条目**没有 url**，按 url 匹配会让它永远留在清单里。
    */
   let sourceInboxId: string | null = null;
+  /**
+   * 这一批候选的**依据正文**（D60）：候选审阅时可以展开来看 —— 玩家要靠它判断
+   * "模型总结得对不对"。只放**本机已有**的内容（抓到的 / 粘贴的），不新增联网路径。
+   */
+  let sourceText = '';
+  let sourceUrl = '';
+  let sourceOpen = false;
   let busy = false;
 
   /* ------------------------------------------------------------ DOM */
@@ -232,6 +239,24 @@ export function mountPracticeCollect(
   ) as HTMLButtonElement;
   candSaveBtn.addEventListener('click', () => void onSave());
   const candStatusEl = h('p', { 'data-ui': 'cand-status', class: 'field-hint' });
+  /**
+   * 「看原文」（D60）：**一批候选共用一块** —— 它们来自同一份资料，逐条重复显示只会更乱。
+   * 手里有正文就内嵌（源库摘要 / GitHub 更新说明 / 你自己粘的），没有就给「打开原文去复制」。
+   */
+  const sourceToggleBtn = h(
+    'button',
+    { 'data-ui': 'cand-source-toggle', class: 'collect-btn', type: 'button' },
+    '看原文',
+  ) as HTMLButtonElement;
+  const sourceBodyEl = h('pre', { 'data-ui': 'cand-source-body', class: 'cand-source-body' });
+  const sourcePanelEl = h('div', { 'data-ui': 'cand-source', class: 'cand-source', hidden: true }, [
+    sourceBodyEl,
+  ]);
+  sourceToggleBtn.addEventListener('click', () => {
+    if (destroyed) return;
+    sourceOpen = !sourceOpen;
+    renderSourcePanel();
+  });
   const candEl = h('section', { 'data-ui': 'cand-section', class: 'collect-section', hidden: true }, [
     h('h4', { class: 'collect-title' }, '候选卡（勾选要留下的）'),
     h(
@@ -244,6 +269,8 @@ export function mountPracticeCollect(
     h('label', { class: 'collect-row' }, [h('span', { class: 'collect-label' }, '存入'), deckSelect]),
     newDeckInput,
     h('div', { class: 'collect-row' }, [candSaveBtn]),
+    h('div', { class: 'collect-row' }, [sourceToggleBtn, openBtn]),
+    sourcePanelEl,
     candStatusEl,
   ]);
 
@@ -272,6 +299,16 @@ export function mountPracticeCollect(
   function toast(text: string): void {
     toastOff?.();
     toastOff = showToast(screen, text, { ms: deps.toastMs });
+  }
+
+  /** 原文面板的显隐与内容（D60）。没有正文时**不假装有**，把「打开原文去复制」露出来。 */
+  function renderSourcePanel(): void {
+    const hasText = sourceText.trim().length > 0;
+    setHidden(sourceToggleBtn, !hasText);
+    setHidden(sourcePanelEl, !(hasText && sourceOpen));
+    setHidden(openBtn, hasText ? true : sourceUrl.length === 0);
+    sourceToggleBtn.textContent = sourceOpen ? '收起原文' : '看原文';
+    sourceBodyEl.textContent = hasText ? sourceText : '';
   }
 
   function renderStatus(text: string): void {
@@ -371,6 +408,10 @@ export function mountPracticeCollect(
       return;
     }
     busy = true;
+    // 记下这一批候选的依据（D60）：候选审阅时要点开对照
+    sourceText = body;
+    sourceUrl = source.url ?? '';
+    sourceOpen = false;
     try {
       const res = await deps.collectCards({
         text: body,
@@ -626,6 +667,12 @@ export function mountPracticeCollect(
     // 「打开原文去复制」只在"刚被抓拦过"时露出（平时它没有意义）
     if (statusEl.textContent === '' || !statusEl.textContent.includes('待读清单')) setHidden(openBtn, true);
     candSaveBtn.disabled = busy || candidates.length === 0;
+    // D60：候选区一有内容，就把"看原文"这条路口同步好
+    if (candidates.length > 0) renderSourcePanel();
+    else {
+      setHidden(sourceToggleBtn, true);
+      setHidden(sourcePanelEl, true);
+    }
   }
 
   const unsubscribe = ctrl.subscribe(() => {

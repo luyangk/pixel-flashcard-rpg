@@ -150,6 +150,11 @@ export interface HostAdapters {
     readonly combo: string;
     readonly kind: string;
   }) => void;
+  /**
+   * 打开一个外链（D60）：练功·看旧卡里卡上的「看原文」、采新卡的「打开原文去复制」共用。
+   * 缺省 `window.open`（宿主不传时各屏自己回落）。
+   */
+  readonly openUrl?: (url: string) => void;
   /** 玩家身份（D57；菜单显示昵称、设置页可改）：宿主接 `platform/profileStore`。 */
   readonly profile?: {
     readonly load: () => PlayerProfile;

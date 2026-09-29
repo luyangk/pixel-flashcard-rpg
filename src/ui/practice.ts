@@ -56,6 +56,8 @@ export interface PracticeDeps {
     readonly front: string;
     readonly back: string;
   }) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
+  /** 打开一个链接（D60「看原文」；缺省 `window.open`，测试注入以便取证）。 */
+  readonly openUrl?: (url: string) => void;
   /** 到期判定的时钟（缺省 0：一切都是"未到期"，测试要确定性就注入）。 */
   readonly now?: () => number;
   readonly tzOffsetMin?: number;
@@ -543,6 +545,24 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
             render(ctrl.snapshot());
           });
           children.push(editBtn);
+        }
+        /**
+         * 「看原文」（D60）：只有**卡上真的存了来源链接**才显示 ——
+         * 没有链接就不给按钮（不显示点了没反应的入口）。采集来的卡都有，
+         * 手写/预置卡通常没有，那种情况这里什么都不出现。
+         */
+        const sourceUrl = typeof card.source?.url === 'string' ? card.source.url.trim() : '';
+        if (sourceUrl.length > 0) {
+          const srcBtn = h(
+            'button',
+            { 'data-ui': 'card-source', 'data-card-source': card.id, class: 'collect-btn', type: 'button' },
+            '看原文',
+          ) as HTMLButtonElement;
+          srcBtn.addEventListener('click', () => {
+            const open = deps.openUrl ?? ((u: string) => void globalThis.open?.(u, '_blank', 'noopener'));
+            open(sourceUrl);
+          });
+          children.push(srcBtn);
         }
         if (typeof deps.refreshChoices === 'function') {
           // 与「改」并排：这两件事都是"这张卡不对，我修一下"（一个改文案、一个换干扰项）
