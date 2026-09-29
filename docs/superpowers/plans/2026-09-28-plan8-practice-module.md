@@ -191,3 +191,24 @@ export function parseShareQuery(search: string): SharedInput | null;
 
 **执行顺序：** 1 → 2 → 3（抓取三件套）→ 4（生成与额度）→ 5（清单）→ 6 → 7（屏）→ 8（分享）→ 9（接线）→ 10（产物与文档）。
 **可裁项**：Task 9 里"读取服务"三处（`LlmConfig` 两字段、设置页两行、`fetchPage` 的 `reader` 入参）是**可选功能**（默认关）；若想先只上"粘贴 + 分享 + 少数可直读站点"，删掉这三处即可，其余任务不受影响。
+
+---
+
+### Task 11: 现场反馈修正 —— 体积上限与"读不到时的下一步"（D48）
+
+**Files:** Modify `src/platform/pageFetch.ts`、`src/ui/practiceCollect.ts`、`src/ui/styles.css`；Test `tests/platform/pageFetch.test.ts`、`tests/ui/practice.collect.test.ts`
+
+**背景（用户拿真实链接试出来的）**：`https://mp.weixin.qq.com/s/WeCvRp1bx6JeeI7bycVPQQ`
+提示"这个站点不允许网页直读（跨域限制）"。核实：该响应 200、`content-type: text/html`、
+**无任何 CORS 头** ⇒ 提示是实话，浏览器确实读不到。但两处该改：① 实测该页原始 HTML **3.63MB**，
+而抓取层上限只有 1.5MB（解析实测 90ms 能抽出 4245 字干净正文）⇒ 旧上限把"读取服务返回原始 HTML"
+这条兜底路也堵死了；② 读不到时界面只给原因，没把下一步递到玩家手里。
+
+**口径：**
+- `PAGE_MAX_BYTES` 1.5MB → **4MB**（覆盖公众号单篇 1–4MB 的实际体量），错误文案里的数字从常量取；
+- `article` 之外的分支（`blocked`）追加：`[data-ui="ingest-open"]`「打开原文去复制」（打开该链接）、
+  自动聚焦粘贴框、以及一行指向"粘贴正文 / 可选读取服务"的提示；
+- 「打开原文」走注入的 `openUrl`（缺省 `window.open(url, '_blank', 'noopener')`），以便测试取证。
+
+- [ ] Step 1 失败测试：PF#5c 4MB 以内接受、4MB 以上拒绝（文案含"太大"）；PC#11 被拦后出现「打开原文去复制」且点了真的打开该链接、粘贴框自动获得焦点
+- [ ] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿

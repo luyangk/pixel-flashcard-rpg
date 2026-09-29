@@ -1117,3 +1117,9 @@ h1 {
   color: var(--paper-dim);
   border-color: var(--wash);
 }
+
+/* 「打开原文去复制」（Plan 8 · T11 / D48）：读不到时的下一步，给足体量（手机上要一指可点） */
+[data-ui='ingest-open'] {
+  min-height: 2.6rem;
+  border-color: var(--wash);
+}

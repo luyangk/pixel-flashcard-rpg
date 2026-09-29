@@ -63,6 +63,8 @@ export interface CollectDeps {
   readonly newId?: () => string;
   /** 生成/入库后让宿主刷新额度行（额度在存档里，屏自己订阅不到它的变化）。 */
   readonly onQuotaChanged?: () => void;
+  /** 打开一个链接（「打开原文去复制」；缺省 `window.open`，测试注入以便取证）。 */
+  readonly openUrl?: (url: string) => void;
   /** 系统分享进来的内容（PWA share_target；缺省 = 没有）。 */
   readonly sharedInput?: SharedInput | null;
   /**
@@ -126,6 +128,21 @@ export function mountPracticeCollect(
   pasteGoBtn.addEventListener('click', () => void onGenerate(textInput.value, { via: 'paste' }));
 
   const statusEl = h('p', { 'data-ui': 'ingest-status', class: 'field-hint' });
+  /**
+   * 「打开原文去复制」（Plan 8 · T11 / D48）。读不到是**常态**，所以界面不能只报错：
+   * 这个按钮把玩家送到原文，复制完回来粘进下面的框 —— 这就是公众号那条路的完整闭环。
+   */
+  const openBtn = h(
+    'button',
+    { 'data-ui': 'ingest-open', class: 'collect-btn', type: 'button' },
+    '打开原文去复制',
+  ) as HTMLButtonElement;
+  openBtn.addEventListener('click', () => {
+    const url = urlInput.value.trim();
+    if (url.length === 0) return;
+    const open = deps.openUrl ?? ((u: string) => void globalThis.open?.(u, '_blank', 'noopener'));
+    open(url);
+  });
   const linksEl = h('div', { 'data-ui': 'ingest-links', class: 'ingest-links', hidden: true });
 
   const inboxListEl = h('div', { 'data-ui': 'inbox-list', class: 'inbox-list' });
@@ -200,8 +217,9 @@ export function mountPracticeCollect(
     h('p', { class: 'field-hint' }, '把外部知识带进来：给个链接（能直读就直读），或直接粘正文。'),
     urlRowEl,
     h('div', { class: 'collect-row' }, [pasteGoBtn]),
-    textInput,
     statusEl,
+    openBtn,
+    textInput,
     linksEl,
     inboxEl,
     candEl,
@@ -229,6 +247,7 @@ export function mountPracticeCollect(
     busy = true;
     renderStatus('正在抓这一页…');
     renderLinks([]);
+    setHidden(openBtn, true);
     // 抓到的正文要**等 busy 落下之后**再生成：`onGenerate` 自己有 busy 守卫，
     // 在抓取窗口里直接调它会被静默挡掉（首版就是这么让"直读 ⇒ 出候选"整条路失效的，
     // PC#2/PC#5 当场抓到）。故这里先把"待生成"记下来，出了抓取窗口再跑。
@@ -262,8 +281,11 @@ export function mountPracticeCollect(
       renderLinks(res.links);
       return null;
     }
-    // blocked：如实说清，并把链接**存进待读清单**（别丢掉玩家刚给的东西）
-    renderStatus(res.reason);
+    // blocked：如实说清 → 把链接**存进待读清单**（别丢掉玩家刚给的东西）→ **把下一步递到手里**：
+    // 露出「打开原文去复制」，并把光标放进粘贴框（读不到时玩家要做的正是"复制 + 粘贴"）。
+    renderStatus(`${res.reason} 复制原文粘到下面的框里最稳（链接已放进待读清单）。`);
+    setHidden(openBtn, false);
+    textInput.focus?.();
     if (deps.inbox && url.length > 0) {
       const items = [...deps.inbox.load()];
       if (!items.some((i) => i.url === url)) {
@@ -539,6 +561,8 @@ export function mountPracticeCollect(
     const canGenerate = typeof deps.collectCards === 'function';
     setHidden(pasteGoBtn, !canGenerate);
     setHidden(candSaveBtn.parentElement as HTMLElement, typeof deps.addCard !== 'function');
+    // 「打开原文去复制」只在"刚被抓拦过"时露出（平时它没有意义）
+    if (statusEl.textContent === '' || !statusEl.textContent.includes('待读清单')) setHidden(openBtn, true);
     candSaveBtn.disabled = busy || candidates.length === 0;
   }
 

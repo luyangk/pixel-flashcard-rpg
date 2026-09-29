@@ -22,8 +22,15 @@ import type { FetchLike } from './llmTypes';
 
 /** 超时：手机网络下 20s 足够；到点就中止（网页比 LLM 响应更该有硬上限）。 */
 export const PAGE_TIMEOUT_MS = 20_000;
-/** 体积上限：1.5MB 足够一篇长文；再大就不是"一篇文章"了，读进内存只会拖垮手机。 */
-export const PAGE_MAX_BYTES = 1_500_000;
+/**
+ * 体积上限：**4MB**（原 1.5MB）。
+ *
+ * 【实测修正 D48】用户拿真实公众号链接试出来的一课：公众号单篇原始 HTML 实测 **3.63MB**
+ * （绝大部分是脚本与内联样式），而正文只有四千多字。旧上限 1.5MB 会把"经读取服务拿原始 HTML"
+ * 这条兜底路也一并拒掉 —— 而解析代价实测仅 **90ms**，且只保留 ≤12000 字正文，
+ * 4MB 的原文在手机上完全可承受。再大就不当"一篇文章"处理了。
+ */
+export const PAGE_MAX_BYTES = 4_000_000;
 
 export type PageFetchResult =
   | {
@@ -165,7 +172,11 @@ async function request(fetchImpl: FetchLike, target: string, opts: RequestOpts):
     }
     finish();
     if (text.length > PAGE_MAX_BYTES) {
-      return { ok: false, reason: '这个页面太大了（超过 1.5MB），没法当一篇文章读。', blocked: false };
+      return {
+        ok: false,
+        reason: `这个页面太大了（超过 ${Math.round(PAGE_MAX_BYTES / 1_000_000)}MB），没法当一篇文章读。`,
+        blocked: false,
+      };
     }
     return {
       ok: true,

@@ -105,13 +105,27 @@ describe('fetchPage —— 直读', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('PF#5c 4MB **以内**要接受（实测：公众号单篇原始 HTML 3.63MB ⇒ 旧上限 1.5MB 会把这条兜底路堵死）', async () => {
+    const html = `<html><body><p>${'字'.repeat(3_600_000)}</p></body></html>`; // ≈3.6MB
+    expect(html.length).toBeGreaterThan(1_500_000);
+    expect(html.length).toBeLessThan(PAGE_MAX_BYTES);
+    const fake = (async () =>
+      new Response(html, { status: 200, headers: { 'Content-Type': 'text/html' } })) as unknown as typeof fetch;
+    const res = await fetchPage(URL_OK, { fetchImpl: fake });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.text.length).toBeGreaterThan(1_500_000);
+  });
+
   it('PF#5b 超过体积上限 ⇒ 拒（不把几 MB 的页面读进内存再喂模型）', async () => {
     const huge = 'x'.repeat(PAGE_MAX_BYTES + 10);
     const fake = (async () =>
       new Response(huge, { status: 200, headers: { 'Content-Type': 'text/html' } })) as unknown as typeof fetch;
     const res = await fetchPage(URL_OK, { fetchImpl: fake });
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain('太大');
+    if (!res.ok) {
+      expect(res.reason).toContain('太大');
+      expect(res.reason).toContain(String(Math.round(PAGE_MAX_BYTES / 1_000_000))); // 文案里的数字取自常量
+    }
   });
 });
 

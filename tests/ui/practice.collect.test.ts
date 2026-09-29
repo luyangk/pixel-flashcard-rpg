@@ -153,6 +153,33 @@ describe('mountPracticeCollect —— 来源与"进入一层"', () => {
     expect(all(rig.root, '[data-candidate]')).toHaveLength(1); // 第二次抓到的正文已生成候选
   });
 
+  it('PC#11 被拦 ⇒ 不止报错：露出「打开原文去复制」、点了真的打开、并聚焦粘贴框（D48）', async () => {
+    const opened: string[] = [];
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'menu', save: makeSave({ decks: [makeDeck('d1', '唐诗')], cards: [] }) }));
+    mountPracticeCollect(root, ctrl, {
+      toastMs: 0,
+      newId: () => 'i1',
+      openUrl: (u) => void opened.push(u),
+      ingestUrl: (url) =>
+        Promise.resolve({ kind: 'blocked', url, reason: '这个站点不允许网页直读（跨域限制）。', blocked: true }),
+      inbox: { load: () => [], save: () => true, clear: () => undefined },
+    });
+    typeInto(ui(root, 'source-url') as HTMLInputElement, 'https://mp.weixin.qq.com/s/abc');
+    click(ui(root, 'source-go'));
+    await flushMicrotasks();
+
+    // ① 状态行给的是"下一步"，不只是原因
+    expect(ui(root, 'ingest-status').textContent).toContain('粘到下面的框里');
+    expect(ui(root, 'ingest-status').textContent).toContain('待读清单');
+    // ② 「打开原文去复制」露出且真的打开那条链接
+    expect(ui(root, 'ingest-open').hidden).toBe(false);
+    click(ui(root, 'ingest-open'));
+    expect(opened).toEqual(['https://mp.weixin.qq.com/s/abc']);
+    // ③ 光标已在粘贴框里（玩家要做的正是"复制 + 粘贴"）
+    expect(document.activeElement).toBe(ui(root, 'source-text'));
+  });
+
   it('PC#3 被拦 ⇒ 如实说明 + 链接自动进待读清单', async () => {
     const rig = makeRig();
     typeInto(ui(rig.root, 'source-url') as HTMLInputElement, 'https://mp.weixin.qq.com/s/abc');
