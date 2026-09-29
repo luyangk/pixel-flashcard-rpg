@@ -87,13 +87,22 @@ describe('LLM 安全不变量', () => {
     expect(regexHits(codeOf(['src/platform']), /\bfetch\b/).length).toBeGreaterThan(0);
   });
 
-  it('LS#3 Key 只经 llmConfig：localStorage 只出现在 platform（且只在 LLM 配置模块）', () => {
+  it('LS#3 Key 只经 llmConfig：localStorage 只出现在 platform（且只在两个已登记模块里）', () => {
     const files = codeOf(['src/core', 'src/app', 'src/ui', 'src/stage', 'src/main.ts']);
     expect(hits(files, 'localStorage')).toEqual([]);
     expect(hits(files, 'sessionStorage')).toEqual([]);
 
+    // Plan 8 · T5 起 `localStorage` 有**两个**归属，且白名单要逐字列出（多一个必须显式登记）：
+    // ① llmConfig.ts = 玩家的 LLM Key；② inboxStore.ts = 待读清单（链接/标题/粘来的正文）。
     const platformHits = hits(codeOf(['src/platform']), 'localStorage');
-    expect(platformHits).toEqual(['src/platform/llmConfig.ts']);
+    expect(platformHits).toEqual(['src/platform/inboxStore.ts', 'src/platform/llmConfig.ts']);
+  });
+
+  it('LS#3b 待读清单里绝不放 Key：inboxStore 不碰 apiKey / Authorization / LLM 存储键', () => {
+    const code = stripComments(readFileSync(join(ROOT, 'src/platform/inboxStore.ts'), 'utf8'));
+    for (const forbidden of ['apiKey', 'Authorization', 'Bearer', 'zx-xia.llm', 'LLM_STORAGE_KEY']) {
+      expect(code, `inboxStore 不该出现 ${forbidden}`).not.toContain(forbidden);
+    }
   });
 
   it('LS#4 UI 不回显 Key：设置屏用 password 输入框 + maskKey 展示已存值，且**不自己读写 Key**', () => {
