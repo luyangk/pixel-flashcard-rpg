@@ -19,12 +19,13 @@ import type { Card, SaveFile, Sm2Params, SRSState } from '@core/types';
 import type { BattleEvent, BattleState } from '@core/battle';
 import type { RunRecord } from '@core/leaderboard';
 import { scoreRun } from '@core/leaderboard';
+
 import { validateSave } from '@core/saveMigrate';
 import type { GameStorage } from '@platform/storage';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { backupReminderDue } from '../../src/app/backup';
 import { createCoordinator, type Coordinator } from '../../src/app/persist';
-import { buildRunInput, recordRun } from '../../src/app/results';
+import { buildRunInput, recordRun, upgradeRunTitle } from '../../src/app/results';
 import type { FightView } from '../../src/app/battleFlow';
 
 // —— 仿真锚点：全部时间由测试显式注入 ——
@@ -615,5 +616,48 @@ describe('markExported / meta.lastExportedAt —— 7 天备份提醒闭环（R-
     expect(after.meta.lastExportedAt).toBe(NOW);
     // savedAt 由落盘路径统一刷新（persist 既有行为），不是 markExported 的副作用
     expect(after.meta.savedAt).toBe(NOW);
+  });
+});
+
+/* ------------------------------------------------------------------ D58：遭遇战名字 */
+
+/**
+ * 判别力：
+ * - RS#T1 记录里带**名字**，形如 `雅号 · 组合`；组合里出现的是**领域名**（只写 deckId 的实现必红）；
+ * - RS#T2 `upgradeRunTitle` 换成模型给的雅号并保留组合；同值 / 记录不在 ⇒ 不写。
+ */
+describe('app/results —— 遭遇战名字（D58）', () => {
+  it('RS#T1 记录带名字：雅号 · 领域组合', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save(saveWithLeaderboard([]));
+    const coord = await makeCoord(raw, clock);
+
+    const view = makeView({ pool: ['c1', 'c2'], idx: 2, phase: 'won' });
+    const rec = await recordRun(coord, view, view.state, extras());
+
+    expect(rec.title).toBeTruthy();
+    expect(rec.title).toContain(' · ');
+    expect(rec.title).toContain('领域A'); // 夹具的领域名（不是 deck-a）
+    expect(rec.title?.split(' · ')[0]).toHaveLength(4); // 兜底雅号是四字
+  });
+
+  it('RS#T2 升级雅号：组合保留；同值与记录不在都不写', async () => {
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    await raw.save(saveWithLeaderboard([]));
+    const coord = await makeCoord(raw, clock);
+
+    const view = makeView({ pool: ['c1', 'c2'], idx: 2, phase: 'won' });
+    const rec = await recordRun(coord, view, view.state, extras());
+    const combo = rec.title?.split(' · ')[1] ?? '';
+
+    const up = await upgradeRunTitle(coord, { recordId: rec.id, yahao: '长安夜雨' });
+    expect(up.updated).toBe(true);
+    expect(up.title).toBe(`长安夜雨 · ${combo}`);
+    expect(coord.snapshot().settings.leaderboard?.[0]?.title).toBe(`长安夜雨 · ${combo}`);
+
+    expect((await upgradeRunTitle(coord, { recordId: rec.id, yahao: '长安夜雨' })).updated).toBe(false);
+    expect((await upgradeRunTitle(coord, { recordId: 'nope', yahao: '松间清露' })).updated).toBe(false);
   });
 });

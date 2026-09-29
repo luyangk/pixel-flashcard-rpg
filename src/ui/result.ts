@@ -50,6 +50,16 @@ export interface ResultDeps {
   /** 定时器注入位（默认全局 setTimeout/clearTimeout；测试注入手动调度器）。 */
   readonly setTimer?: (cb: () => void, ms: number) => number;
   readonly clearTimer?: (handle: number) => void;
+  /**
+   * 「这一局叫什么名字」（D58）：结果屏挂载时**请一次**宿主去问模型要个雅号。
+   * 名字先由本地兜底写在记录里（结算时就写了），升级回来后屏上会自动换成新的
+   * （订阅快照重渲染）。缺省 ⇒ 只用兜底名。
+   */
+  readonly onNameRequest?: (input: {
+    readonly recordId: string;
+    readonly combo: string;
+    readonly kind: string;
+  }) => void;
 }
 
 export interface ResultHandle {
@@ -108,6 +118,8 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const outcomeEl = h('div', { 'data-ui': 'outcome', class: 'outcome' });
+  /** 这一局的名字（D58）：本地兜底先显示，模型给了雅号就换成新的。 */
+  const fightTitleEl = h('p', { 'data-ui': 'fight-title', class: 'fight-title', hidden: true });
   const expEl = h('div', { 'data-ui': 'exp', class: 'exp' });
   const levelEl = h('div', { 'data-ui': 'level', class: 'level' });
   const statsEl = h('div', { 'data-ui': 'stats', class: 'stats' });
@@ -143,6 +155,7 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
 
   const summaryEl = h('section', { 'data-ui': 'summary', class: 'summary' }, [
     outcomeEl,
+    fightTitleEl,
     expEl,
     levelEl,
     statsEl,
@@ -220,6 +233,22 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
   }
 
   /* ------------------------------------------------------------ 渲染 */
+  /** 已请过命名的记录 id（一次性：重渲染不该反复麻烦模型 —— 那是真金白银）。 */
+  const namedRequests = new Set<string>();
+
+  /** 请宿主去问模型要个雅号（D58）。只请一次；缺省什么都不做。 */
+  function requestNameOnce(recordId: string, title: string, won: boolean): void {
+    if (typeof deps.onNameRequest !== 'function' || namedRequests.has(recordId)) return;
+    namedRequests.add(recordId);
+    const sep = ' · ';
+    const idx = title.indexOf(sep);
+    deps.onNameRequest({
+      recordId,
+      combo: idx < 0 ? title : title.slice(idx + sep.length),
+      kind: won ? 'won' : 'lost',
+    });
+  }
+
   function render(): void {
     const snap = ctrl.snapshot();
     const res = snap.lastResult;
@@ -237,6 +266,19 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
         : `等级 ${res.levelAfter}`;
       statsEl.textContent = `出战 ${res.poolLen} 张 · 空转 ${res.misses} 次`;
       drillSummaryEl.textContent = `练功完成：${res.poolLen} 张 · 经验 +${res.expGained}`;
+      /**
+       * 这一局的名字（D58）：从榜上按 `recordId` 找回来 —— 记录里已经有本地兜底名，
+       * 模型给了雅号之后宿主会改记录，快照一变这里就换成新名字。
+       * 木桩练功不写榜 ⇒ 没有 recordId，名字不显示（它本来也不该有战绩名）。
+       */
+      const rec =
+        res.recordId === undefined
+          ? undefined
+          : (snap.save?.settings?.leaderboard ?? []).find((r) => r && r.id === res.recordId);
+      const title = typeof rec?.title === 'string' ? rec.title : '';
+      fightTitleEl.textContent = title;
+      setHidden(fightTitleEl, title.length === 0);
+      if (title.length > 0 && res.recordId !== undefined) requestNameOnce(res.recordId, title, res.won);
     }
     setHidden(drillSummaryEl, !isDrill);
     // 败局才有那句"下一步"（胜局不需要劝说；**练功也不是败局** —— 练功不判胜负，

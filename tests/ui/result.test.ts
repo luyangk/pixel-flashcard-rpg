@@ -356,3 +356,76 @@ describe('mountResult —— 木桩练完（Plan 7 · T5）', () => {
     expect(ui(root, 'drill-summary').textContent).toContain('练功完成');
   });
 });
+
+/* ------------------------------------------------------------------ D58：这一局叫什么 */
+
+/**
+ * 判别力：
+ * - RS#N1 记录里有名字 ⇒ 结果屏显示它（`雅号 · 组合`）；
+ * - RS#N2 只在**第一次**渲染时请一次宿主命名（重渲染反复请求 = 反复花钱）；
+ * - RS#N3 缺 `onNameRequest` ⇒ 只显示兜底名，不崩；木桩练功没有 recordId ⇒ 不显示也不请求。
+ */
+describe('mountResult —— 这一局的名字（D58）', () => {
+  it('RS#N1/N2 显示名字，且只请一次宿主去升级', () => {
+    const root = makeRoot();
+    const reqs: Array<{ recordId: string; combo: string }> = [];
+    const snap = makeSnap({
+      screen: 'result',
+      save: {
+        ...makeSave(),
+        settings: {
+          ...makeSave().settings,
+          leaderboard: [
+            { id: 'r1', at: 1, result: 'won', kind: 'encounter', domain: '唐诗', cards: 3, misses: 0, level: 1, score: 80, title: '长安夜雨 · 唐诗 × 成语典故' },
+          ],
+        },
+      },
+      lastResult: { won: true, mode: 'fight', expGained: 10, levelBefore: 1, levelAfter: 1, leveledUp: false, misses: 0, poolLen: 3, recordId: 'r1' },
+    });
+    const ctrl = makeCtrl(snap);
+    mountResult(root, ctrl, {
+      flashMs: 0,
+      holdMs: 0,
+      onNameRequest: (input) => void reqs.push({ recordId: input.recordId, combo: input.combo }),
+    });
+
+    expect(ui(root, 'fight-title').hidden).toBe(false);
+    expect(ui(root, 'fight-title').textContent).toBe('长安夜雨 · 唐诗 × 成语典故');
+    expect(reqs).toEqual([{ recordId: 'r1', combo: '唐诗 × 成语典故' }]);
+
+    // 再推一次快照（模拟别处变化）⇒ 不再请一次
+    ctrl.push({ ...snap });
+    expect(reqs).toHaveLength(1);
+  });
+
+  it('RS#N3 缺命名口 ⇒ 只显示兜底名；木桩练功没有 recordId ⇒ 名字不显示也不请求', () => {
+    const root = makeRoot();
+    const snap = makeSnap({
+      screen: 'result',
+      save: {
+        ...makeSave(),
+        settings: {
+          ...makeSave().settings,
+          leaderboard: [
+            { id: 'r1', at: 1, result: 'won', kind: 'encounter', domain: '唐诗', cards: 3, misses: 0, level: 1, score: 80, title: '松间清露 · 唐诗' },
+          ],
+        },
+      },
+      lastResult: { won: true, mode: 'fight', expGained: 10, levelBefore: 1, levelAfter: 1, leveledUp: false, misses: 0, poolLen: 3, recordId: 'r1' },
+    });
+    mountResult(root, makeCtrl(snap), { flashMs: 0, holdMs: 0 });
+    expect(ui(root, 'fight-title').textContent).toBe('松间清露 · 唐诗');
+
+    const drill = makeRoot();
+    mountResult(
+      drill,
+      makeCtrl(makeSnap({
+        screen: 'result',
+        save: makeSave(),
+        lastResult: { won: false, mode: 'drill', expGained: 3, levelBefore: 1, levelAfter: 1, leveledUp: false, misses: 0, poolLen: 5 },
+      })),
+      { flashMs: 0, holdMs: 0, onNameRequest: () => { throw new Error('练功不该请求命名'); } },
+    );
+    expect(ui(drill, 'fight-title').hidden).toBe(true);
+  });
+});

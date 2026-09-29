@@ -13,6 +13,7 @@
  * 资料而不是指令"这条防注入设计，必须在提示词里看得见（见 `wrapUntrusted`）。
  */
 import type { ChatMessage, ChatResult } from '../platform/llmTypes';
+import { sanitizeYahao } from './fightTitle';
 import type { CardCandidate, NameCandidate, ParseResult } from '../core/llmParse';
 import {
   CARD_FIELD_MAX,
@@ -23,6 +24,22 @@ import {
   parseNames,
   parseVerdict,
 } from '../core/llmParse';
+
+/** 从模型输出里取出一个对象的字段（取不到就回 null；**不抛**）。 */
+function extractJsonObject(text: unknown): Record<string, unknown> | null {
+  const raw = typeof text === 'string' ? text : '';
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /** 注入的调用器（生产接 `platform/llmHttp.chat`；测试给假的）。 */
 export type ChatFn = (messages: readonly ChatMessage[]) => Promise<ChatResult>;
@@ -138,6 +155,51 @@ export async function suggestChoices(
   const parsed = parseChoices(res.text, back);
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
   return { ok: true, choices: parsed.choices };
+}
+
+const FIGHT_TITLE_SYSTEM = [
+  '你在给一局记忆对战起一个雅号（不是标题、不是句子，就是一个雅号）。',
+  '硬性要求：',
+  '1. 只输出一个 JSON 对象，形如 {"yahao":"长安夜雨"}，不要任何解释；',
+  '2. 雅号 **2–6 个汉字**，水墨武侠气，有意境；',
+  '3. 不要标点、不要引号、不要英文、不要数字、不要书名号；',
+  '4. 要贴合这些领域的知识气质，但**不要直接抄领域名**。',
+].join('\n');
+
+/** 遭遇战雅号的提示词（D58；导出以便测试钉住"只给雅号"这条契约）。 */
+export function buildFightTitlePrompt(input: {
+  readonly combo: string;
+  readonly kind: string;
+}): ChatMessage[] {
+  return [
+    { role: 'system', content: FIGHT_TITLE_SYSTEM },
+    {
+      role: 'user',
+      content: wrapUntrusted(
+        '这一局',
+        `领域组合：${clip(input?.combo, 80)}\n场次：${clip(input?.kind, 20)}`,
+      ),
+    },
+  ];
+}
+
+/**
+ * 给一局起个雅号（D58，**只回雅号，不写盘**）。
+ *
+ * 为什么只要雅号、不要整名：组合由**我们自己**拼（`fightTitle.composeTitle`）——
+ * 让模型连领域名一起写，它就有机会写错/漏掉某个领域，而那是玩家一眼能看出来的错。
+ */
+export async function suggestFightTitle(
+  deps: LlmDeps,
+  input: { readonly combo: string; readonly kind: string },
+): Promise<{ ok: true; yahao: string } | { ok: false; reason: string }> {
+  const res = await ask(deps, buildFightTitlePrompt(input));
+  if (!res.ok) return { ok: false, reason: res.reason };
+  const extracted = extractJsonObject(res.text);
+  const raw = extracted === null ? res.text : extracted.yahao;
+  const yahao = sanitizeYahao(raw);
+  if (yahao.length < 2) return { ok: false, reason: '模型没给出可用的雅号。' };
+  return { ok: true, yahao };
 }
 
 /**

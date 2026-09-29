@@ -30,6 +30,13 @@ export interface RunRecord {
   misses: number;
   level: number;
   score: number;
+  /**
+   * 这一局的**名字**（D58，例「长安夜雨 · 唐诗 × 成语典故」）。
+   *
+   * 可选位：D58 之前的记录没有它 ⇒ 榜单回落到 `domain` 那一个领域名（老记录不因缺它而失效）。
+   * 由 `app/fightTitle` 拼出（本地兜底先写，LLM 升级后覆盖）。
+   */
+  title?: string;
 }
 
 /** scoreRun 的入参形状：完整记录去掉派生值（score）与身份（id）。 */

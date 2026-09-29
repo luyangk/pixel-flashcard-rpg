@@ -139,6 +139,15 @@ export interface HostAdapters {
   readonly refreshChoices?: (input: {
     readonly cardId: string;
   }) => Promise<{ readonly ok: boolean; readonly reason?: string; readonly choices?: readonly string[] }>;
+  /**
+   * 遭遇战名字的**升级**口（D58）：结果屏请一次，宿主问模型要个雅号并覆盖记录里的名字。
+   * 缺省 ⇒ 只用本地兜底名（不配 AI 的玩家一样看得到名字）。
+   */
+  readonly onNameRequest?: (input: {
+    readonly recordId: string;
+    readonly combo: string;
+    readonly kind: string;
+  }) => void;
   /** 玩家身份（D57；菜单显示昵称、设置页可改）：宿主接 `platform/profileStore`。 */
   readonly profile?: {
     readonly load: () => PlayerProfile;

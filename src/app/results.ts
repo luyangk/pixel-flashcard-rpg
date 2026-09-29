@@ -38,6 +38,7 @@
 
 import type { RunRecord, RunInput } from '@core/leaderboard';
 import { rankRuns, scoreRun } from '@core/leaderboard';
+import { composeTitle, fallbackYahao, fightDomainNames, splitCombo } from './fightTitle';
 import { MAX_TIME_MS } from '@core/saveMigrate';
 import type { BattleState } from '@core/battle';
 import type { Coordinator } from './persist';
@@ -150,6 +151,12 @@ export async function recordRun(
   extras: RunExtras,
 ): Promise<RunRecord> {
   const input = buildRunInput(view, state, extras);
+  /**
+   * 名字（D58）：**本地兜底即时写**（确定性、不花钱、离线可用），LLM 的更好版本回来后再升级
+   * （见 `upgradeRunTitle`）——AI 永远不挡在结算路径上。
+   */
+  const domainNames = fightDomainNames(view.pool, coord.snapshot());
+  const title = composeTitle(fallbackYahao(domainNames), domainNames);
   const record: RunRecord = {
     id: makeRunId(input),
     at: input.at,
@@ -160,6 +167,7 @@ export async function recordRun(
     misses: input.misses,
     level: input.level,
     score: scoreRun(input),
+    title,
   };
 
   await coord.mutate((save) => {
@@ -169,4 +177,27 @@ export async function recordRun(
   });
   await flushToClean(coord);
   return record;
+}
+
+/**
+ * 把一局的名字升级成模型给的雅号（D58）。
+ *
+ * 只在**这一局还在榜上**时改；名字一字不动时**不写**（幂等，免得多一次落盘）。
+ * 组合从旧名字里拆回来（我们自己的格式：`雅号 · 组合`）—— 这样调用方不必再传一遍领域名。
+ */
+export async function upgradeRunTitle(
+  coord: Coordinator,
+  input: { readonly recordId: string; readonly yahao: string },
+): Promise<{ readonly updated: boolean; readonly title: string }> {
+  const rows = coord.snapshot().settings?.leaderboard;
+  const existing = Array.isArray(rows) ? rows.find((r) => r && r.id === input.recordId) : undefined;
+  if (existing === undefined) return { updated: false, title: '' };
+  const combo = splitCombo(existing.title) || existing.domain;
+  const next = composeTitle(input.yahao, combo.split(/\s*[×/]\s*/));
+  if (next === existing.title) return { updated: false, title: existing.title };
+  await coord.mutate((save) => {
+    const list = Array.isArray(save.settings.leaderboard) ? save.settings.leaderboard : [];
+    save.settings.leaderboard = list.map((r) => (r && r.id === input.recordId ? { ...r, title: next } : r));
+  });
+  return { updated: true, title: next };
 }

@@ -46,6 +46,12 @@ export type RunSummary = Readonly<{
   leveledUp: boolean;
   misses: number;
   poolLen: number;
+  /**
+   * 本局战绩记录的 id（D58）：结果屏据此请宿主把名字升级成模型给的雅号
+   * （记录本体在 `settings.leaderboard` 里；名字先写本地兜底，升级后覆盖）。
+   * 木桩练功不写榜 ⇒ 没有这个 id。
+   */
+  recordId?: string;
 }>;
 
 /**

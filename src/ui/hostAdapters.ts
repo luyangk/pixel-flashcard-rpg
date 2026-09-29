@@ -29,7 +29,15 @@ import { checkForUpdate, pageBuild, reloadPage } from '../platform/pwaUpdate';
 import { fetchPage, type PageFetchResult } from '../platform/pageFetch';
 import { bossFightParams, setBossName } from '../app/bossFlow';
 import { setEggOnDeck } from '../app/codexFlow';
-import { judgeAnswer, suggestBossNames, suggestCards, suggestChoices, suggestEgg, type ChatFn } from '../app/llmFlow';
+import {
+  judgeAnswer,
+  suggestBossNames,
+  suggestCards,
+  suggestChoices,
+  suggestEgg,
+  suggestFightTitle,
+  type ChatFn,
+} from '../app/llmFlow';
 import type { GameController, GameIntent } from '../app/controllerTypes';
 import type { Coordinator } from '../app/persist';
 import {
@@ -44,6 +52,7 @@ import { saveBeatCursor } from '../app/storyState';
 import { ingestUrl } from '../app/ingestFlow';
 import { collectCards } from '../app/knowledgeFlow';
 import { setCardChoices, updateCard } from '../app/library';
+import { upgradeRunTitle } from '../app/results';
 import { DAILY_CARD_CAP, DAILY_JUDGE_CAP, planCharge, planJudge, remainingCards, remainingJudges } from '../app/quota';
 import { resetSave } from '../app/resetFlow';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
@@ -125,6 +134,8 @@ export interface AssembleDeps {
   readonly feedFetchImpl?: FetchLike;
   /** 来源库口径（测试用；生产接 platform/feedFetch + platform/sourceStore）。 */
   readonly sourcesOverride?: HostAdapters['sources'];
+  /** 遭遇战名字升级口径（测试用；生产接 llmFlow.suggestFightTitle + results.upgradeRunTitle）。 */
+  readonly onNameRequestOverride?: HostAdapters['onNameRequest'];
   /** 玩家身份口径（测试用；生产接 platform/profileStore）。 */
   readonly profileOverride?: HostAdapters['profile'];
   /** 「重出选项」口径（测试用；生产接 llmFlow.suggestChoices + library.setCardChoices + 额度记账）。 */
@@ -403,6 +414,21 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       load: () => ensureProfile(() => `u-${Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, '0')}`),
       save: (profile) => saveProfile(profile),
     },
+    /**
+     * 遭遇战名字升级（D58）：**只在校验通过时覆盖**，失败就保留本地兜底名（不打扰玩家）。
+     * 这里不 await（结果屏不等它）—— 名字是锦上添花，不该让结算慢一秒。
+     */
+    onNameRequest:
+      deps.onNameRequestOverride ??
+      // 注意这层括号：`??` 后面直接跟**同步**箭头函数会被解析成 `(a ?? (input)) => {}`（语法错）。
+      // 异步箭头（下面 judge 那种）没这个问题，但这里保持一致写法更省事。
+      ((input) => {
+        void (async () => {
+          const res = await suggestFightTitle({ chat: boundChat() }, { combo: input.combo, kind: input.kind });
+          if (!res.ok) return;
+          await upgradeRunTitle(coord, { recordId: input.recordId, yahao: res.yahao });
+        })().catch(() => undefined);
+      }),
     /** 「关于」（D54）：版本显示 + 检查更新（只查不刷；`apply` 才 reload）。 */
     pwa: deps.pwaOverride ?? {
       version: pageBuild,

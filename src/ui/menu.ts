@@ -76,7 +76,12 @@ const ENTRIES: ReadonlyArray<{ readonly target: MenuTarget; readonly label: stri
 function rankRowText(rank: number, r: RunRecord): string {
   const outcome = r.result === 'won' ? '胜' : '败';
   const kind = r.kind === 'boss' ? ' · 卷灵' : '';
-  return `${rank}. ${r.domain} · ${r.score} 分 · ${outcome}${kind}`;
+  /**
+   * 名字（D58）：有就用 `雅号 · 组合` —— 多领域合练的一局不再被写成"只有第一个领域"。
+   * 老记录（D58 之前）没有 title ⇒ 回落原来的领域名（不因缺字段而空着）。
+   */
+  const name = typeof r.title === 'string' && r.title.trim().length > 0 ? r.title.trim() : r.domain;
+  return `${rank}. ${name} · ${r.score} 分 · ${outcome}${kind}`;
 }
 
 /**

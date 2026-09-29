@@ -355,6 +355,15 @@ function validateRunRecord(raw: unknown, path: string): void {
   requireNonNegInt(o.misses, `${path}.misses`);
   requireNonNegInt(o.level, `${path}.level`);
   requireNonNegInt(o.score, `${path}.score`);
+  // title（D58）：可选位 —— 在场严检（非空字符串、≤32 码点），缺席不拒（老记录没有它）
+  if ('title' in o && o.title !== undefined) {
+    const title = requireString(o.title, `${path}.title`);
+    assertShape(
+      title.trim().length > 0 && Array.from(title).length <= 32,
+      `${path}.title`,
+      () => `应为 1–32 码点的非空字符串，实际为 ${describeValue(o.title)}`,
+    );
+  }
 }
 
 function validateSettings(raw: unknown): void {

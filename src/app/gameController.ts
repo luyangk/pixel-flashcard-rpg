@@ -199,13 +199,15 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     const state = view.state;
     const kind = view.difficulty === 'boss' ? 'boss' : 'encounter';
     const domain = domainOfView(view, save);
+    let recordId: string | undefined;
     await guardedWrite(async () => {
-      await recordRun(coord, view, state, {
+      const rec = await recordRun(coord, view, state, {
         nowMs: now(),
         domain,
         kind,
         level: levelFromExp(coord.snapshot().settings.progress.exp),
       });
+      recordId = rec.id;
     });
 
     // T8：卷灵净化 + 暗线里程碑（只在 boss 档取胜时）。顺序与语义：
@@ -241,6 +243,8 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
       leveledUp: levelAfter > levelBefore,
       misses: countMisses(state),
       poolLen: view.pool.length,
+      // D58：本局记录 id（结果屏据此请宿主升级名字）；只读态下 recordId 为空 ⇒ 不带该字段
+      ...(recordId === undefined ? {} : { recordId }),
     };
   }
 

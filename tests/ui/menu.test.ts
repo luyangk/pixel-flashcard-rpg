@@ -269,3 +269,27 @@ describe('mountMenu —— 个人纪录（D57）', () => {
     expect(root.querySelector('[data-ui="records-section"]')).not.toBeNull();
   });
 });
+
+/* ------------------------------------------------------------------ D58：战绩行显示名字 */
+
+/**
+ * 判别力：
+ * - MN#T1 有 title 的记录显示名字（把多领域的一局写成"只有第一个领域"的实现必红）；
+ * - MN#T2 老记录（没有 title）回落到领域名，不空着。
+ */
+describe('mountMenu —— 战绩行的名字（D58）', () => {
+  const row = (i = 0): string => (all(document.body, '[data-ui="rank-row"]')[i]?.textContent ?? '');
+
+  it('MN#T1 有名字就显示名字；MN#T2 老记录回落领域名', () => {
+    const root = makeRoot();
+    const save = makeSave();
+    save.settings.leaderboard = [
+      { id: 'r1', at: 2, result: 'won', kind: 'encounter', domain: '生活常识', cards: 3, misses: 0, level: 1, score: 80, title: '长安夜雨 · 唐诗 × 成语典故' },
+      { id: 'r2', at: 1, result: 'lost', kind: 'encounter', domain: '生活常识', cards: 2, misses: 2, level: 1, score: 0 },
+    ];
+    mountMenu(root, makeCtrl(makeSnap({ screen: 'menu', save })), { onNav: () => undefined });
+    expect(row(0)).toContain('长安夜雨 · 唐诗 × 成语典故');
+    expect(row(0)).not.toContain('生活常识');
+    expect(row(1)).toContain('生活常识'); // 老记录回流领域名
+  });
+});

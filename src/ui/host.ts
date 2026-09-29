@@ -209,6 +209,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
         return mountResult(root, ctrl, {
           beats: deps.beats as readonly BeatEntry[],
           fakes,
+          // D58：这一局的名字升级（本地兜底已在记录里；模型给了雅号再覆盖）
+          onNameRequest: deps.onNameRequest,
           onBeatDrawn: deps.onBeatDrawn,
           onReplay: deps.onReplay,
           setTimer: deps.setTimer,
