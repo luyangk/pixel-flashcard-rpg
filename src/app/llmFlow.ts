@@ -70,7 +70,14 @@ const CARD_SYSTEM = [
   '1. 只输出一个 JSON 数组，不要任何解释、不要 Markdown 代码块以外的文字；',
   '2. 每个元素形如 {"front":"问题或提示","back":"答案","tags":["主题"],"choices":["干扰项1","干扰项2","干扰项3"]}；',
   '3. front 与 back 都必须是**自足**的短句：单看卡片就能作答，不出现"上文""这段"这类指代；',
-  '4. front ≤ 40 字，back ≤ 80 字，tags 最多 3 个、每个 ≤ 6 字；',
+  // D59：长度上限放宽（80 字装不下"一条链路"），并明确"一张卡可以承载多要点"
+  '4. front ≤ 60 字，back ≤ 160 字，tags 最多 3 个、每个 ≤ 6 字；**一张卡可以承载一条链路或多个要点**' +
+    '（例如"三步流程""因果链""判断依据"），不要为了短而把一条完整的道理拆成互不相关的碎片；',
+  // D59：把"该抽什么"写在最前面 —— 现场症状是"卡片都是记忆来源日期之类的信息，缺少主线与步骤"
+  '4b. **优先抽这三类**：① 主线结论与判断依据；② 步骤/流程（有序）；③ 因果与条件（什么情况下会怎样）。' +
+    '细枝末节宁可少出卡，也不要把最有价值的那条道理漏掉；',
+  '4c. **禁止元信息卡**：日期、作者、期刊、来源、"本文提出""这篇文章讲了"这类**关于资料本身**的信息' +
+    '一律不做成卡（它们记了也没用）；只有资料本身在讲某个时间点才有意义的（如历史事件年代）才允许；',
   `5. choices 是给这张卡出选择题用的**错误选项**（3 条，每条 ≤ 30 字）：要"像答案但不对"、` +
     `与 back 同类同粒度，**不要与 back 相同或同义**，彼此也不重复；确实想不出就留空数组；`,
   // D56：干扰项**必须同领域**。现场症状是生活常识的题里出现 AI 领域的选项（池子串味 +
@@ -157,6 +164,57 @@ export async function suggestChoices(
   return { ok: true, choices: parsed.choices };
 }
 
+/**
+ * 提纲提示词（D59）：长资料先出"骨架"，再按骨架出卡。
+ *
+ * 为什么必须分两步：卡片生成受"一次请求的提示词预算"限制，长文只能分块；
+ * 而分块会让主线/因果在切块那一步就散掉 —— 于是拿到的全是一地问一答的碎片。
+ * 先让模型**看完整篇**给出骨架，再按骨架出卡，结构才不会丢。
+ */
+const OUTLINE_SYSTEM = [
+  '你在读一份资料，并提取它的**骨架**，供之后出记忆卡使用。',
+  '硬性要求：',
+  '1. 只输出纯文本，不要 JSON、不要 Markdown 代码块、不要解释自己在做什么；',
+  '2. 按下面四个小标题分段写，每段 1–6 条，每条一行、以 `- ` 开头：',
+  '   【主线】这份资料最想说的是什么（结论、主张、判断标准）；',
+  '   【步骤】需要按顺序记住的流程（有几步写几步）；',
+  '   【因果】什么条件下会发生什么、为什么；',
+  '   【易混】容易记错或搞混的地方（如果有）。',
+  '3. 每条 ≤ 40 字，写清楚"道理"本身，**不要**写日期、作者、来源这类元信息；',
+  '4. 资料里没写的不要编。整段总长 ≤ 800 字。',
+].join('\n');
+
+/** 提纲提示词（导出以便测试钉住"四段骨架 + 禁元信息"这两条契约）。 */
+export function buildOutlinePrompt(input: { readonly text: string; readonly deckName: string }): ChatMessage[] {
+  return [
+    { role: 'system', content: OUTLINE_SYSTEM },
+    {
+      role: 'user',
+      content: wrapUntrusted(
+        `待提炼的资料（领域：${clip(input?.deckName, 40)}）`,
+        clip(input?.text, OUTLINE_INPUT_MAX),
+      ),
+    },
+  ];
+}
+
+/**
+ * 提炼提纲（D59，**只回提纲文本，不产卡、不落账**）。
+ *
+ * 失败一律如实回 `{ok:false}`：调用方会**回落成单次生成**（不让这条新路成为新的失败点）。
+ */
+export async function suggestOutline(
+  deps: LlmDeps,
+  input: { readonly text: string; readonly deckName: string },
+): Promise<{ ok: true; outline: string } | { ok: false; reason: string }> {
+  const res = await ask(deps, buildOutlinePrompt(input));
+  if (!res.ok) return { ok: false, reason: res.reason };
+  const outline = String(res.text ?? '').trim();
+  // 太短的多半是模型在敷衍（一句话提纲出不来几张卡）⇒ 当作失败，让调用方走单次生成
+  if (Array.from(outline).length < OUTLINE_MIN_CHARS) return { ok: false, reason: '模型给的提纲太短。' };
+  return { ok: true, outline: clip(outline, OUTLINE_MAX) };
+}
+
 const FIGHT_TITLE_SYSTEM = [
   '你在给一局记忆对战起一个雅号（不是标题、不是句子，就是一个雅号）。',
   '硬性要求：',
@@ -225,6 +283,13 @@ const JUDGE_SYSTEM = [
  * 粘贴原文的长度上限（评审 m-3）：一次调用就是一次真实付费请求，几千字的长文既贵又慢，
  * 而辅建卡的收益主要来自"精炼的笔记"。超出部分**截断并明确告知**（不静默丢）。
  */
+/** 提纲阶段的输入上限（码点）：够覆盖一篇长文的主干，又不至于把请求撑爆。 */
+export const OUTLINE_INPUT_MAX = 20_000;
+/** 提纲输出的上限（码点）。 */
+export const OUTLINE_MAX = 2_000;
+/** 提纲短于这个码点数就当作"没提炼出来"（一句话提纲出不了几张卡）。 */
+export const OUTLINE_MIN_CHARS = 60;
+
 export const PASTE_MAX = 4000;
 /** 玩家在问答模式里写的理解的长度上限（码点；超出按码点截断，不静默丢）。 */
 export const REPLY_MAX = 500;
@@ -245,13 +310,31 @@ function sampleLine(fronts: readonly string[] | undefined, max = 5): string {
 }
 
 /** 三条提示词构造函数（纯函数；导出以便逐字断言）。 */
-export function buildCardPrompt(input: { text: string; deckName: string; max?: number }): readonly ChatMessage[] {
+export function buildCardPrompt(input: {
+  readonly text: string;
+  readonly deckName: string;
+  readonly max?: number;
+  /** `'outline'` = 这段资料是**上一步提炼的骨架**（提示词里会说明，别当成原文照抄）。 */
+  readonly mode?: 'text' | 'outline';
+}): readonly ChatMessage[] {
   const max = Number.isInteger(input.max) && (input.max as number) > 0 ? (input.max as number) : 20;
+  const outlineMode = input.mode === 'outline';
   return [
-    { role: 'system', content: `${CARD_SYSTEM}\n9. 这次最多出 ${max} 张。` },
+    {
+      role: 'system',
+      content:
+        `${CARD_SYSTEM}\n9. 这次最多出 ${max} 张。` +
+        (outlineMode
+          ? '\n10. **下面给的是上一步提炼出的骨架**（【主线】【步骤】【因果】【易混】四段）：' +
+            '请按骨架出卡，优先保住主线与步骤，不要把骨架里的条目原样抄成题目。'
+          : ''),
+    },
     {
       role: 'user',
-      content: `领域：${clip(input.deckName, 30)}\n\n${wrapUntrusted('资料', clip(input.text, PASTE_MAX))}`,
+      content: `领域：${clip(input.deckName, 30)}\n\n${wrapUntrusted(
+        outlineMode ? '资料骨架' : '资料',
+        clip(input.text, outlineMode ? OUTLINE_MAX : PASTE_MAX),
+      )}`,
     },
   ];
 }
@@ -310,7 +393,7 @@ async function ask(deps: LlmDeps, messages: readonly ChatMessage[]): Promise<Cha
 /** 把一段资料辅建成卡片候选（**不写存档**）。 */
 export async function suggestCards(
   deps: LlmDeps,
-  input: { text: string; deckName: string; max?: number },
+  input: { text: string; deckName: string; max?: number; mode?: 'text' | 'outline' },
 ): Promise<ParseResult<CardCandidate>> {
   if (typeof input?.text !== 'string' || input.text.trim().length === 0) {
     return { ok: false, reason: '先粘一段资料进来。' };

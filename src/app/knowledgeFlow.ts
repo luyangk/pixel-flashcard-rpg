@@ -14,10 +14,17 @@
 import type { CardCandidate } from '@core/llmParse';
 import type { LlmQuota } from '@core/types';
 import { PER_REQUEST_CARD_CAP, normalizeQuota, planCharge, remainingCards } from './quota';
-import { suggestCards, type ChatFn } from './llmFlow';
+import { suggestCards, suggestOutline, type ChatFn } from './llmFlow';
 
 /** 每块的最大码点数（与 llmFlow.PASTE_MAX 同值：那块提示词就是按这个预算写的）。 */
 export const CHUNK_CHARS = 4000;
+/**
+ * 超过这么多码点就先提炼提纲（D59）。
+ *
+ * 1500 是实测出来的分界：从来源库点的 arXiv 摘要约 1500–2000 字，正好在线上；
+ * 再短（自己粘的三五句笔记）跑两次调用不划算。
+ */
+export const OUTLINE_MIN_TEXT = 1500;
 
 /**
  * 把长文切成块：**优先按段落边界**（`\n`），单段超长才硬切。
@@ -71,6 +78,11 @@ export interface CollectInput {
   readonly text: string;
   readonly deckName: string;
   readonly quota: LlmQuota | undefined;
+  /**
+   * 进度回调（D59）：长文现在是"先提炼主线，再出卡"两次调用，
+   * 第一次调用没有任何卡片产出，屏上必须说清在干什么，否则像卡住了。
+   */
+  readonly onStage?: (stage: 'outline' | 'cards') => void;
   /** 想要几张（缺省单次上限 20；会被当日余额夹住）。 */
   readonly want?: number;
   readonly nowMs: number;
@@ -104,12 +116,55 @@ export async function collectCards(
   }
   let quota = normalizeQuota(input.quota, input.nowMs, input.tzOffsetMin);
 
-  const chunks = chunkText(text);
   const out: CardCandidate[] = [];
   const seen = new Set<string>();
   let requests = 0;
   let failed = false;
   let truncated = false;
+
+  /**
+   * 两段式（D59）：长文**先提炼提纲**，再按提纲出卡。
+   *
+   * 为什么不是"分块直接出卡"：卡片生成一次请求只能装下一块，而分块会让主线/因果在切块
+   * 那一步就散掉（现场症状：卡片都是"来源日期"这类碎片）。提纲看的是**整篇**，所以骨架不丢；
+   * 而且长文从此只花两次调用（提纲 + 出卡），比分块出卡**更便宜**。
+   *
+   * 提纲失败一律**回落单次/分块生成**：新路不许成为新的失败点。
+   */
+  const longEnoughForOutline = Array.from(text).length >= OUTLINE_MIN_TEXT;
+  if (longEnoughForOutline) {
+    input.onStage?.('outline');
+    requests += 1;
+    const outlineRes = await suggestOutline({ chat: deps.chat }, { text, deckName: input.deckName });
+    if (outlineRes.ok) {
+      input.onStage?.('cards');
+      requests += 1;
+      const res = await suggestCards(
+        { chat: deps.chat },
+        { text: outlineRes.outline, deckName: input.deckName, max: budget, mode: 'outline' },
+      );
+      if (res.ok) {
+        let produced = 0;
+        for (const c of res.value) {
+          produced += 1;
+          const key = frontKey(c.front);
+          if (key.length === 0 || seen.has(key)) continue;
+          seen.add(key);
+          out.push(c);
+        }
+        if (produced > 0) quota = planCharge(quota, produced, input.nowMs, input.tzOffsetMin).quota;
+        if (res.truncated) truncated = true;
+        return { ok: true, candidates: out, quota, requests, truncated };
+      }
+      // 出卡那一步失败：继续往下走分块路（下面还会再试一次），并记一笔"没按请求拿满"
+      truncated = true;
+    } else {
+      truncated = true; // 提纲没成（如实记一笔），但不影响下面照常生成
+    }
+  }
+
+  input.onStage?.('cards');
+  const chunks = chunkText(text);
 
   for (const chunk of chunks) {
     if (out.length >= budget) break; // 预算已用满：不再发请求

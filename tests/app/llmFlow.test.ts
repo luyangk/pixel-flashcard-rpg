@@ -327,3 +327,40 @@ describe('app/llmFlow —— 重出选项（D56）', () => {
     expect(res).toEqual({ ok: false, reason: '连不上模型。' });
   });
 });
+
+/* ------------------------------------------------------------------ D59：卡片口径 */
+
+/**
+ * 判别力（这几条是"卡片抓不住主线"那一半的治疗方案，必须逐字钉住）：
+ * - LC#C1 提示词**禁止元信息卡**（日期/作者/来源/"本文提出"）——现场症状就是"卡片都是记忆来源日期"；
+ * - LC#C2 长度上限放宽到 60/160（80 字在结构上装不下"一条链路"）；
+ * - LC#C3 明确"一张卡可以承载一条链路或多个要点"；
+ * - LC#C4 提纲模式（`mode:'outline'`）会说明"下面给的是骨架"。
+ */
+describe('app/llmFlow —— 卡片口径（D59）', () => {
+  const systemOf = (messages: readonly { role: string; content: string }[]): string =>
+    messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+
+  it('LC#C1 禁止元信息卡，且优先抽主线/步骤/因果', () => {
+    const sys = systemOf(buildCardPrompt({ text: '资料', deckName: 'AI', max: 5 }));
+    expect(sys).toContain('禁止元信息卡');
+    expect(sys).toContain('本文提出');
+    expect(sys).toContain('优先抽这三类');
+    expect(sys).toContain('步骤/流程');
+  });
+
+  it('LC#C2/C3 长度上限 60/160，并允许"一条链路"', () => {
+    const sys = systemOf(buildCardPrompt({ text: '资料', deckName: 'AI', max: 5 }));
+    expect(sys).toContain('front ≤ 60 字');
+    expect(sys).toContain('back ≤ 160 字');
+    expect(sys).toContain('一条链路');
+  });
+
+  it('LC#C4 提纲模式会说明"给的是骨架"', () => {
+    const outline = systemOf(buildCardPrompt({ text: '资料', deckName: 'AI', max: 5, mode: 'outline' }));
+    expect(outline).toContain('骨架');
+    expect(outline).toContain('不要');
+    const plain = systemOf(buildCardPrompt({ text: '资料', deckName: 'AI', max: 5 }));
+    expect(plain).not.toContain('下面给的是上一步提炼出的骨架');
+  });
+});

@@ -114,6 +114,30 @@ describe('collectCards —— 额度与失败面', () => {
   });
 });
 
+/**
+ * 让 `fakeChat` 认识**提纲调用**（D59）：system 里含【主线】就是提纲那一步。
+ *
+ * 为什么这两条用例要走"提纲失败 ⇒ 回落分块"：它们守的是**老的**
+ * 分块/去重/如实申报口径；而两段式是另一条路（KF#O 那组用例守它）。
+ * 让提纲返回一句太短的话 ⇒ 调用方回落单次/分块 —— 这正好也证明了
+ * **新路不许成为新的失败点**。
+ */
+function withOutlineFallback(
+  results: Array<{ ok: true; text: string } | { ok: false; reason: string }>,
+): { chat: (m: readonly { role: string; content: string }[]) => Promise<{ ok: true; text: string } | { ok: false; reason: string }>; calls: number } {
+  const f = fakeChat(results);
+  let calls = 0;
+  const chat = (messages: readonly { role: string; content: string }[]) => {
+    const system = messages.find((m) => m.role === 'system')?.content ?? '';
+    if (system.includes('【主线】')) {
+      calls += 1;
+      return Promise.resolve({ ok: true as const, text: '太短' }); // 短提纲 ⇒ 判为失败 ⇒ 回落
+    }
+    return f.chat(messages);
+  };
+  return { chat, calls };
+}
+
 describe('collectCards —— 分块、去重与如实申报', () => {
   it('KF#1b 短文本 ⇒ 单次请求，requests=1', async () => {
     const f = fakeChat([cardsJson(['a', 'b'])]);
@@ -130,21 +154,22 @@ describe('collectCards —— 分块、去重与如实申报', () => {
   it('KF#5 两块产出同 front ⇒ 去重后只剩一条，但额度按**实际生成数**扣', async () => {
     const para = '甲'.repeat(3000);
     const text = `${para}\n\n${para}`; // 两块
-    const f = fakeChat([cardsJson(['同一张', '第一块的']), cardsJson(['同一张', '第二块的'])]);
+    const f = withOutlineFallback([cardsJson(['同一张', '第一块的']), cardsJson(['同一张', '第二块的'])]);
     const res = await collectCards({ chat: f.chat }, {
       text, deckName: '唐诗', quota: quota(), nowMs: NOW, tzOffsetMin: TZ,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.candidates.map((c) => c.front)).toEqual(['同一张', '第一块的', '第二块的']);
-    expect(res.requests).toBe(2);
+    // 提纲 1 次（失败回落，如实计数）+ 分块 2 次 = 3
+    expect(res.requests).toBe(3);
     expect(res.quota.cards).toBe(4); // 生成 4 张（含被去重的那张）就该记 4 —— 钱是真花了的
   });
 
   it('KF#6 中途失败但有产出 ⇒ ok:true + truncated:true（如实申报，不谎报全成/全败）', async () => {
     const para = '甲'.repeat(3000);
     const text = `${para}\n\n${para}`;
-    const f = fakeChat([cardsJson(['第一块的']), { ok: false, reason: '被限流了' }]);
+    const f = withOutlineFallback([cardsJson(['第一块的']), { ok: false, reason: '被限流了' }]);
     const res = await collectCards({ chat: f.chat }, {
       text, deckName: '唐诗', quota: quota(), nowMs: NOW, tzOffsetMin: TZ,
     });
@@ -194,5 +219,106 @@ describe('collectCards —— 分块、去重与如实申报', () => {
     });
     expect(res.ok).toBe(false);
     expect(f.calls).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ D59：两段式建卡 */
+
+/**
+ * 判别力：
+ * - KF#O1 长文（≥1500 字）⇒ **先提纲、再出卡**两次调用；提纲调用**不占卡片额度**（它不产卡）；
+ * - KF#O2 短文本仍单次（粘一句笔记也跑两次调用 = 白花钱）；
+ * - KF#O3 进度回调按顺序给出 `outline` → `cards`（屏上要说清"在提炼主线"，否则像卡住了）；
+ * - KF#O4 **提纲失败 ⇒ 回落分块生成**（新路不许成为新的失败点），且如实记一笔 requests；
+ * - KF#O5 提纲那次调用带上了【主线】等四段骨架要求与"禁元信息"（prompt 契约）。
+ */
+describe('collectCards —— 两段式（D59）', () => {
+  const longText = '甲'.repeat(2000); // ≥1500 ⇒ 走两段式
+  // 提纲要**过 60 码点**这条闸（太短会被判成"没提炼出来"⇒ 回落分块，见 KF#O4）
+  const outlineText = [
+    '【主线】',
+    '- 复用式持续学习不必依赖专门的离线阶段',
+    '- 局部睡眠期间也能完成巩固',
+    '【步骤】',
+    '- 先用隔离规则约束回放',
+    '- 再让网络在清醒期做间歇巩固',
+    '【因果】',
+    '- 因为局部睡眠只影响单个回路，所以不必停掉整个训练',
+    '【易混】',
+    '- 别把"离线阶段"与"暂停训练"混为一谈',
+  ].join('\n');
+
+  it('KF#O1/O3 长文：先提纲再出卡，提纲不占卡片额度，进度回调有序', async () => {
+    const stages: string[] = [];
+    const f = fakeChat([
+      { ok: true, text: outlineText }, // 第 1 次：提纲
+      cardsJson(['主线卡', '步骤卡']), // 第 2 次：出卡
+    ]);
+    const res = await collectCards({ chat: f.chat }, {
+      text: longText,
+      deckName: 'AI',
+      quota: quota(),
+      nowMs: NOW,
+      tzOffsetMin: TZ,
+      onStage: (stage) => void stages.push(stage),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(f.calls).toHaveLength(2); // 长文只花两次调用（比分块更便宜）
+    expect(res.candidates.map((c) => c.front)).toEqual(['主线卡', '步骤卡']);
+    expect(res.quota.cards).toBe(2); // 只有产出的两张卡计额度
+    expect(res.requests).toBe(2);
+    expect(stages).toEqual(['outline', 'cards']);
+    // 第二次调用带的是**骨架**（而不是原文）：提示词里会说明按骨架出卡
+    const secondSystem = f.calls[1].find((m) => m.role === 'system')?.content ?? '';
+    expect(secondSystem).toContain('骨架');
+  });
+
+  it('KF#O2 短文本 ⇒ 不跑提纲（一次调用）', async () => {
+    const f = fakeChat([cardsJson(['短卡'])]);
+    const res = await collectCards({ chat: f.chat }, {
+      text: '短资料：一句话',
+      deckName: 'AI',
+      quota: quota(),
+      nowMs: NOW,
+      tzOffsetMin: TZ,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(f.calls).toHaveLength(1);
+    expect(res.requests).toBe(1);
+  });
+
+  it('KF#O4 提纲失败（或太短）⇒ 回落分块生成，且如实记 requests', async () => {
+    const para = '甲'.repeat(3000);
+    const f = fakeChat([
+      { ok: true, text: '太短' }, // 提纲：判为失败
+      cardsJson(['第一块']),
+      cardsJson(['第二块']),
+    ]);
+    const res = await collectCards({ chat: f.chat }, {
+      text: `${para}\n\n${para}`,
+      deckName: 'AI',
+      quota: quota(),
+      nowMs: NOW,
+      tzOffsetMin: TZ,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.candidates.map((c) => c.front)).toEqual(['第一块', '第二块']);
+    expect(res.requests).toBe(3); // 提纲 1 + 分块 2
+    expect(f.calls).toHaveLength(3);
+    expect(res.truncated).toBe(true); // 提纲没成 ⇒ 如实记一笔"没按请求拿满"
+  });
+
+  it('KF#O5 提纲提示词含四段骨架与"禁元信息"（prompt 契约）', async () => {
+    const f = fakeChat([{ ok: true, text: outlineText }, cardsJson(['x'])]);
+    await collectCards({ chat: f.chat }, {
+      text: longText, deckName: 'AI', quota: quota(), nowMs: NOW, tzOffsetMin: TZ,
+    });
+    const firstSystem = f.calls[0].find((m) => m.role === 'system')?.content ?? '';
+    for (const piece of ['【主线】', '【步骤】', '【因果】', '【易混】', '不要**写日期、作者、来源']) {
+      expect(firstSystem, `提纲提示词缺：${piece}`).toContain(piece);
+    }
   });
 });

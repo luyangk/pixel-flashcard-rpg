@@ -47,7 +47,16 @@ export interface CollectDeps {
   /** 抓一个链接（宿主接 `app/ingestFlow.ingestUrl`）。缺省 ⇒ 链接入口不显示。 */
   readonly ingestUrl?: (url: string) => Promise<IngestResult>;
   /** 从正文生成候选（宿主接 `app/knowledgeFlow.collectCards`，并在装配层写回额度）。 */
-  readonly collectCards?: (input: { text: string; deckName: string; want?: number }) => Promise<CollectResult>;
+  readonly collectCards?: (input: {
+    readonly text: string;
+    readonly deckName: string;
+    readonly want?: number;
+    /**
+     * 进度阶段（D59）：长文是"先提炼主线，再出卡"两次调用，第一次不产卡 ——
+     * 屏上要如实说清在干什么，否则玩家会以为卡住了。
+     */
+    readonly onStage?: (stage: 'outline' | 'cards') => void;
+  }) => Promise<CollectResult>;
   /** 待读清单（宿主接 `platform/inboxStore`）。缺省 ⇒ 清单区不显示。 */
   readonly inbox?: {
     readonly load: () => readonly InboxItem[];
@@ -363,7 +372,13 @@ export function mountPracticeCollect(
     }
     busy = true;
     try {
-      const res = await deps.collectCards({ text: body, deckName: currentDeckName() });
+      const res = await deps.collectCards({
+        text: body,
+        deckName: currentDeckName(),
+        // D59：把"在提炼主线 / 在出卡"这两步如实显示出来
+        onStage: (stage) =>
+          renderStatus(stage === 'outline' ? '这份资料有点长，正在提炼主线…' : '正在按主线出卡…'),
+      });
       if (destroyed) return;
       if (!res.ok) {
         renderStatus(res.reason);

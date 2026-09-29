@@ -130,7 +130,15 @@
    - **优先级**：先抽可迁移的主线、步骤、因果与判断依据；细枝末节宁可少出。
 3. **不破坏既有契约**：`CHOICES_MAX`/`CHOICE_TEXT_MAX`/`front` 的卡面渲染与既有测试的口径一并更新（卡面变长 ⇒ 战斗屏卡片区要能容纳，必要时给最大高度 + 滚动）。
 
-**测试**：`tests/app/llmFlow.test.ts`（阈值分流：长文两次调用、短文一次；提纲 prompt 契约）、`tests/app/knowledgeFlow.test.ts`（分块 + 提纲 + 额度账不变）、`tests/core/llmParse.test.ts`（新长度上限的截断）、`tests/ui/battleScreen.test.ts`（长 back 的渲染不溢出）。
+**测试（已落地）**：`tests/app/knowledgeFlow.test.ts` KF#O1–O5（长文两次调用 / 短文一次 / 进度回调有序 /
+提纲失败回落分块 / 提纲 prompt 契约）、`tests/app/llmFlow.test.ts` LC#C1–C4（禁元信息卡 / 60·160 上限 /
+"一条链路" / 提纲模式的说明）、`tests/ui/practice.collect.test.ts` PC#13（屏上依次报两个阶段）。
+
+**样例（给玩家判方向用）**：`docs/samples/card-spec-d59.md` —— 真材料 + 逐字 prompt + 我手写的输出对比
+（明说不是真模型输出：我没有玩家的 Key）。玩家点头后再拿真 Key 跑一次对比。
+
+**变异自检（7 条全部会红）**：① 长文也直接分块出卡；② 短文本也跑两段；③ 提纲失败就不生成；
+④ 出卡那次不带"这是骨架"；⑤ 去掉"禁元信息卡"；⑥ 长度上限改回 80；⑦ UI 不报进度。
 
 **变异**：① 阈值失效（短文也跑两段）；② 提纲调用吃掉卡片额度；③ prompt 去掉"禁元信息卡"；④ 长度上限改了但解析侧没改（长答案被静默截断）。
 

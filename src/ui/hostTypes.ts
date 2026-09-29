@@ -102,6 +102,8 @@ export interface HostAdapters {
     readonly text: string;
     readonly deckName: string;
     readonly want?: number;
+    /** 进度阶段（D59）：长文两次调用，UI 要如实显示在做什么。 */
+    readonly onStage?: (stage: 'outline' | 'cards') => void;
   }) => Promise<CollectResult>;
   /** 待读清单（接 `platform/inboxStore`）。 */
   readonly inbox?: {

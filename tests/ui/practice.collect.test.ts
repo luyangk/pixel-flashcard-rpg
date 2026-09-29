@@ -402,3 +402,37 @@ describe('mountPracticeCollect —— 候选行里的干扰项（D56 补）', ()
     expect(line2).toContain('同领域');
   });
 });
+
+/* ------------------------------------------------------------------ D59：两段式的进度 */
+
+/**
+ * 判别力：PC#13 长文生成时，屏上要依次说"正在提炼主线…"→"正在按主线出卡…" ——
+ * 第一次调用不产卡，不说清楚就像卡住了。
+ */
+describe('mountPracticeCollect —— 两段式的进度（D59）', () => {
+  it('PC#13 生成过程中如实显示两个阶段', async () => {
+    const seen: string[] = [];
+    const rig = makeRig({
+      collect: (input: { text: string; deckName: string; onStage?: (s: 'outline' | 'cards') => void }) => {
+        input.onStage?.('outline');
+        seen.push(ui(rig.root, 'ingest-status').textContent ?? '');
+        input.onStage?.('cards');
+        seen.push(ui(rig.root, 'ingest-status').textContent ?? '');
+        return Promise.resolve({
+          ok: true as const,
+          candidates: [CANDIDATE],
+          quota: { day: '2026-10-27', cards: 1, judges: 0 },
+          requests: 2,
+          truncated: false,
+        });
+      },
+    });
+    const ta = rig.root.querySelector('[data-ui="source-text"]') as HTMLTextAreaElement;
+    ta.value = '一段长资料';
+    click(rig.root.querySelector('[data-ui="source-paste-go"]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect(seen[0]).toContain('提炼主线');
+    expect(seen[1]).toContain('出卡');
+  });
+});

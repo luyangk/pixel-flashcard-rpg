@@ -384,11 +384,12 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     collectCards: async (input) => {
       const generate =
         deps.collectCardsOverride ??
-        ((i: { text: string; deckName: string; want?: number }) =>
+        ((i: { text: string; deckName: string; want?: number; onStage?: (s: 'outline' | 'cards') => void }) =>
           collectCards({ chat: boundChat() }, {
             text: i.text,
             deckName: i.deckName,
             want: i.want,
+            onStage: i.onStage,
             quota: coord.snapshot().settings.llmQuota,
             nowMs: now(),
             tzOffsetMin,
@@ -397,6 +398,7 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         text: input.text,
         deckName: input.deckName,
         want: input.want,
+        onStage: input.onStage, // D59：进度回调一路透到 knowledgeFlow
       });
       if (res.ok) await setLlmQuota(coord, res.quota);
       return res;
