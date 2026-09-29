@@ -167,8 +167,16 @@ npm run dev -- --host 0.0.0.0
 
 另外还有一档标着「**需读取服务**」的源（OpenAI 官方新闻、Hugging Face Blog、Google DeepMind、
 arXiv cs.AI/cs.LG、Towards Data Science、Latent Space、量子位）：**它们是可达的，但响应里没有 CORS 头，
-浏览器无权读** —— 这是浏览器的安全模型，不是代码能绕的。想用它们得在「设置 → AI → 读取服务」里配一个
-第三方读取服务（链接会经那台服务转一手），否则界面上会给你"打开原文去复制"这条出路。
+浏览器无权读** —— 这是浏览器的安全模型，不是代码能绕的。
+
+**配一个读取服务它们就真能用**（「设置 → AI → 读取服务」，实测 r.jina.ai 可达且开了 CORS）：
+
+- 配了之后点「看最新」会**先经那台服务**去读（这些源直连必然读不到，先试直连等于白跑一趟）；
+- 状态行会写明「**经读取服务取回**」，你能看出来这次的链接出过门；
+- **代价如实说**：这一步等于**把这个源的地址发给那台第三方服务**（正文也经它回来）。不想发就别配，
+  界面会给你"打开原文去复制"这条出路；
+- 第一次读会**慢几秒**（arXiv 一天的源经它一转 ≈2.6MB / 3–4 秒，我们只取最前面 20 条）；
+- 读不到时会**分两侧说清是谁没读到**（"读取服务 429 限流" vs "这个站没开跨域"要做的处置完全不同）。
 
 **这一整份库你自己也能改**：加源（名称 + 链接 + 类型）、删源（含内置的）、一键「恢复推荐来源」。
 你改的那部分只存在**这台设备**上（`localStorage`，不进存档、不进备份）。逐条实测数据与选源理由见
@@ -267,7 +275,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **87 文件 / 1260 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **87 文件 / 1270 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -286,6 +294,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D55 源库真的经读取服务读（含渲染结果的专用解析器 + 失败原因分两侧） | `tests/platform/feedFetch.test.ts` FF#10–#15（用**真实渲染结果**当夹具）、`tests/ui/practiceSources.test.ts` PS#8–#10、`tests/ui/hostAdapters.test.ts` AD#13（装配层：配了就真的打到读取服务）；`docs/SOURCES.md` §3.2 记录了三条实测（可达 / CORS / 返回的是渲染结果）；9 条变异全部会红 |
 | D54 PWA 更新可见（设置页「关于」：当前版本 + 检查更新，**不自动刷新**） | `tests/platform/pwaUpdate.test.ts`（PU#1–#6）、`tests/ui/settings.update.test.ts`（SU#1–#4）、`tests/e2e/dist.boot.test.ts` · DB#11（真产物里版本号是 **13 位构建戳而非 dev** —— vite `define` 漏了必红）、5 条变异全部会红 |
 | D53 采新卡的来源库（内置 AI/机器学习领域 + 直连/需读取服务两档 + 玩家可维护） | `docs/SOURCES.md`（逐条实测）、`tests/core/sourceItem.test.ts`、`tests/platform/feedFetch.test.ts`、`tests/app/sourceLibrary.test.ts`、`tests/platform/sourceStore.test.ts`、`tests/ui/practiceSources.test.ts`、`tests/e2e/dist.boot.test.ts` · DB#10（真产物里内置源与标都在） |
 | D51 装到主屏能装成**应用**（清单在站点根 + 图标 192/512/maskable） | `tests/tooling/pwa.test.ts` PW#2/#2b/#2c（真实像素尺寸 / ≥192 / 清单位置，5 条变异全部会红）、`python3 pixel-art/app-icon/build.py --check`（图标幂等） |

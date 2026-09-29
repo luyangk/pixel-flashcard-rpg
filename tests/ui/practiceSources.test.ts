@@ -60,7 +60,11 @@ function makeRig(
             fetchCalls.push(source.id);
             return over.fetchItems
               ? over.fetchItems(source)
-              : Promise.resolve({ ok: true as const, items: [draft({ sourceId: source.id, sourceName: source.name })] });
+              : Promise.resolve({
+                  ok: true as const,
+                  via: 'direct' as const,
+                  items: [draft({ sourceId: source.id, sourceName: source.name })],
+                });
           },
         }),
     ...(over.withLibrary === false
@@ -100,6 +104,7 @@ describe('mountPracticeSources —— 来源库（D53）', () => {
       fetchItems: (source) =>
         Promise.resolve({
           ok: true,
+          via: 'direct' as const,
           items: [
             draft({ sourceId: source.id, sourceName: source.name, title: '旧的', url: 'https://x/old', dateMs: Date.UTC(2026, 0, 1) }),
             draft({ sourceId: source.id, sourceName: source.name, title: '新的', url: 'https://x/new', dateMs: Date.UTC(2026, 8, 1) }),
@@ -120,6 +125,7 @@ describe('mountPracticeSources —— 来源库（D53）', () => {
       fetchItems: () =>
         Promise.resolve({
           ok: true,
+          via: 'direct' as const,
           items: [
             draft({ title: '有摘要的论文', url: 'https://x/paper', text: 'y'.repeat(500) }),
             draft({ title: '只有标题的新闻', url: 'https://x/news', text: '' }),
@@ -141,7 +147,8 @@ describe('mountPracticeSources —— 来源库（D53）', () => {
 
   it('PS#4 读不到（没开跨域）⇒ 说清 + 露出「打开原文去复制」且真的打开该链接', async () => {
     const { root, opened } = makeRig({
-      fetchItems: () => Promise.resolve({ ok: false, reason: '读不到这个源（跨域被拒或网络不通）。', blocked: true }),
+      fetchItems: () =>
+        Promise.resolve({ ok: false, reason: '读不到这个源（跨域被拒或网络不通）。', blocked: true, readerTried: false }),
     });
     click(root.querySelector('[data-src-load="openai-news"]') as HTMLElement);
     await flushMicrotasks();
@@ -195,6 +202,7 @@ describe('mountPracticeSources —— 来源库（D53）', () => {
       fetchItems: (source) =>
         Promise.resolve({
           ok: true,
+          via: 'direct' as const,
           items: [draft({ sourceId: source.id, sourceName: source.name, title: `来自 ${source.id}`, url: `https://x/${source.id}` })],
         }),
     });
@@ -210,5 +218,55 @@ describe('mountPracticeSources —— 来源库（D53）', () => {
     await flushMicrotasks();
     expect(ui(root, 'src-items').textContent).toContain('来自 github-blog');
     expect(ui(root, 'src-items').textContent).not.toContain('来自 hf-papers');
+  });
+});
+
+/* ------------------------------------------------------------------ D55：经读取服务 */
+
+describe('mountPracticeSources —— 经读取服务取回（D55）', () => {
+  it('PS#8 经读取服务取回 ⇒ 状态行说明"经读取服务来"（玩家知道链接出过门）', async () => {
+    const { root } = makeRig({
+      fetchItems: () =>
+        Promise.resolve({
+          ok: true,
+          via: 'reader',
+          items: [draft({ title: 'arXiv 论文', url: 'https://arxiv.org/abs/1', text: 'z'.repeat(300) })],
+        }),
+    });
+    click(root.querySelector('[data-src-load="arxiv-cs-lg"]') as HTMLElement);
+    await flushMicrotasks();
+    expect(ui(root, 'src-status').textContent).toContain('经读取服务取回');
+    expect(all(root, '[data-src-item]')).toHaveLength(1);
+  });
+
+  it('PS#9 配了读取服务还是读不到 ⇒ 说清是谁没读到，且**不再叫玩家去配一遍**', async () => {
+    const { root } = makeRig({
+      fetchItems: () =>
+        Promise.resolve({
+          ok: false,
+          reason: '读取服务那边：读取服务限流了（429）。 直连那边：读不到这个源（跨域被拒或网络不通）。',
+          blocked: false,
+          readerTried: true,
+        }),
+    });
+    click(root.querySelector('[data-src-load="arxiv-cs-lg"]') as HTMLElement);
+    await flushMicrotasks();
+    const status = ui(root, 'src-status').textContent ?? '';
+    expect(status).toContain('429');
+    expect(status).toContain('换一个能连上的读取服务'); // 下一步
+    expect(status).not.toContain('在「设置 → AI → 读取服务」里配一个'); // 他刚配过
+    expect(ui(root, 'src-open').hidden).toBe(false); // 「打开原文去复制」仍在
+  });
+
+  it('PS#10 没配读取服务 ⇒ 老文案：叫他去配，并说明链接会转一手', async () => {
+    const { root } = makeRig({
+      fetchItems: () =>
+        Promise.resolve({ ok: false, reason: '读不到这个源（跨域被拒或网络不通）。', blocked: true, readerTried: false }),
+    });
+    click(root.querySelector('[data-src-load="arxiv-cs-lg"]') as HTMLElement);
+    await flushMicrotasks();
+    const status = ui(root, 'src-status').textContent ?? '';
+    expect(status).toContain('设置 → AI → 读取服务');
+    expect(status).toContain('发给那台服务'); // 隐私那笔账要写在屏上
   });
 });

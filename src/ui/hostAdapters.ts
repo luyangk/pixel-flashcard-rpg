@@ -120,6 +120,8 @@ export interface AssembleDeps {
   readonly fetchPageImpl?: (url: string, opts?: Parameters<typeof fetchPage>[1]) => Promise<PageFetchResult>;
   /** 待读清单的覆盖位（缺省走 platform/inboxStore）。 */
   readonly inboxOverride?: HostAdapters['inbox'];
+  /** 订阅源抓取的 fetch 注入位（测试用；生产不传 = 真 fetch）。 */
+  readonly feedFetchImpl?: FetchLike;
   /** 来源库口径（测试用；生产接 platform/feedFetch + platform/sourceStore）。 */
   readonly sourcesOverride?: HostAdapters['sources'];
   /** 「关于」口径（测试用；生产接 platform/pwaUpdate）。 */
@@ -395,7 +397,21 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       apply: reloadPage,
     },
     sources: deps.sourcesOverride ?? {
-      fetchItems: (source) => fetchSourceItems(source),
+      /**
+       * 读一个订阅源。**读取服务同样只在这玩家配了它时才带**（缺省 = 不启用）：
+       * 对"没开跨域"的源（arXiv / OpenAI / DeepMind…）它是唯一的读法，但那意味着
+       * **把这个源的地址发给那台服务** —— 与采集文章那条路的账是同一笔（D55）。
+       */
+      fetchItems: (source) => {
+        const cfg = llmIo.load();
+        const readerUrl = typeof cfg.readerUrl === 'string' ? cfg.readerUrl.trim() : '';
+        return fetchSourceItems(source, {
+          ...(deps.feedFetchImpl === undefined ? {} : { fetchImpl: deps.feedFetchImpl }),
+          ...(readerUrl.length === 0
+            ? {}
+            : { reader: { url: readerUrl, key: typeof cfg.readerKey === 'string' ? cfg.readerKey : '' } }),
+        });
+      },
       library: { load: loadSources, save: saveSources },
     },
     updateCard: (input) => updateCard(coord, input),

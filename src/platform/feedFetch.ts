@@ -30,13 +30,32 @@ export const FEED_TIMEOUT_MS = 15_000;
 export const FEED_MAX_BYTES = 3_000_000;
 
 export type FetchSourceResult =
-  | { readonly ok: true; readonly items: readonly SourceItemDraft[] }
-  | { readonly ok: false; readonly reason: string; readonly blocked: boolean };
+  | {
+      readonly ok: true;
+      readonly items: readonly SourceItemDraft[];
+      /** `'direct'` = 直读；`'reader'` = 经玩家配置的读取服务兜底（D55）。 */
+      readonly via: 'direct' | 'reader';
+    }
+  | {
+      readonly ok: false;
+      readonly reason: string;
+      readonly blocked: boolean;
+      /** 这一次**试过**读取服务没有 —— UI 据此决定要不要再说"去配一个读取服务"（D55）。 */
+      readonly readerTried: boolean;
+    };
 
 export interface FetchSourceDeps {
   /** 注入位（测试用假 fetch；生产不传）。 */
   readonly fetchImpl?: FetchLike;
   readonly timeoutMs?: number;
+  /**
+   * 玩家可选的**读取服务**（缺省 = 不启用）。
+   *
+   * 为什么订阅源也要走它：实测 15 个源里 11 个"可达但没有 ACAO"（`docs/SOURCES.md`），
+   * 浏览器直连一律读不到 —— 而这些源恰恰是玩家最想要的（OpenAI / DeepMind / arXiv）。
+   * 读取服务是"把链接发给第三方"这条账，玩家自己开（设置页如实写了）。
+   */
+  readonly reader?: { readonly url: string; readonly key: string };
 }
 
 /** 状态码 → 人话（不含响应体、不含 Key）。 */
@@ -280,76 +299,226 @@ export function parseJsonItems(kind: SourceDef['kind'], payload: unknown): Parse
   return out; // rss 不走这里
 }
 
-/* ------------------------------------------------------------------ 出口 */
+
+/* ------------------------------------------------------------------ 读取服务的渲染结果 */
 
 /**
- * 读一个来源的最新条目。
+ * 读取服务返回的**不是原始 feed**，而是它渲染过的页面（实测 r.jina.ai）：
+ * arXiv 的 RSS 经它一转，`<item>` 全没了，只剩两种形态之一 ——
+ * - 默认 markdown：`### [标题](链接)` + 下一段正文；
+ * - 带 `x-respond-with: html`：`<h3><a href="链接">标题</a></h3><p>正文…</p>`。
  *
- * 永不 throw：失败一律翻成 `{ok:false, reason, blocked}`。`blocked:true` = CORS/断网
- * （浏览器无法区分这两者，只能如实把两种可能都说给玩家）。
+ * 所以要**另写一个解析器**（用 RSS 的正则去套渲染结果必然一条都出不来 —— 实测 0 条）。
+ * 两种形态都认，因为自建网关未必支持那个请求头。
  */
-export async function fetchSourceItems(
-  source: SourceDef,
-  deps: FetchSourceDeps = {},
-): Promise<FetchSourceResult> {
-  const url = usableUrl(source?.url);
-  if (url === null) return { ok: false, reason: '这个源的地址不合法（要 http/https）。', blocked: false };
-  const doFetch: FetchLike | undefined = deps.fetchImpl ?? (globalThis.fetch as FetchLike | undefined);
-  if (typeof doFetch !== 'function') return { ok: false, reason: '这个环境没有网络能力。', blocked: false };
+export function parseReaderList(body: string): ParsedItem[] {
+  const text = String(body ?? '');
+  if (text.length === 0) return [];
 
-  const timeoutMs = typeof deps.timeoutMs === 'number' && deps.timeoutMs > 0 ? deps.timeoutMs : FEED_TIMEOUT_MS;
+  // ① HTML 渲染：<h3><a href="…">标题</a></h3> 后面跟着正文（直到下一个标题）
+  const html = /<h[1-4][^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h[1-4]>([\s\S]*?)(?=<h[1-4][^>]*>|$)/gi;
+  const out: ParsedItem[] = [];
+  let m = html.exec(text);
+  while (m !== null) {
+    const url = usableUrl(m[1]);
+    const title = plainText(m[2]);
+    if (url !== null && title.length > 0) {
+      out.push({ title, url, dateMs: 0, text: plainText(m[3]), extra: '' });
+    }
+    m = html.exec(text);
+  }
+  if (out.length > 0) return out;
+
+  // ② markdown 渲染：`### [标题](链接)` + 正文（直到下一个标题）
+  const md = /^#{2,4}\s*\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)[^\n]*\n([\s\S]*?)(?=^#{2,4}\s|\n(?=Title:)|$)/gim;
+  m = md.exec(text);
+  while (m !== null) {
+    const url = usableUrl(m[2]);
+    const title = plainText(m[1]);
+    if (url !== null && title.length > 0) {
+      out.push({ title, url, dateMs: 0, text: plainText(m[3]), extra: '' });
+    }
+    m = md.exec(text);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ 出口 */
+
+type Attempt =
+  | { readonly ok: true; readonly items: ParsedItem[] }
+  | { readonly ok: false; readonly reason: string; readonly blocked: boolean };
+
+/** 一个请求的公共外壳：超时 + 状态码 → 人话 + 体积上限。 */
+async function requestText(
+  target: string,
+  doFetch: FetchLike,
+  timeoutMs: number,
+  headers: Record<string, string>,
+): Promise<{ readonly ok: true; readonly body: string } | { readonly ok: false; readonly reason: string; readonly blocked: boolean }> {
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   const timer = controller !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
-    const res = await doFetch(url, {
+    const res = await doFetch(target, {
       method: 'GET',
-      // 只收 XML/JSON，不带凭据（凭据会让 CORS 变成"必须精确回显来源"的更严口径）
-      headers: { Accept: 'application/json, application/rss+xml, application/atom+xml, text/xml, */*' },
+      headers,
       ...(controller !== null ? { signal: controller.signal } : {}),
     });
     if (!res || typeof res.text !== 'function') {
-      return { ok: false, reason: '这个源返回的东西读不出来。', blocked: false };
+      return { ok: false, reason: '返回的东西读不出来。', blocked: false };
     }
     if (typeof res.status === 'number' && (res.status < 200 || res.status >= 300)) {
       return { ok: false, reason: reasonForStatus(res.status), blocked: false };
     }
     const len = Number(res.headers?.get?.('content-length') ?? 0);
     if (Number.isFinite(len) && len > FEED_MAX_BYTES) {
-      return { ok: false, reason: `这个源太大了（${Math.round(len / 1000)}KB），不像一份清单。`, blocked: false };
+      return { ok: false, reason: `太大了（${Math.round(len / 1000)}KB），不像一份清单。`, blocked: false };
     }
     const body = await res.text();
-    if (body.length > FEED_MAX_BYTES) {
-      return { ok: false, reason: '这个源太大了，不像一份清单。', blocked: false };
-    }
-    if (source.kind === 'rss') {
-      const items = parseFeedXml(body);
-      if (items.length === 0) {
-        // 拿到了内容但没有一条能解析 ⇒ 多半不是 feed（或被塞了反爬页）
-        return { ok: false, reason: '这个地址不是可解析的 RSS/Atom（里面没有条目）。', blocked: false };
-      }
-      return { ok: true, items: items.map((i) => ({ ...i, sourceId: source.id, sourceName: source.name })) };
-    }
-    let payload: unknown;
-    try {
-      payload = JSON.parse(body);
-    } catch {
-      return { ok: false, reason: '这个源返回的不是 JSON（可能被登录页/反爬页顶替了）。', blocked: false };
-    }
-    const items = parseJsonItems(source.kind, payload);
-    if (items.length === 0) {
-      return { ok: false, reason: '这个源一条可用条目都没解析出来（端点可能变了）。', blocked: false };
-    }
-    return { ok: true, items: items.map((i) => ({ ...i, sourceId: source.id, sourceName: source.name })) };
+    if (body.length > FEED_MAX_BYTES) return { ok: false, reason: '太大了，不像一份清单。', blocked: false };
+    return { ok: true, body };
   } catch (e) {
     // `fetch` 在 CORS 被拦、断网、DNS 失败时抛的都是 TypeError —— 浏览器不告诉你是哪一种
-    const aborted = e instanceof Error && e.name === 'AbortError';
-    if (aborted) return { ok: false, reason: '这个源响应太慢（超时），稍后再试。', blocked: false };
-    return {
-      ok: false,
-      reason: '读不到这个源（跨域被拒或网络不通）。',
-      blocked: true,
-    };
+    if (e instanceof Error && e.name === 'AbortError') {
+      return { ok: false, reason: '响应太慢（超时），稍后再试。', blocked: false };
+    }
+    return { ok: false, reason: '读不到这个源（跨域被拒或网络不通）。', blocked: true };
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
+}
+
+/** 直读一个源（浏览器直接取它的 RSS/JSON）。 */
+async function attemptDirect(
+  source: SourceDef,
+  url: string,
+  doFetch: FetchLike,
+  timeoutMs: number,
+): Promise<Attempt> {
+  const got = await requestText(
+    url,
+    doFetch,
+    timeoutMs,
+    { Accept: 'application/json, application/rss+xml, application/atom+xml, text/xml, */*' },
+  );
+  if (!got.ok) return got;
+  const body = got.body;
+
+  if (source.kind === 'rss') {
+    const items = parseFeedXml(body);
+    if (items.length === 0) {
+      return { ok: false, reason: '这个地址不是可解析的 RSS/Atom（里面没有条目）。', blocked: false };
+    }
+    return { ok: true, items };
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return { ok: false, reason: '这个源返回的不是 JSON（可能被登录页/反爬页顶替了）。', blocked: false };
+  }
+  const items = parseJsonItems(source.kind, payload);
+  if (items.length === 0) {
+    return { ok: false, reason: '这个源一条可用条目都没解析出来（端点可能变了）。', blocked: false };
+  }
+  return { ok: true, items };
+}
+
+/**
+ * 经**玩家配置的读取服务**读一个源（D55）。
+ *
+ * 三件事必须一起做对：
+ * 1. 目标 URL 要**整段**编码后接在服务地址后面（与 `pageFetch` 同款；实测 r.jina.ai 两种都收，
+ *    但编码过的不会被服务把它自己的查询参数吃进去）；
+ * 2. 带 `x-respond-with: html` 请它回渲染后的 HTML（比 markdown 更好解析；自建网关不支持也无妨，
+ *    我们的解析器两种都认）；
+ * 3. 带上服务自己的 Key（`Authorization: Bearer …`）——**不是**玩家的 LLM Key（两把钥匙互不串用）。
+ */
+async function attemptReader(
+  reader: { readonly url: string; readonly key: string },
+  source: SourceDef,
+  doFetch: FetchLike,
+  timeoutMs: number,
+): Promise<Attempt> {
+  const base = reader.url.endsWith('/') ? reader.url : `${reader.url}/`;
+  const target = `${base}${encodeURIComponent(source.url)}`;
+  const headers: Record<string, string> = {
+    Accept: 'text/html, text/plain, */*',
+    'x-respond-with': 'html',
+  };
+  const key = typeof reader.key === 'string' ? reader.key.trim() : '';
+  if (key.length > 0) headers.Authorization = `Bearer ${key}`;
+
+  const got = await requestText(target, doFetch, timeoutMs, headers);
+  if (!got.ok) {
+    return {
+      ok: false,
+      reason: got.blocked ? '读取服务连不上（跨域被拒或网络不通）。' : `读取服务那边：${got.reason}`,
+      blocked: false,
+    };
+  }
+  const items = parseReaderList(got.body);
+  if (items.length === 0) {
+    return { ok: false, reason: '读取服务把它转成了别的格式，里面没有可识别的条目列表。', blocked: false };
+  }
+  return { ok: true, items };
+}
+
+/**
+ * 读一个来源的最新条目。**永不 throw**：失败一律翻成 `{ok:false, reason, blocked, readerTried}`。
+ *
+ * ## 尝试顺序（D55）
+ * - 玩家**没配**读取服务：只直读（`blocked:true` = 这个源没开 CORS，UI 据此给"配读取服务/复制原文"）；
+ * - 玩家配了：
+ *   - 实测**直连可读**的源（`direct:true`）先直读、失败再经读取服务；
+ *   - 实测**没有 ACAO** 的源（`direct:false`）**先经读取服务**（直读必然白跑一趟 700KB），
+ *     失败了再直读一次 —— 万一那个站哪天补上了 CORS，这里就自愈了。
+ */
+export async function fetchSourceItems(
+  source: SourceDef,
+  deps: FetchSourceDeps = {},
+): Promise<FetchSourceResult> {
+  const url = usableUrl(source?.url);
+  if (url === null) {
+    return { ok: false, reason: '这个源的地址不合法（要 http/https）。', blocked: false, readerTried: false };
+  }
+  const doFetch: FetchLike | undefined = deps.fetchImpl ?? (globalThis.fetch as FetchLike | undefined);
+  if (typeof doFetch !== 'function') {
+    return { ok: false, reason: '这个环境没有网络能力。', blocked: false, readerTried: false };
+  }
+  const timeoutMs = typeof deps.timeoutMs === 'number' && deps.timeoutMs > 0 ? deps.timeoutMs : FEED_TIMEOUT_MS;
+  const readerUrl = typeof deps.reader?.url === 'string' ? deps.reader.url.trim() : '';
+  const reader = readerUrl.length > 0 ? { url: readerUrl, key: typeof deps.reader?.key === 'string' ? deps.reader.key : '' } : null;
+  const readerTried = reader !== null;
+
+  const order: ReadonlyArray<'direct' | 'reader'> =
+    reader !== null && source.direct === false ? ['reader', 'direct'] : reader !== null ? ['direct', 'reader'] : ['direct'];
+
+  const failures: Array<{ who: 'direct' | 'reader'; reason: string; blocked: boolean }> = [];
+  for (const which of order) {
+    const attempt =
+      which === 'direct'
+        ? await attemptDirect(source, url, doFetch, timeoutMs)
+        : await attemptReader(reader as { url: string; key: string }, source, doFetch, timeoutMs);
+    if (attempt.ok) {
+      return {
+        ok: true,
+        items: attempt.items.map((i) => ({ ...i, sourceId: source.id, sourceName: source.name })),
+        via: which,
+      };
+    }
+    failures.push({ who: which, reason: attempt.reason.replace(/。$/, ''), blocked: attempt.blocked });
+  }
+
+  // 失败文案：**两条路各自为什么没成，都要说清**（只报后一条会把玩家引到错误的下一步：
+  // "读取服务 429 了"和"这个站没开跨域"要采取的行动完全不同）
+  const label = (who: 'direct' | 'reader'): string => (who === 'direct' ? '直连' : '读取服务');
+  const reason =
+    failures.length === 0
+      ? '读不到这个源。'
+      : failures.length === 1
+        ? `${failures[0].reason}。`
+        : failures.map((f) => `${label(f.who)}那边：${f.reason}。`).join(' ');
+  const blocked = !readerTried && failures.some((f) => f.blocked);
+  return { ok: false, reason, blocked, readerTried };
 }

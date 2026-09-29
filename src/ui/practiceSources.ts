@@ -234,17 +234,21 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
         setStatus(
           items.length === 0
             ? `「${source.name}」这次没解析出可用条目。`
-            : `${source.name}：${items.length} 条最新内容。`,
+            : `${source.name}：${items.length} 条最新内容${res.via === 'reader' ? '（经读取服务取回）' : ''}。`,
         );
       } else {
         items = [];
         blockedUrl = source.url;
-        // 读不到就**把下一步递到手里**（与 pageFetch 的 blocked 分支同款口径）
+        // 读不到就**把下一步递到手里**（与 pageFetch 的 blocked 分支同款口径）。
+        // 文案分两种：**没配**读取服务时告诉玩家去配（并说明链接会转一手）；
+        // **配了还是读不到**时别再叫他配一遍（他刚配过），改为说清是谁没读到 + 给换一个/复制原文。
         setStatus(
-          res.blocked
-            ? `读不到「${source.name}」：这个源没开跨域（CORS），浏览器无权取它。` +
-                '要么在「设置 → AI → 读取服务」里配一个读取服务，要么点下面的「打开原文去复制」。'
-            : `${res.reason}`,
+          res.readerTried
+            ? `${res.reason}换一个能连上的读取服务，或者点下面的「打开原文去复制」。`
+            : res.blocked
+              ? `读不到「${source.name}」：这个源没开跨域（CORS），浏览器无权取它。` +
+                '要么在「设置 → AI → 读取服务」里配一个（用它会把这个源的地址发给那台服务），要么点下面的「打开原文去复制」。'
+              : `${res.reason}`,
         );
       }
     } finally {

@@ -645,3 +645,86 @@ describe('assembleHost —— 采新卡接线（Plan 8 · T9）', () => {
     expect(card?.source?.url).toBe('https://news.example/a');
   });
 });
+
+/* ------------------------------------------------------------------ D55：源库与读取服务 */
+
+/**
+ * 判别力：**玩家配了读取服务，源库必须真的经它读**（D55）。
+ *
+ * 为什么单独立一条：现场就是在这里翻车的 —— 源库那批代码上线时压根没接读取服务，
+ * 而屏上的文案却写着"要么在设置里配一个读取服务"，玩家照做之后毫无变化
+ * （`feedFetch` 的平台级用例全绿，因为它们自己注入 reader）。这条用例从**装配层**取证：
+ * 配了读取服务 ⇒ 请求打到读取服务；没配 ⇒ 直接打源。
+ */
+describe('assembleHost —— 订阅源是否真的经读取服务（D55）', () => {
+  it('AD#13 配了读取服务 ⇒ 「看最新」打到读取服务（带 x-respond-with 与服务 Key）；没配 ⇒ 直接打源', async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const readerHtml =
+      '<h3><a href="https://arxiv.org/abs/1">某篇论文</a></h3><p>摘要正文，够长够长够长。</p>';
+    const fakeFetch = (async (input: string | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
+      return new Response(readerHtml, { status: 200, headers: { 'Content-Type': 'text/html' } });
+    }) as unknown as typeof fetch;
+
+    let cfg: LlmConfig = {
+      baseUrl: 'https://api.example',
+      apiKey: 'sk-LLM',
+      model: 'm',
+      readerUrl: 'https://r.jina.ai/',
+      readerKey: 'jin-READER',
+    };
+    const rig = await makeRig();
+    const assembly = assembleHost({
+      ctrl: rig.assembly.ctrl,
+      coord: rig.coord,
+      store: rig.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      feedFetchImpl: fakeFetch,
+      llmConfigIo: {
+        load: () => ({ ...cfg }),
+        save: (next) => {
+          cfg = { ...next };
+          return true;
+        },
+        clear: () => {
+          cfg = { ...cfg, apiKey: '' };
+        },
+      },
+    });
+
+    const arxiv = {
+      id: 'arxiv-cs-lg',
+      name: 'arXiv cs.LG',
+      // 实测没有 ACAO 的源：直连必然读不到 ⇒ 只能经读取服务
+      url: 'https://rss.arxiv.org/rss/cs.LG',
+      kind: 'rss' as const,
+      direct: false,
+    };
+
+    const withReader = await assembly.adapters.sources?.fetchItems(arxiv);
+    expect(withReader?.ok).toBe(true);
+    if (withReader?.ok) expect(withReader.via).toBe('reader');
+    expect(calls[0].url.startsWith('https://r.jina.ai/')).toBe(true);
+    expect(calls[0].headers['x-respond-with']).toBe('html');
+    expect(calls[0].headers.Authorization).toBe('Bearer jin-READER'); // 服务自己的 Key，不是 LLM Key
+
+    // 清掉读取服务 ⇒ 直接打源（读取服务的账由玩家自己开）
+    calls.length = 0;
+    cfg = { ...cfg, readerUrl: '', readerKey: '' };
+    const bare = await assembly.adapters.sources?.fetchItems({ ...arxiv, direct: true });
+    expect(calls[0].url).toBe(arxiv.url);
+    expect(calls[0].headers.Authorization).toBeUndefined();
+    expect(bare?.ok).toBe(false); // 假 fetch 回的是渲染 HTML，RSS 解析器当然认不出
+  });
+});

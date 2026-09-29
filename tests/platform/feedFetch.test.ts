@@ -17,6 +17,7 @@ import {
   fetchSourceItems,
   parseFeedXml,
   parseJsonItems,
+  parseReaderList,
   plainText,
 } from '../../src/platform/feedFetch';
 import type { SourceDef } from '../../src/core/sourceItem';
@@ -41,6 +42,8 @@ function res(body: string, init: { status?: number; contentType?: string; conten
 const fakeFetch = (make: () => Response | Promise<Response>) => make as unknown as typeof fetch;
 
 const rssSource: SourceDef = { id: 's1', name: '博客', url: 'https://example.com/feed.xml', kind: 'rss', direct: true };
+/** 实测没有 ACAO 的源（arXiv）——读取服务那条路的典型对象。 */
+const arxiv: SourceDef = { id: 'arxiv-cs-lg', name: 'arXiv cs.LG', url: 'https://rss.arxiv.org/rss/cs.LG', kind: 'rss', direct: false };
 
 describe('platform/feedFetch —— 解析（D53）', () => {
   it('FF#1 RSS 与 Atom 都能解析，且丢掉了没有链接的条目', () => {
@@ -203,5 +206,123 @@ describe('platform/feedFetch —— 抓取失败的分支（D53）', () => {
     );
     expect(r.ok).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ D55：经读取服务读源 */
+
+/**
+ * 这一段用**真实抓回来的渲染结果**当夹具（2026-09-29 用 `x-respond-with: html` 从 r.jina.ai
+ * 取 arXiv cs.LG 的片段）：它证明"读取服务返回的不是 feed 本身"——`<item>` 一条都没有，
+ * 只有 `<h3><a href>标题</a></h3><p>正文</p>`。所以必须有**另一个解析器**（用 RSS 的正则去套
+ * 渲染结果实测 0 条）。
+ */
+const READER_HTML = `<h3><a href="https://arxiv.org/abs/2609.31630">Replay in the Silent Degrees of Freedom: Continual Learning Without an Offline Phase</a></h3><p>arXiv:2609.31630v1 Announce Type: new  Abstract: Replay-based continual learning almost always consolidates in a dedicated offline phase or by interleaving replayed samples with the input stream, whereas brains also consolidate during wakefulness through local sleep, brief use-dependent off-periods of individual circuits. We ask whether a network trained by local, biologically constrained rules can consolidate with no offline phase at all. An isolation rule confines replay updates to hidden synapses invisible to the current input under k-winner-take-all dynamics, with optimiser state advanced only inside the mask; a refractory rotation rule makes units that have just fired sit out the next competition, widening the consolidable set; a homeostatic pressure and a relative-novelty gate decide when replay bursts fire and when rotation runs. This inverts the usual direction of non-interfering continual learning: the hidden computation on the current input is held invariant (exactly on the proven channels, and for all but 0.3% of waking samples pe<h3><a href="https://arxiv.org/abs/2609.31632">第三条：用来确认解析器会继续往下走</a></h3><p>摘要第三条。</p>`;
+
+const READER_MD = `Title: cs.LG updates on arXiv.org
+
+URL Source: https://rss.arxiv.org/rss/cs.LG
+
+Markdown Content:
+### [Replay in the Silent Degrees of Freedom](https://arxiv.org/abs/2609.31630)
+
+arXiv:2609.31630v1 Announce Type: new Abstract: Replay-based continual learning.
+
+### [OMP-MoE: Efficient Expert Pruning](https://arxiv.org/abs/2609.31631)
+
+arXiv:2609.31631v1 Announce Type: new Abstract: Mixture-of-Experts pruning.
+`;
+
+describe('platform/feedFetch —— 经读取服务读源（D55）', () => {
+  it('FF#10 读取服务返回的是**渲染结果**（没有 <item>）：专用解析器认得 HTML 与 markdown 两种', () => {
+    const html = parseReaderList(READER_HTML);
+    expect(html.length).toBeGreaterThanOrEqual(2);
+    expect(html[0].url).toBe('https://arxiv.org/abs/2609.31630');
+    expect(html[0].title).toContain('Replay in the Silent Degrees');
+    expect(html[0].text).toContain('Abstract');
+    // 用 RSS 的解析器去套渲染结果 ⇒ 一条都没有（这就是必须另写解析器的原因）
+    expect(parseFeedXml(READER_HTML)).toEqual([]);
+
+    const md = parseReaderList(READER_MD);
+    expect(md).toHaveLength(2);
+    expect(md[1].url).toBe('https://arxiv.org/abs/2609.31631');
+    expect(md[1].title).toContain('OMP-MoE');
+  });
+
+  it('FF#11 没配读取服务 ⇒ 行为不变（blocked，且 readerTried=false 让 UI 叫玩家去配）', async () => {
+    const r = await fetchSourceItems(arxiv, {
+      fetchImpl: (() => Promise.reject(new TypeError('Failed to fetch'))) as unknown as typeof fetch,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.blocked).toBe(true);
+      expect(r.readerTried).toBe(false);
+      expect(r.reason).toContain('跨域');
+    }
+  });
+
+  it('FF#12 配了读取服务 ⇒ 经它读回条目，并标上 via=reader（直连必然是失败的）', async () => {
+    const calls: string[] = [];
+    const fake = ((input: string, init?: RequestInit) => {
+      calls.push(input);
+      if (input.startsWith('https://r.jina.ai/')) {
+        return Promise.resolve(
+          new Response(READER_HTML, { status: 200, headers: { 'Content-Type': 'text/html' } }),
+        );
+      }
+      return Promise.reject(new TypeError('CORS'));
+    }) as unknown as typeof fetch;
+
+    const r = await fetchSourceItems(arxiv, { fetchImpl: fake, reader: { url: 'https://r.jina.ai/', key: 'jin_x' } });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.via).toBe('reader');
+      expect(r.items.length).toBeGreaterThanOrEqual(2);
+      expect(r.items[0].sourceId).toBe(arxiv.id);
+    }
+    // 实测没有 ACAO 的源 ⇒ **先走读取服务**（直读那 700KB 不必白跑）
+    expect(calls[0].startsWith('https://r.jina.ai/')).toBe(true);
+    // 目标地址必须整段编码（否则服务会把它自己的查询参数吃进去）
+    expect(calls[0]).toContain(encodeURIComponent(arxiv.url));
+    expect(calls.some((c) => c === arxiv.url)).toBe(false);
+  });
+
+  it('FF#13 读取服务请求带上它自己的 Key 与 x-respond-with（不串用玩家的 LLM Key）', async () => {
+    let seen: { url: string; headers: Record<string, string> } | null = null;
+    const fake = ((input: string, init?: RequestInit) => {
+      seen = { url: input, headers: (init?.headers ?? {}) as Record<string, string> };
+      return Promise.resolve(new Response(READER_HTML, { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    }) as unknown as typeof fetch;
+
+    await fetchSourceItems(arxiv, { fetchImpl: fake, reader: { url: 'https://r.jina.ai', key: 'jin_abc' } });
+    expect(seen).not.toBeNull();
+    const s2 = seen as unknown as { url: string; headers: Record<string, string> };
+    expect(s2.url.startsWith('https://r.jina.ai/')).toBe(true); // 结尾没斜杠也要补上
+    expect(s2.headers.Authorization).toBe('Bearer jin_abc');
+    expect(s2.headers['x-respond-with']).toBe('html');
+  });
+
+  it('FF#14 读取服务也没成 ⇒ 文案说清"是读取服务那边没读到"，且 readerTried=true（UI 不再叫玩家去配）', async () => {
+    const fake = (() => Promise.resolve(new Response('nope', { status: 429 }))) as unknown as typeof fetch;
+    const r = await fetchSourceItems(arxiv, { fetchImpl: fake, reader: { url: 'https://r.jina.ai/', key: '' } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.readerTried).toBe(true);
+      expect(r.reason).toContain('读取服务');
+      expect(r.reason).toContain('429');
+      expect(r.blocked).toBe(false);
+    }
+  });
+
+  it('FF#15 直连可读的源仍是直连优先（配了读取服务也不改路线）', async () => {
+    const calls: string[] = [];
+    const fake = ((input: string) => {
+      calls.push(input);
+      return Promise.resolve(new Response(RSS, { status: 200, headers: { 'Content-Type': 'application/rss+xml' } }));
+    }) as unknown as typeof fetch;
+    const r = await fetchSourceItems(rssSource, { fetchImpl: fake, reader: { url: 'https://r.jina.ai/', key: '' } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.via).toBe('direct');
+    expect(calls).toEqual([rssSource.url]);
   });
 });

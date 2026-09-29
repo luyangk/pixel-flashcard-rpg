@@ -372,3 +372,39 @@ Modify `src/ui/practiceCollect.ts`、`src/ui/host.ts`、`src/ui/hostTypes.ts`、
 - [x] 变异自检（5 条全部会红）：① 没 SW 时说"已是最新"；② 按 `waiting` 判新版（永远说已是最新）；
       ③ `update()` 抛错谎报"已是最新"；④ 一查就自动刷新；⑤ 「已是最新」也露「立即更新」
 - [x] 真产物：**DB#11** 版本行必须是 **13 位构建戳**（`define` 漏了只会是 `dev`），且默认不露「立即更新」
+
+---
+
+### Task 17: 源库真的经读取服务读（D55）
+
+**玩家原话：**「设置里配置了，但是还是提示无法读取」（附两张截图：设置里已填 `https://r.jina.ai/` + 服务 Key；
+来源库里 arXiv cs.LG 那行仍报"这个源没开跨域（CORS）…要么在「设置 → AI → 读取服务」里配一个…"）
+
+**根因（我的锅）：** 源库那批代码（D53）**压根没接读取服务** —— `fetchSourceItems` 只走 `globalThis.fetch`，
+而屏上文案却在教玩家"去配一个读取服务"。玩家照做，回来毫无变化。平台级用例全绿是因为**它们自己注入了 reader**；
+装配层没有任何一条用例问过"配了读取服务的玩家，源库会不会真的用它"。
+
+**顺手量清的三件事（写进 `docs/SOURCES.md` §3.2）：**
+1. `r.jina.ai` 从玩家设备**可达**（200 / 0.6s）—— 早期实测超时，**网络会变**，所以这条要隔段时间重量；
+2. 它的预检与 GET **都回显来源**（`access-control-allow-origin: https://luyangk.github.io`，
+   且允许 `authorization` / `x-respond-with`）⇒ 浏览器这条路是通的；
+3. 但它把源**渲染过**再给你（默认 markdown；`x-respond-with: html` 是扁平 HTML）—— **`<item>` 为 0 条**，
+   所以用 RSS 的正则去套必然读不出，必须另写 `parseReaderList`。arXiv cs.LG 经它一转 2.6MB / 3–4.4s / 1522 条（只取 20）。
+
+**口径：**
+- 实测没 ACAO 的源（`direct:false`）**先经读取服务**，失败了再直连一次（站点哪天补上 CORS 就自愈）；
+  直连可读的源仍是**直连优先**，失败才经服务；
+- 请求带 `x-respond-with: html`、**目标地址整段编码**、带**服务自己的 Key**（不是玩家的 LLM Key）；
+- 失败时**两条路各自的原因都说清**，成功时状态行标明「经读取服务取回」（让玩家知道链接出过门）。
+
+**Files:** Modify `src/platform/feedFetch.ts`、`src/ui/hostAdapters.ts`、`src/ui/practiceSources.ts`；
+Test `tests/platform/feedFetch.test.ts`、`tests/ui/practiceSources.test.ts`、`tests/ui/hostAdapters.test.ts`；
+`docs/SOURCES.md`、README、PRD
+
+- [x] Step 1 失败测试：FF#10 渲染结果的两种形态（并证明 RSS 正则读不出）、FF#11 没配 ⇒ 行为不变且 `readerTried:false`、
+      FF#12 配了 ⇒ `via:'reader'` 且先走服务、FF#13 带服务 Key 与 `x-respond-with`、FF#14 服务那边失败也要说清、
+      FF#15 直连可读仍直连优先；PS#8–#10 状态行文案；**AD#13 装配层**（配了就真的打到读取服务）
+- [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] 变异自检（**9 条全部会红**）：① 源库不带读取服务（回到"配了也没用"）；② 不带 `x-respond-with`；
+      ③ 不带服务 Key；④ 目标地址不编码；⑤ 直连可读的源也先绕服务；⑥ 只报后一条失败原因；
+      ⑦ UI 在"配了还读不到"时又叫玩家去配一遍；⑧ 把玩家的 LLM Key 当服务 Key 用
