@@ -258,6 +258,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
                       ingestUrl: deps.ingestUrl,
                       collectCards: deps.collectCards,
                       inbox: deps.inbox,
+                      // 来源库（D53）：读订阅源 + 玩家维护的那份库
+                      sources: deps.sources,
                       addCard: deps.addCard,
                       addDeck: deps.addDeck,
                       newId: deps.newId,

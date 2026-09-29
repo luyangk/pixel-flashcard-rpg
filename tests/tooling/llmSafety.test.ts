@@ -92,10 +92,16 @@ describe('LLM 安全不变量', () => {
     expect(hits(files, 'localStorage')).toEqual([]);
     expect(hits(files, 'sessionStorage')).toEqual([]);
 
-    // Plan 8 · T5 起 `localStorage` 有**两个**归属，且白名单要逐字列出（多一个必须显式登记）：
-    // ① llmConfig.ts = 玩家的 LLM Key；② inboxStore.ts = 待读清单（链接/标题/粘来的正文）。
+    // `localStorage` 的归属要**逐字列出**（多一个必须显式登记）：
+    // ① llmConfig.ts = 玩家的 LLM Key；② inboxStore.ts = 待读清单（链接/标题/粘来的正文）；
+    // ③ sourceStore.ts = 采新卡的来源库（玩家自己加/删的源；D53 —— 同样是"本机工具配置"，
+    //    不进存档、不进备份、不存 Key）。
     const platformHits = hits(codeOf(['src/platform']), 'localStorage');
-    expect(platformHits).toEqual(['src/platform/inboxStore.ts', 'src/platform/llmConfig.ts']);
+    expect(platformHits).toEqual([
+      'src/platform/inboxStore.ts',
+      'src/platform/llmConfig.ts',
+      'src/platform/sourceStore.ts',
+    ]);
   });
 
   it('LS#3b 待读清单里绝不放 Key：inboxStore 不碰 apiKey / Authorization / LLM 存储键', () => {

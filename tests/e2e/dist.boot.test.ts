@@ -353,6 +353,59 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     }
   }, 40_000);
 
+  it('DB#10 产物里的「来源库」接线不落空：内置源与「需读取服务」标都在（D53）', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 24; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    // 回菜单 → 练功 → 采新卡
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    expect(click('[data-nav="practice"]'), '菜单里没有「练功」入口').toBe(true);
+    await settle();
+    expect(click('[data-ui="tab-collect"]')).toBe(true);
+    await settle();
+
+    // ① 来源库区块真的挂上了（hostAdapters 漏接 sources ⇒ 整块 hidden）
+    expect(q('[data-ui="sources-host"]')?.hidden, '来源库整块没显示（sources 口漏透传）').toBe(false);
+    const rows = win.document.querySelectorAll('[data-src-row]');
+    expect(rows.length, '来源库一条内置源都没有').toBeGreaterThan(5);
+
+    // ② 实测没有 CORS 的源必须带「需读取服务」标（否则玩家以为点了就有内容）
+    expect(
+      q('[data-src-badge="openai-news"]')?.textContent ?? '',
+      '没有 CORS 的源没打标',
+    ).toContain('需读取服务');
+    // ③ 直连可读的源不该有标
+    expect(q('[data-src-badge="hf-papers"]')).toBeNull();
+
+    // ③ 维护入口在（sourceStore 透传成功）；**不点它**，免得往玩家真实存储里写东西
+    expect(q('[data-ui="src-manage"]')?.hidden, '缺维护来源入口（sourceStore 没接上）').toBe(false);
+    expect(click('[data-ui="src-manage"]')).toBe(true);
+    await settle();
+    expect(q('[data-ui="src-manage-body"]')?.hidden).toBe(false);
+    click('[data-ui="src-manage"]'); // 收起
+    await settle();
+
+    // 收尾：回菜单
+    if (q('[data-ui="tab-browse"]')) click('[data-ui="tab-browse"]');
+    await settle();
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+  }, 40_000);
+
   it('DB#5 产物里「重置存档」真的能清档重装（main.ts 漏传 presetContent ⇒ 整组不显示）', async () => {
     const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
     const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;

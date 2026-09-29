@@ -59,7 +59,7 @@
 | 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | ✅ 已完成：离线 + Pages 上线 + 三项 AI 职能（自带 Key）；另含实测反馈修复：数值改进（D39）、「重置存档」（D40）、**装到主屏的两处硬伤（D51：清单必须在站点根 + 图标 ≥192/512/maskable，否则只能装成坏书签、且没有分享入口）** |
 | 6 | 作答模式：选择题（默认）/ 问答模式（LLM 判卷）/ 直接看答案；四档自评下线 | PRD §3.1、§9 | ✅ 已完成（D41/D42/D45）：卡上自带干扰项、判定回"缺了哪些要点"、判定 300 次/天到顶回落自评 |
 | 7 | 木桩练功：练功入口 + 看旧卡 + 勾选开练（不判胜负、不推进卷灵达标）；**领域可多选合练**（D50） | PRD §4.5、D46/D50 | ✅ 已完成：core 新形态 `drill`+`cleared` / 木人桩精灵（22/22 幂等）/ 练功屏 / 端到端冒烟；多领域合练与「← 换领域」见 D50（`tests/ui/practice.test.ts` PR#17–#23、真产物 DB#7） |
-| 8 | 练功模块：采新卡（玩家驱动摄入 + 待读清单 + 分享进来）与看旧卡就地编辑 | PRD §4.2/§4.5、D43/D47 | ✅ 已完成：抓取/解析/分类/分块生成/额度/待读清单/采新卡屏/就地编辑/分享进来 + 真产物 DB#8；**卡组页也开了一个采新卡入口**（D49，真产物 DB#9） |
+| 8 | 练功模块：采新卡（玩家驱动摄入 + 待读清单 + 分享进来）与看旧卡就地编辑 | PRD §4.2/§4.5、D43/D47 | ✅ 已完成：抓取/解析/分类/分块生成/额度/待读清单/采新卡屏/就地编辑/分享进来 + 真产物 DB#8；**来源库（D53，内置 AI/机器学习领域 + 玩家可维护）**；**卡组页也开了一个采新卡入口**（D49，真产物 DB#9） |
 
 > 注 1：Plan 1 的原始路线图把"叙事系统"与"LLM 管线"单列为 Plan 3/4；实际执行时 Plan 3 改为
 > 装配层（数据流主干），这两块随渲染层并入 Plan 4。
@@ -130,8 +130,33 @@ npm run dev -- --host 0.0.0.0
 
 练功屏的第二个分区「采新卡」（需要你在「设置 → AI」里配好 Key）。**卡组页也开了同一个入口**
 （列表下方的「采新卡（从链接 / 文章）」→「去练功 → 采新卡」）——建卡的事都归在一起，
-从卡组页点进去**直接落在采新卡分区**，不用再自己切一次。三条路，都走同一条管线：
-**抓到正文 → AI 改写成候选卡 → 你逐条勾选 → 存入某个领域**。
+从卡组页点进去**直接落在采新卡分区**，不用再自己切一次。四条路，都走同一条管线：
+**拿到正文 → AI 改写成候选卡 → 你逐条勾选 → 存入某个领域**。
+
+#### 来源库：不用自己找链接（D53）
+
+采新卡最上面是**固定来源库**，内置一个标准领域「**AI / 机器学习前沿**」：
+
+| 直连可读（点了真的出内容） | 覆盖什么 |
+|---|---|
+| HF Daily Papers | 每天的论文——**摘要随响应一起回来**，直接能生成卡 |
+| vLLM / transformers 版本发布 | 推理工程与生态的版本要点（更新说明正文很全） |
+| DeepSeek 仓库动态 | DSH（deepseek-harness）等全系仓库最近更新了什么 |
+| HF 热门模型 | 开源模型、LoRA、微调、量化：大家在跑什么 |
+| Hacker News 头条 | 开发者当天在讨论什么（标题+分数，正文去原文看） |
+| GitHub Blog / Databricks / Lil'Log | 工程实践、数据工程、Agent/RAG 综述 |
+
+用法：**选来源 → 看最新 → 「用这篇」**。响应里带了正文的（HF 论文、GitHub 更新说明）**就地生成**，
+只带标题链接的走抓取管线。
+
+另外还有一档标着「**需读取服务**」的源（OpenAI 官方新闻、Hugging Face Blog、Google DeepMind、
+arXiv cs.AI/cs.LG、Towards Data Science、Latent Space、量子位）：**它们是可达的，但响应里没有 CORS 头，
+浏览器无权读** —— 这是浏览器的安全模型，不是代码能绕的。想用它们得在「设置 → AI → 读取服务」里配一个
+第三方读取服务（链接会经那台服务转一手），否则界面上会给你"打开原文去复制"这条出路。
+
+**这一整份库你自己也能改**：加源（名称 + 链接 + 类型）、删源（含内置的）、一键「恢复推荐来源」。
+你改的那部分只存在**这台设备**上（`localStorage`，不进存档、不进备份）。逐条实测数据与选源理由见
+[`docs/SOURCES.md`](docs/SOURCES.md)。
 
 | 你怎么给来源 | 实际会发生什么 |
 |---|---|
@@ -226,7 +251,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **80 文件 / 1213 用例**；另有 9 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **85 文件 / 1250 用例**；另有 10 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -245,6 +270,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D53 采新卡的来源库（内置 AI/机器学习领域 + 直连/需读取服务两档 + 玩家可维护） | `docs/SOURCES.md`（逐条实测）、`tests/core/sourceItem.test.ts`、`tests/platform/feedFetch.test.ts`、`tests/app/sourceLibrary.test.ts`、`tests/platform/sourceStore.test.ts`、`tests/ui/practiceSources.test.ts`、`tests/e2e/dist.boot.test.ts` · DB#10（真产物里内置源与标都在） |
 | D51 装到主屏能装成**应用**（清单在站点根 + 图标 192/512/maskable） | `tests/tooling/pwa.test.ts` PW#2/#2b/#2c（真实像素尺寸 / ≥192 / 清单位置，5 条变异全部会红）、`python3 pixel-art/app-icon/build.py --check`（图标幂等） |
 | D50 练功多领域合练 + 看旧卡里显式的「← 换领域」 | `tests/ui/practice.test.ts` PR#17–#23（换领域保勾选 / 跨域并集 / 移出本次 / 合计上限 / 列表页开练 / 清空 / 取消不被加回）、`tests/e2e/dist.boot.test.ts` · DB#7（真产物里换领域后两域合练） |
 | D49 卡组页的「采新卡」入口（与 AI 辅建卡并排，点了直接落在采新卡分区） | `tests/ui/decks.test.ts` · DC#E1/#E2、`tests/ui/host.test.ts` · HS#E2/#E3、`tests/e2e/dist.boot.test.ts` · DB#9（真产物里点通并核对落点） |

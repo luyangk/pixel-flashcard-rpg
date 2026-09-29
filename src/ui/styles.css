@@ -1178,3 +1178,76 @@ h1 {
   min-height: 2.6rem;
   border-color: var(--wash);
 }
+
+/* ------------------------------------ 采新卡：来源库（D53） */
+.sources-host {
+  display: block;
+}
+
+.src-domains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.src-sources,
+.src-items,
+.src-remove-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.src-row,
+.src-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.src-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.src-name,
+.src-item-title {
+  font-size: 0.92rem;
+  color: var(--paper);
+  word-break: break-word;
+}
+
+.src-note,
+.src-item-meta {
+  font-size: 0.78rem;
+  color: var(--wash);
+  word-break: break-word;
+}
+
+/* 「需读取服务」：实测没有 CORS 的源必须一眼看出来，别让玩家以为点了就有内容 */
+.src-badge {
+  align-self: flex-start;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid #c8a165;
+  border-radius: 999px;
+  color: #c8a165;
+}
+
+.src-item {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.collect-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}

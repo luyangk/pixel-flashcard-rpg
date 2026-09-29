@@ -18,6 +18,9 @@ import type { ResetSaveResult } from '../app/resetFlow';
 import type { SettingsWriteResult } from '../app/settingsFlow';
 import type { ExportAndMarkResult, ImportAndSaveResult } from '../app/transfer';
 import type { InboxItem } from '../platform/inboxStore';
+import type { FetchSourceResult } from '../platform/feedFetch';
+import type { SourceDef } from '@core/sourceItem';
+import type { UserLibrary } from '../app/sourceLibrary';
 import type { StageSprites } from '../stage/renderer';
 import type { SharedInput } from '../ui/practiceCollect';
 import type { BattleScreenWindow } from './battleScreen';
@@ -105,6 +108,17 @@ export interface HostAdapters {
     readonly load: () => readonly InboxItem[];
     readonly save: (items: readonly InboxItem[]) => boolean;
     readonly clear: () => void;
+  };
+  /**
+   * 采新卡的**来源库**（D53）：读一个来源的最新条目 + 玩家自己维护的那份库。
+   * 两个口都缺 ⇒ 整块收起（不显示点了没反应的入口）；只缺 `library` ⇒ 能看不能改。
+   */
+  readonly sources?: {
+    readonly fetchItems: (source: SourceDef) => Promise<FetchSourceResult>;
+    readonly library?: {
+      readonly load: () => UserLibrary;
+      readonly save: (lib: UserLibrary) => boolean;
+    };
   };
   /** 就地改正一张卡（接 `app/library.updateCard`）。 */
   readonly updateCard?: (input: {

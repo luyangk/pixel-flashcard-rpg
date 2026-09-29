@@ -27,6 +27,10 @@ import type { IngestResult } from '../app/ingestFlow';
 import type { CollectResult } from '../app/knowledgeFlow';
 import type { LibraryResult } from '../app/library';
 import type { InboxItem } from '../platform/inboxStore';
+import type { FetchSourceResult } from '../platform/feedFetch';
+import type { SourceDef } from '@core/sourceItem';
+import type { UserLibrary } from '../app/sourceLibrary';
+import { mountPracticeSources } from './practiceSources';
 import { h, setHidden } from './dom';
 import { showToast } from './toast';
 
@@ -67,6 +71,17 @@ export interface CollectDeps {
   readonly openUrl?: (url: string) => void;
   /** 系统分享进来的内容（PWA share_target；缺省 = 没有）。 */
   readonly sharedInput?: SharedInput | null;
+  /**
+   * 采新卡的**来源库**（D53）：读订阅源 + 玩家自己维护的那份库。
+   * 缺 `fetchItems` ⇒ 整块收起（不显示点了没反应的入口）。
+   */
+  readonly sources?: {
+    readonly fetchItems?: (source: SourceDef) => Promise<FetchSourceResult>;
+    readonly library?: {
+      readonly load: () => UserLibrary;
+      readonly save: (lib: UserLibrary) => boolean;
+    };
+  };
   /**
    * 时钟（缺省 0）。**本屏不许自己读钟**：`tests/app/fullSession.smoke.test.ts` 的 SM#5
    * 是机器化门禁（`src/**` 除 `platform/clock.ts` 外零 `Date.now(`）——首版在这里写
@@ -213,8 +228,17 @@ export function mountPracticeCollect(
     candStatusEl,
   ]);
 
+  /**
+   * 来源库（D53）：**挂在最上面** —— 玩家进采新卡的第一件事是想"今天读什么"，
+   * 而不是先自己去找一个链接。缺 `fetchItems` 口时整块收起。
+   */
+  const sourcesHostEl = h('div', { 'data-ui': 'sources-host', class: 'sources-host', hidden: true });
+  let sourcesHandle: { unmount(): void } | null = null;
+
   const screen = h('div', { 'data-ui': 'practice-collect', class: 'practice-collect' }, [
-    h('p', { class: 'field-hint' }, '把外部知识带进来：给个链接（能直读就直读），或直接粘正文。'),
+    h('p', { class: 'field-hint' }, '把外部知识带进来：从上门的来源库挑一篇，或自己给链接 / 粘正文。'),
+    sourcesHostEl,
+    h('h4', { class: 'collect-title' }, '自己给内容'),
     urlRowEl,
     h('div', { class: 'collect-row' }, [pasteGoBtn]),
     statusEl,
@@ -584,9 +608,33 @@ export function mountPracticeCollect(
   renderInbox();
   render();
 
+  /* 来源库：在 `onGenerate` / `onFetchUrl` 之后挂（两个函数声明会提升，但读起来顺） */
+  if (typeof deps.sources?.fetchItems === 'function' && !destroyed) {
+    setHidden(sourcesHostEl, false);
+    sourcesHandle = mountPracticeSources(sourcesHostEl, {
+      fetchItems: deps.sources.fetchItems,
+      ...(deps.sources.library === undefined ? {} : { library: deps.sources.library }),
+      // 「用这篇」：响应里带正文就地生成；只有链接就走既有的抓取管线
+      onUseText: (input) => {
+        textInput.value = input.text;
+        renderStatus(`《${input.title}》（来自 ${input.sourceName}）正在生成候选卡…`);
+        void onGenerate(input.text, { via: 'paste', url: input.url });
+      },
+      onUseUrl: (url) => {
+        urlInput.value = url;
+        void onFetchUrl(url);
+      },
+      openUrl: deps.openUrl,
+      now: deps.now,
+      toastMs: deps.toastMs,
+    });
+  }
+
   function destroy(): void {
     if (destroyed) return;
     destroyed = true;
+    sourcesHandle?.unmount();
+    sourcesHandle = null;
     unsubscribe();
     if (toastOff) {
       toastOff();

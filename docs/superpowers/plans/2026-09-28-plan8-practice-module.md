@@ -295,3 +295,42 @@ Modify `tests/tooling/pwa.test.ts`、`assets/README.md`、`README.md`、`docs/PR
       （容器与手机同一网络出口；若我这边仍不通而 Chrome 能开 Google，说明代理是"分应用"模式，不影响安装）；
       ② 装完我从设备端核对是否真的出现 `org.chromium.webapk.*` 包 —— 这比"看主屏"更硬。
       备选仍在桌上：② 书签/系统浏览器「添加到桌面」；③ 包成 APK（TWA，不依赖 Google，需工具链+签名+未知来源）。
+
+---
+
+### Task 15: 采新卡的「来源库」（D53）
+
+**用户原话：**「帮我在采新卡中固化一些固定来源：OpenAI 官方新闻 / Hugging Face Blog / Google DeepMind /
+arXiv cs.AI+cs.LG / Lilian Weng / GitHub Blog / Hacker News / Databricks / KDnuggets / Towards Data Science /
+机器之心 / Papers With Code / The Batch / Latent.space。**先测试可读性并获取一些样例，根据样例内容筛选精简后
+固化为一个标准领域的推荐来源库**，以后可以新增不同的领域，也可以给用户自行维护这个库的权限。」
+
+**先做的实测（`docs/SOURCES.md` 全表，2026-09-29）：**
+- 两件事都要量：**网络可达** + **响应里有 ACAO**。结果：用户给的 15 个源里**只有 4 个能直读**
+  （GitHub Blog / Databricks / Lil'Log——且 `/feed.xml` 实测 404，正确端点是 `/index.xml`）；
+  另找到 **4 条同样内容但开了 CORS 的 API**（HN Algolia / HF Daily Papers / HF 热门模型 / GitHub Releases/组织仓库）；
+  其余 11 个"可达但没有 CORS"（OpenAI / HF Blog / DeepMind / arXiv×2 / HN RSS / TDS / 量子位 / Latent.space）
+  或"连不上"（机器之心 SSL 断开、KDnuggets 与 Semantic Scholar 429）。
+- **样例**（真响应）决定了正文形态：HF 论文本就带 1500–1900 字摘要、vLLM 更新说明数万字
+  ⇒ 这些条目**不用再抓页面**（绕开 CORS 那堵墙）；HN 只有标题+分数 ⇒ 只能去抓原文。
+
+**口径：**
+- 内置**一个标准领域**（`ai-ml`：AI / 机器学习前沿），两档来源：`direct:true`（直连可读）与
+  `direct:false`（**行上打「需读取服务」标 + 点它说实话 + 给"配读取服务 / 打开原文去复制"两条出路**）；
+- 「用这篇」按 `core/sourceItem.planIngest` 分流：**正文够长（≥200 字）就地生成**，否则去抓链接；
+- 玩家可维护：加源（名称/链接/类型，过校验）、删源（内置的记墓碑）、「恢复推荐来源」；
+  库存 `localStorage`（`zx-xia.sources.v1`，第三个归属 —— LS#3 白名单已登记）；
+- 加领域 = 往 `BUILTIN_DOMAINS` 再追加一组（数据形状早已是 `SourceDomain[]`）。
+
+**Files:** Add `src/core/sourceItem.ts`、`src/app/sourceLibrary.ts`、`src/platform/feedFetch.ts`、
+`src/platform/sourceStore.ts`、`src/ui/practiceSources.ts`、`docs/SOURCES.md`；
+Modify `src/ui/practiceCollect.ts`、`src/ui/host.ts`、`src/ui/hostTypes.ts`、`src/ui/hostAdapters.ts`、
+`src/ui/styles.css`、`tests/tooling/llmSafety.test.ts`（LS#3）、`tests/e2e/dist.boot.test.ts`、README、PRD
+
+- [x] Step 1 失败测试：SI#1–#8（core）、FF#1–#9（platform）、SL#1–#6（库合并）、SS#1–#5（存储）、
+      PS#1–#7（UI：内置源渲染 / 需读取服务标 / 看最新 / 用这篇两条路 / 读不到给下一步 / 维护 / 缺口禁用）
+- [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] 变异自检（**10 条全部会红**）：① `planIngest` 永远抓链接；② `MIN_INLINE_TEXT` 归零；
+      ③ fetch 抛错不算 blocked；④ HN 自帖不退回讨论页；⑤ 合并时无视墓碑；⑥ 不打「需读取服务」标；
+      ⑦ 读不到时不提"读取服务"；⑧ 「用这篇」一律去抓链接；⑨ 不校验 kind；⑩ **生产装配漏接 `sources` 口**（产物级）
+- [x] 真产物：**DB#10** 在 `dist/` 里进采新卡 → 来源库区块可见、>5 条内置源、无 CORS 的源带标、维护入口在
