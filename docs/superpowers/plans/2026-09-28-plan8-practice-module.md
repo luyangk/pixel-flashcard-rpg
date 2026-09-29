@@ -290,6 +290,8 @@ Modify `tests/tooling/pwa.test.ts`、`assets/README.md`、`README.md`、`docs/PR
       ⇒ 铸造从未完成；同一台设备实测 `webapks.google.com` / `www.google.com` / `play.google.com` **全部不可达**
       ⇒ 结论：安卓"装成应用"要经过 Google 的 WebAPK 铸造服务器，国内网络下必然静默失败。**不是清单/图标的问题**
       （已核对线上清单 200 + MIME `application/manifest+json` + 三张图标 200）。登记为 D52，并补了两条不依赖 Google 的替代路。
-- [ ] 待玩家拍板：① 挂梯子再装一次（能到 Google 才能铸出真应用）；② 就用书签/系统浏览器「添加到桌面」；
-      ③ **把游戏包成 APK（TWA）**——不依赖 Google 的真·安装包，需要 Android 构建工具链与签名，
-      且要在手机上允许安装未知来源；我可以先探环境再报可行性。
+- [x] 玩家拍板（2026-09-29）：**走① 挂梯子再点一次「安装应用」**。我这边配合两件事：
+      ① 玩家挂上代理后，我从**同一台设备**复测 `webapks.google.com` / `www.google.com` 可达性
+      （容器与手机同一网络出口；若我这边仍不通而 Chrome 能开 Google，说明代理是"分应用"模式，不影响安装）；
+      ② 装完我从设备端核对是否真的出现 `org.chromium.webapk.*` 包 —— 这比"看主屏"更硬。
+      备选仍在桌上：② 书签/系统浏览器「添加到桌面」；③ 包成 APK（TWA，不依赖 Google，需工具链+签名+未知来源）。
