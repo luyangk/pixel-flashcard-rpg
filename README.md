@@ -73,7 +73,7 @@
 | 3 | 游戏装配层（App Wiring）：会话编排、全库口径属性派生、复习落账链、攒批持久化、7 天备份提醒、本地战绩榜、假记忆素材池 | PRD §2.2–2.4/§5/§6.1/§6.5、LORE §5.5 | ✅ 已完成 |
 | 4 | 界面层：DOM/Canvas 渲染与叙事呈现（序章→菜单→备战→战斗→结算→卡组→藏书阁→设置）、Boss 净化与图鉴、只读保护（D29）、像素素材集 | PRD §3/§7/§9、LORE §5/§6 | ✅ 已完成（LLM 管线移至 Plan 5，见下） |
 | 5 | PWA 离线化 + GitHub Pages 上线 + LLM 管线（辅建卡/称号建议/彩蛋生成） | PRD §8 MVP 11/13、§10 | ✅ 已完成：离线 + Pages 上线 + 三项 AI 职能（自带 Key）；另含实测反馈修复：数值改进（D39）、「重置存档」（D40）、**装到主屏的两处硬伤（D51：清单必须在站点根 + 图标 ≥192/512/maskable，否则只能装成坏书签、且没有分享入口）** |
-| 6 | 作答模式：选择题（默认）/ 问答模式（LLM 判卷）/ 直接看答案；四档自评下线 | PRD §3.1、§9 | ✅ 已完成（D41/D42/D45）：卡上自带干扰项、判定回"缺了哪些要点"、判定 300 次/天到顶回落自评；**干扰项只取同领域卡 + 生成时锁领域 + 单卡「重出选项」（D56）** |
+| 6 | 作答模式：选择题（默认）/ 问答模式（LLM 判卷）/ 直接看答案；四档自评下线 | PRD §3.1、§9 | ✅ 已完成（D41/D42/D45）：卡上自带干扰项、判定回"缺了哪些要点"、判定 300 次/天到顶回落自评；**干扰项只取同领域卡 + 生成时锁领域 + 单卡「重出选项」+ 选项在屏上可见（看旧卡与候选审阅，D56）** |
 | 7 | 木桩练功：练功入口 + 看旧卡 + 勾选开练（不判胜负、不推进卷灵达标）；**领域可多选合练**（D50） | PRD §4.5、D46/D50 | ✅ 已完成：core 新形态 `drill`+`cleared` / 木人桩精灵（22/22 幂等）/ 练功屏 / 端到端冒烟；多领域合练与「← 换领域」见 D50（`tests/ui/practice.test.ts` PR#17–#23、真产物 DB#7） |
 | 8 | 练功模块：采新卡（玩家驱动摄入 + 待读清单 + 分享进来）与看旧卡就地编辑 | PRD §4.2/§4.5、D43/D47 | ✅ 已完成：抓取/解析/分类/分块生成/额度/待读清单/采新卡屏/就地编辑/分享进来 + 真产物 DB#8；**来源库（D53，内置 AI/机器学习领域 + 玩家可维护）**；**卡组页也开了一个采新卡入口**（D49，真产物 DB#9） |
 
@@ -275,7 +275,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **87 文件 / 1284 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **87 文件 / 1288 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -294,7 +294,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
-| D56 干扰项同领域（池子只取同领域 + prompt 锁领域 + 单卡「重出选项」，含 1 张卡额度记账） | `tests/ui/battleScreen.test.ts` BS#A11/A12、`tests/app/llmFlow.test.ts` LC#S1–S4、`tests/app/library.test.ts` LB#D1–D3、`tests/ui/practice.test.ts` PR#C1–C3、`tests/ui/hostAdapters.test.ts` AD#14/#15（装配层与额度）；6 条变异全部会红 |
+| D56 干扰项同领域（池子只取同领域 + prompt 锁领域 + 单卡「重出选项」，含 1 张卡额度记账） | `tests/ui/battleScreen.test.ts` BS#A11/A12、`tests/app/llmFlow.test.ts` LC#S1–S4、`tests/app/library.test.ts` LB#D1–D3、`tests/ui/practice.test.ts` PR#C1–C3、`tests/ui/hostAdapters.test.ts` AD#14/#15（装配层与额度）；9 条变异全部会红 |
 | D55 源库真的经读取服务读（含渲染结果的专用解析器 + 失败原因分两侧） | `tests/platform/feedFetch.test.ts` FF#10–#15（用**真实渲染结果**当夹具）、`tests/ui/practiceSources.test.ts` PS#8–#10、`tests/ui/hostAdapters.test.ts` AD#13（装配层：配了就真的打到读取服务）；`docs/SOURCES.md` §3.2 记录了三条实测（可达 / CORS / 返回的是渲染结果）；9 条变异全部会红 |
 | D54 PWA 更新可见（设置页「关于」：当前版本 + 检查更新，**不自动刷新**） | `tests/platform/pwaUpdate.test.ts`（PU#1–#6）、`tests/ui/settings.update.test.ts`（SU#1–#4）、`tests/e2e/dist.boot.test.ts` · DB#11（真产物里版本号是 **13 位构建戳而非 dev** —— vite `define` 漏了必红）、5 条变异全部会红 |
 | D53 采新卡的来源库（内置 AI/机器学习领域 + 直连/需读取服务两档 + 玩家可维护） | `docs/SOURCES.md`（逐条实测）、`tests/core/sourceItem.test.ts`、`tests/platform/feedFetch.test.ts`、`tests/app/sourceLibrary.test.ts`、`tests/platform/sourceStore.test.ts`、`tests/ui/practiceSources.test.ts`、`tests/e2e/dist.boot.test.ts` · DB#10（真产物里内置源与标都在） |

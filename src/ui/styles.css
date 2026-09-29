@@ -1251,3 +1251,19 @@ h1 {
   flex-direction: column;
   gap: 0.4rem;
 }
+
+/* 卡行的干扰项（D56 补）：与背面同列，弱化一档，长文本折行 */
+.practice-choices {
+  grid-column: 2;
+  font-size: 0.78rem;
+  color: var(--wash);
+  word-break: break-word;
+}
+
+/* 候选行里的干扰项（D56 补）：只读一行，弱化 */
+.candidate-choices {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  color: var(--wash);
+  word-break: break-word;
+}

@@ -18,7 +18,7 @@ import { localDayString } from '@core/reviewLedger';
 import type { Card, SourceInfo } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import { h, setHidden } from './dom';
-import { mountPracticeCollect, type CollectDeps } from './practiceCollect';
+import { choicesLineOf, mountPracticeCollect, type CollectDeps } from './practiceCollect';
 import { showToast } from './toast';
 
 /** 练功池上限（与 bossFightParams 的 min(卡数,25) 同口径）。 */
@@ -99,6 +99,15 @@ function stabilityLabel(card: Card): string {
     default:
       return '未知';
   }
+}
+
+/**
+ * 卡行的干扰项文案（D56）。有就逐条列出（屏上预览口径，过长由 CSS 折行），
+ * 没有就如实说"战斗里会用同领域其他卡补" —— 让玩家知道**这张卡现在会看到什么样的选项**。
+ */
+export function choicesLine(card: Card): string {
+  // 与候选审阅用**同一个**函数（`practiceCollect.choicesLineOf`）：两处文案必须一致
+  return choicesLineOf(card?.choices);
 }
 
 /** 一张卡"该不该默认勾上"：到期（due ≤ now）或新卡。 */
@@ -510,6 +519,16 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
         children.push(
           h('span', { class: 'practice-front' }, card.front ?? ''),
           h('span', { class: 'practice-back' }, card.back ?? ''),
+          /**
+           * 干扰项也要看得见（D56）：否则玩家看到一个「重出选项」按钮，
+           * 却不知道现在的选项是什么、也没法确认重出有没有生效。
+           * 没有选项时**如实说明**（战斗里会用同领域其他卡补），不留空行。
+           */
+          h(
+            'span',
+            { 'data-card-choices': card.id, class: 'practice-choices' },
+            choicesLine(card),
+          ),
           h('span', { class: 'practice-meta' }, meta),
         );
         if (typeof deps.updateCard === 'function') {

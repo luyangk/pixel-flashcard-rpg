@@ -91,6 +91,16 @@ export interface CollectDeps {
   readonly toastMs?: number;
 }
 
+/**
+ * 候选行/卡行的干扰项文案（D56 补）。抽成模块级纯函数：两处（候选审阅、看旧卡）都要用，
+ * 而"没有选项时怎么说"必须两处一致 —— 各写一份迟早分叉。
+ */
+export function choicesLineOf(choices: readonly string[] | undefined): string {
+  const list = Array.isArray(choices) ? choices.filter((c) => typeof c === 'string' && c.trim().length > 0) : [];
+  if (list.length === 0) return '选项：无（战斗里会用同领域其他卡补）';
+  return `选项：${list.join(' / ')}`;
+}
+
 export interface CollectHandle {
   unmount(): void;
 }
@@ -418,7 +428,20 @@ export function mountPracticeCollect(
             'data-candidate-tags': (c.tags ?? []).join('\u0001'),
             class: 'candidate',
           },
-          [check, front, back],
+          [
+            check,
+            front,
+            back,
+            /**
+             * 干扰项也要在**存之前**看得见（D56 补）：模型给的选项要是不搭，
+             * 这里就该拦住 —— 等进了战斗才发现就只能靠「重出选项」返工。
+             */
+            h(
+              'span',
+              { 'data-candidate-choice-line': String(i), class: 'candidate-choices' },
+              choicesLineOf(c.choices),
+            ),
+          ],
         ),
       );
     });

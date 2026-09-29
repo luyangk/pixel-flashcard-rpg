@@ -533,3 +533,55 @@ describe('mountPractice —— 重出选项（D56）', () => {
     expect(ui(root, 'toast').textContent).toContain('额度用完了');
   });
 });
+
+/* ------------------------------------------------------------------ D56 补：把选项露出来 */
+
+/**
+ * 判别力：
+ * - PR#D1 卡行必须列出**每一条**干扰项（只显示第一条的实现必红）；
+ * - PR#D2 没有干扰项的卡要**如实说明**（战斗里会用同领域其他卡补），不留空行；
+ * - PR#D3 「重出选项」之后行上显示的是**新**选项（衔接 T1：重出就是为了看一眼对不对）。
+ */
+describe('mountPractice —— 卡行里的干扰项（D56 补）', () => {
+  it('PR#D1 有干扰项 ⇒ 逐条列出', () => {
+    const { root } = setup([
+      card('c1', { choices: ['错一：它其实是蓝的', '错二：与氧无关', '错三：血里没有铁'] }),
+    ]);
+    openFirstDeck(root);
+    const line = root.querySelector('[data-card-choices="c1"]')?.textContent ?? '';
+    for (const c of ['错一：它其实是蓝的', '错二：与氧无关', '错三：血里没有铁']) {
+      expect(line, `没列出：${c}`).toContain(c);
+    }
+  });
+
+  it('PR#D2 没有干扰项 ⇒ 如实说明"战斗里会用同领域其他卡补"，不留空', () => {
+    const { root } = setup([card('c1')]);
+    openFirstDeck(root);
+    const line = root.querySelector('[data-card-choices="c1"]')?.textContent ?? '';
+    expect(line).toContain('无');
+    expect(line).toContain('同领域');
+  });
+
+  it('PR#D3 重出选项之后，行上显示的是**存档里**的新选项（旧的不许留着）', async () => {
+    // 这一段要模拟宿主：`refreshChoices` 在**生产里由装配层写盘**（AD#14 钉住），
+    // 所以这里也得让存档真的变，再推一次快照 —— 否则测的只是"按钮回了个值"。
+    let rig: ReturnType<typeof setup>;
+    rig = setup([card('c1', { choices: ['旧干扰项'] })], {
+      refreshChoices: () => {
+        const snap = rig.ctrl.snapshot();
+        const cards = snap.save.cards.map((c) => (c.id === 'c1' ? { ...c, choices: ['新一', '新二'] } : c));
+        rig.ctrl.push(makeSnap({ screen: 'menu', save: { ...snap.save, cards } }));
+        return Promise.resolve({ ok: true, choices: ['新一', '新二'] });
+      },
+    });
+    openFirstDeck(rig.root);
+    expect(rig.root.querySelector('[data-card-choices="c1"]')?.textContent).toContain('旧干扰项');
+
+    (rig.root.querySelector('[data-ui="card-rechoices"]') as HTMLElement).click();
+    await flushMicrotasks();
+    const line = rig.root.querySelector('[data-card-choices="c1"]')?.textContent ?? '';
+    expect(line).toContain('新一');
+    expect(line).toContain('新二');
+    expect(line).not.toContain('旧干扰项'); // 旧的不许留着（否则玩家以为没生效）
+  });
+});

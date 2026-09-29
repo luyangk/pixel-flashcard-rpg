@@ -356,3 +356,49 @@ describe('mountPracticeCollect —— 候选与入库', () => {
     expect(html).not.toContain('Authorization');
   });
 });
+
+/* ------------------------------------------------------------------ D56 补：候选行露选项 */
+
+/**
+ * 判别力：PC#12 候选行必须把模型给的干扰项**逐条列出来**（存进隐藏字段但不显示的实现必红）——
+ * 选项不搭就该在"存之前"被拦住，而不是等进了战斗才发现。
+ */
+describe('mountPracticeCollect —— 候选行里的干扰项（D56 补）', () => {
+  it('PC#12 候选行的干扰项逐条显示；没有则如实说明', async () => {
+    const withChoices = makeRig({
+      collect: () =>
+        Promise.resolve({
+          ok: true,
+          candidates: [{ front: 'F', back: 'B', tags: [], choices: ['错一', '错二'] }],
+          quota: { day: '2026-10-27', cards: 0, judges: 0 },
+          requests: 1,
+          truncated: false,
+        }),
+    });
+    const ta = withChoices.root.querySelector('[data-ui="source-text"]') as HTMLTextAreaElement;
+    ta.value = '一段资料';
+    click(withChoices.root.querySelector('[data-ui="source-paste-go"]') as HTMLElement);
+    await flushMicrotasks();
+    const line = withChoices.root.querySelector('[data-candidate-choice-line="0"]')?.textContent ?? '';
+    expect(line).toContain('错一');
+    expect(line).toContain('错二');
+
+    const noChoices = makeRig({
+      collect: () =>
+        Promise.resolve({
+          ok: true,
+          candidates: [{ front: 'F', back: 'B', tags: [], choices: [] }],
+          quota: { day: '2026-10-27', cards: 0, judges: 0 },
+          requests: 1,
+          truncated: false,
+        }),
+    });
+    const ta2 = noChoices.root.querySelector('[data-ui="source-text"]') as HTMLTextAreaElement;
+    ta2.value = '一段资料';
+    click(noChoices.root.querySelector('[data-ui="source-paste-go"]') as HTMLElement);
+    await flushMicrotasks();
+    const line2 = noChoices.root.querySelector('[data-candidate-choice-line="0"]')?.textContent ?? '';
+    expect(line2).toContain('无');
+    expect(line2).toContain('同领域');
+  });
+});

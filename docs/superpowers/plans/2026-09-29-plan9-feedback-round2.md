@@ -36,6 +36,13 @@
 `tests/app/library.test.ts` LB#D1–D3（`setCardChoices` 只改选项、同值不重写）、
 `tests/ui/hostAdapters.test.ts` AD#14/#15（**装配层**：一次调用 = 额度 -1；额度为 0 时一次模型调用都不发）。
 
+**T1b（玩家追问"看旧卡里如何看到选项是什么呀"后补的洞）**：干扰项以前**根本不显示**，
+于是「重出选项」是个"看不见对象"的按钮。现在两处都露出来：
+- **练功·看旧卡**：卡行多一行 `选项：A / B / C`；没有就写「选项：无（战斗里会用同领域其他卡补）」（PR#D1–D3）；
+- **采新卡·候选审阅**：候选行同样列出模型给的选项（PC#12）—— 不搭就在"存之前"拦住，而不是进了战斗才返工；
+- 文案由**同一个函数**（`practiceCollect.choicesLineOf`）产出，两处不许各写一份（迟早分叉）。
+- 变异自检 3 条全部会红（不显示 / 条件写反 / 只列第一条）。
+
 **已落地（commit 见 git log）**：+12 用例；`src/ui/battleScreen.ts` 池子改同领域、`src/core/llmParse.ts` 新增
 `parseChoices`、`src/app/llmFlow.ts` prompt 锁领域 + `suggestChoices`、`src/app/library.ts` 新增 `setCardChoices`、
 `src/ui/practice.ts` 与 `src/ui/hostAdapters.ts` 接线（含 1 张卡额度记账）。
