@@ -31,6 +31,11 @@ export interface StageSprites {
   readonly hero: StageImage;
   readonly mob: StageImage;
   readonly boss: StageImage;
+  /**
+   * 木人桩（Plan 7 · T3 / D46）：**可选**——旧素材集/测试 stub 不传就回落到 `mob`，
+   * 因此这个字段的加入不会让任何既有夹具变红。drill 形态下敌人位画它。
+   */
+  readonly dummy?: StageImage;
   readonly bg: StageImage;
 }
 
@@ -178,6 +183,7 @@ function drawBar(
   max: number,
   color: string,
   align: 'left' | 'right',
+  labelText?: string,
 ): void {
   ctx.fillStyle = '#101018';
   ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
@@ -194,7 +200,8 @@ function drawBar(
   ctx.font = '7px monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const label = `${Math.max(0, Math.round(cur))}/${Math.max(0, Math.round(max))}`;
+  const label =
+    labelText ?? `${Math.max(0, Math.round(cur))}/${Math.max(0, Math.round(max))}`;
   ctx.fillText(label, x + w / 2, y + h / 2 + 0.5);
 }
 
@@ -319,13 +326,16 @@ export function drawFrame(
     ctx.restore();
   }
 
-  // 3) 怪物（boss 档换图、换尺寸）+ 受击闪白。
+  // 3) 敌人（boss 档换图、换尺寸；**drill 换木人桩**）+ 受击反馈。
   const isBoss = view?.difficulty === 'boss';
-  const mobImg = isBoss ? sprites?.boss : sprites?.mob;
+  const isDrill = st?.mode === 'drill';
+  const mobImg = isDrill ? sprites?.dummy ?? sprites?.mob : isBoss ? sprites?.boss : sprites?.mob;
   const mob = placeSprite(mobImg, isBoss ? BOSS_SCALE : MOB_SCALE, isBoss ? BOSS_RIGHT : MOB_RIGHT, GROUND_Y, mobShake);
   drawShadow(ctx, mob.x + mob.w / 2, GROUND_Y, mob.w);
   blit(ctx, mobImg, mob.x, mob.y, mob.w, mob.h);
-  if (hitMob) {
+  // 白闪 = "受伤"的语义。木桩是**练功对象**，打中了要有反馈（上面的晃），但不该读成受伤
+  // ——所以 drill 下不给白闪，只保留晃动。
+  if (hitMob && !isDrill) {
     // 连续两帧的加亮叠加 = 白闪；不改素材本身，也不用离屏画布。
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -357,10 +367,13 @@ export function drawFrame(
     BAR_Y,
     BAR_W,
     BAR_H,
-    ratio(eHp, eMax),
+    // drill 的耐久条恒满（敌血在引擎层就锁住了，这里只是把语义写在屏上）
+    isDrill ? 1 : ratio(eHp, eMax),
     eHp,
     eMax,
-    '#e0554f',
+    // 木桩用木色，与"敌人血条"在颜色上区分开
+    isDrill ? '#c8a165' : '#e0554f',
     'right',
+    isDrill ? '耐久 ∞' : undefined,
   );
 }
