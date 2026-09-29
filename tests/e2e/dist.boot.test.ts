@@ -276,6 +276,64 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     await settle();
   }, 40_000);
 
+  it('DB#8 产物里的「采新卡」接线不落空：分区 / 输入口 / 额度行 / 没配 AI 时如实告知', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 24; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    expect(click('[data-nav="practice"]'), '菜单里没有「练功」入口').toBe(true);
+    await settle();
+    // ① 分区条与额度行（额度行的存在说明 practiceQuotaText 透传到位）
+    expect(q('[data-ui="practice-tabs"]')?.hidden, '采新卡分区条没显示（整块依赖漏透传）').toBe(false);
+    expect(q('[data-ui="practice-quota"]')?.textContent ?? '', '额度行没接上').toContain('200');
+
+    // ② 切到采新卡：子分区真的挂上（说明 collect 整块依赖透了）
+    expect(click('[data-ui="tab-collect"]')).toBe(true);
+    await settle();
+    expect(q('[data-ui="practice-collect"]'), '采新卡子分区没挂上').not.toBeNull();
+    expect(q('[data-ui="source-url"]'), '缺链接输入口').not.toBeNull();
+    expect(q('[data-ui="source-text"]'), '缺粘贴输入框').not.toBeNull();
+
+    // ③ 粘贴一段字 → 生成：产物里没配 AI ⇒ 整条链要**如实告知**（而不是静默无声）
+    const text = q('[data-ui="source-text"]') as HTMLTextAreaElement | null;
+    expect(text).not.toBeNull();
+    if (text) {
+      text.value = '李渊建立了唐朝。';
+      text.dispatchEvent(new Event('input'));
+    }
+    expect(click('[data-ui="source-paste-go"]')).toBe(true);
+    let status = '';
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      status = q('[data-ui="ingest-status"]')?.textContent ?? '';
+      if (status.length > 0 && !status.includes('正在')) break;
+    }
+    // 屏上的原话来自 platform/llmHttp 的"还没填接口地址（设置 → AI）"
+    expect(status, '生成失败时没有如实告知（接线断了或错误被吞了）').toContain('AI');
+
+    // 收尾：回菜单（别把后续用例留在练功屏上）
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+  }, 40_000);
+
   it('DB#5 产物里「重置存档」真的能清档重装（main.ts 漏传 presetContent ⇒ 整组不显示）', async () => {
     const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
     const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
