@@ -1267,3 +1267,23 @@ h1 {
   color: var(--wash);
   word-break: break-word;
 }
+
+/* 个人纪录（D57）：与本地榜同款卡片，但值是"我的累计" */
+.records-section .records {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem 0.8rem;
+  margin: 0;
+}
+
+.records-section .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.records-section .stat-value {
+  font-size: 1rem;
+  color: var(--paper);
+  margin: 0;
+}

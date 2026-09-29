@@ -286,6 +286,7 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               onNav: () => onNav('menu'),
               llm: deps.llm,
               pwa: deps.pwa,
+              profile: deps.profile,
               setAnswerMode: deps.setAnswerMode,
               llmQuotaText: quotaText,
               setTier: deps.setTier,
@@ -298,7 +299,14 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
             });
           case 'menu':
           default:
-            return mountMenu(root, ctrl, { onNav: (t) => onNav(t as HostRoute), topN: deps.topN });
+            return mountMenu(root, ctrl, {
+              onNav: (t) => onNav(t as HostRoute),
+              topN: deps.topN,
+              // D57：个人纪录要判断"今天"（连续天数），昵称也要显示在说明里
+              now: deps.now,
+              tzOffsetMin: deps.tzOffsetMin,
+              profile: deps.profile,
+            });
         }
     }
   }

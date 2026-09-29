@@ -102,3 +102,59 @@ describe('mountSettings —— 关于（版本与更新，D54）', () => {
     expect(ui(root, 'pwa-apply').hidden).toBe(true);
   });
 });
+
+/* ------------------------------------------------------------------ D57：玩家身份 */
+
+/**
+ * 判别力：
+ * - SU#P1 有 profile 口才显示「玩家」组；缺口整组收起；
+ * - SU#P2 改昵称 ⇒ 写口收到新昵称**且 ID 原样带着**（写丢了 ID 就没法对比了）；
+ * - SU#P3 ID 只读展示（屏上不给可改入口）。
+ */
+describe('mountSettings —— 玩家身份（D57）', () => {
+  function rig(profile: { nickname: string; userId: string } | null) {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'menu', save: makeSave() }));
+    const saves: Array<{ nickname: string; userId: string }> = [];
+    mountSettings(root, ctrl, {
+      toastMs: 0,
+      ...(profile === null
+        ? {}
+        : {
+            profile: {
+              load: () => ({ ...profile }),
+              save: (next: { nickname: string; userId: string }) => {
+                saves.push({ ...next });
+                return true;
+              },
+            },
+          }),
+    });
+    return { root, saves };
+  }
+
+  it('SU#P1 有口 ⇒ 显示当前昵称与 ID；缺口 ⇒ 整组收起', () => {
+    const shown = rig({ nickname: '阿竹', userId: 'u-deadbeef' });
+    expect(ui(shown.root, 'profile-group').hidden).toBe(false);
+    expect((ui(shown.root, 'profile-nickname') as HTMLInputElement).value).toBe('阿竹');
+    expect(ui(shown.root, 'profile-id').textContent).toContain('u-deadbeef');
+
+    const bare = rig(null);
+    expect(ui(bare.root, 'profile-group').hidden).toBe(true);
+  });
+
+  it('SU#P2 改昵称：写口收到新昵称，且 ID 原样带着', () => {
+    const { root, saves } = rig({ nickname: '阿竹', userId: 'u-deadbeef' });
+    (ui(root, 'profile-nickname') as HTMLInputElement).value = '竹影';
+    click(ui(root, 'profile-save'));
+    expect(saves).toEqual([{ nickname: '竹影', userId: 'u-deadbeef' }]);
+    expect(ui(root, 'toast').textContent).toContain('昵称');
+  });
+
+  it('SU#P3 ID 只读：屏上没有第二块输入框改它', () => {
+    const { root } = rig({ nickname: '阿竹', userId: 'u-deadbeef' });
+    // 全屏只有一个 input 带 profile-nickname；ID 只以文本出现
+    expect(root.querySelectorAll('[data-ui="profile-nickname"]')).toHaveLength(1);
+    expect(root.querySelector('[data-ui="profile-id"]')?.tagName.toLowerCase()).toBe('p');
+  });
+});

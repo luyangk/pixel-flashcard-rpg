@@ -14,6 +14,9 @@
  * 文案双轨（LORE §6）：这里是功能文本——全大白话，不为氛围牺牲可理解性。
  */
 import { rankRuns, type RunRecord } from '@core/leaderboard';
+import { localDayString } from '@core/reviewLedger';
+import { computeRecords } from '../app/records';
+import type { PlayerProfile } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import { levelFromExp, playerStatsFor } from '../app/growth';
 import { h } from './dom';
@@ -26,10 +29,27 @@ export interface MenuDeps {
   readonly onNav: (target: MenuTarget) => void;
   /** 榜单展示条数（缺省 10）。 */
   readonly topN?: number;
+  /**
+   * 时钟与时区（D57）：算"今天"用（连续天数要判断"今天或昨天"）。
+   * 缺省 0 / 0 ⇒ 连续天数会按 UTC 的 1970-01-01 判断（测试里注入真值即可）。
+   */
+  readonly now?: () => number;
+  readonly tzOffsetMin?: number;
+  /** 玩家身份（D57；宿主接 `platform/profileStore`）。缺省 ⇒ 不显示昵称。 */
+  readonly profile?: { readonly load: () => PlayerProfile };
 }
 
 export interface MenuHandle {
   unmount(): void;
+}
+
+/** 个人纪录的补充说明（导出以便单测：文案与"纪录"本身一样重要）。 */
+export function recordsHintText(nickname: string, bestStreak: number, streak: number): string {
+  const who = nickname.trim().length > 0 ? `${nickname.trim()}：` : '';
+  if (bestStreak <= 0) return `${who}还没有复习记录——今天练一天，连续天数就从 1 开始。`;
+  return streak >= bestStreak
+    ? `${who}最长连续 ${bestStreak} 天（就是现在这一段）。`
+    : `${who}最长连续 ${bestStreak} 天；现在连着 ${streak} 天，别断。`;
 }
 
 const DEFAULT_TOP_N = 10;
@@ -68,6 +88,8 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
   if (!root || !ctrl) throw new Error('mount-menu: root/controller required');
   if (!deps || typeof deps.onNav !== 'function') throw new Error('mount-menu: onNav required');
   const topN = typeof deps.topN === 'number' && Number.isFinite(deps.topN) && deps.topN > 0 ? Math.floor(deps.topN) : DEFAULT_TOP_N;
+  const now = typeof deps.now === 'function' ? deps.now : () => 0;
+  const tzOffsetMin = typeof deps.tzOffsetMin === 'number' && Number.isFinite(deps.tzOffsetMin) ? deps.tzOffsetMin : 0;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const titleEl = h('h1', { 'data-ui': 'menu-title', class: 'menu-title' }, TITLE);
@@ -115,6 +137,19 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
     statsEl.appendChild(h('div', { class: 'stat' }, [h('dt', { class: 'stat-label' }, def.label), dd]));
   }
 
+  /**
+   * 个人纪录（D57）：**跟我自己比**的四个维度。
+   *
+   * 为什么和"本地榜"并排而不是替掉它：玩家要的是"都留在菜单"——榜单回答"这一局打得多好"，
+   * 纪录回答"我练到哪儿了"。两者口径不同，混在一起才是看不懂的根源。
+   */
+  const recordsEl = h('dl', { 'data-ui': 'records', class: 'records' });
+  const recordsSectionEl = h('section', { 'data-ui': 'records-section', class: 'board records-section' }, [
+    h('h2', { class: 'board-title' }, '个人纪录'),
+    h('p', { class: 'field-hint', 'data-ui': 'records-hint' }, ''),
+    recordsEl,
+  ]);
+
   const rankEl = h('ol', { 'data-ui': 'leaderboard', class: 'leaderboard' });
   const rankEmptyEl = h(
     'p',
@@ -148,6 +183,7 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
     reminderEl,
     statsEl,
     navEl,
+    recordsSectionEl,
     boardEl,
   ]);
   root.appendChild(screen);
@@ -183,10 +219,41 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
     };
     for (const [key, el] of statEls) el.textContent = String(values[key] ?? '—');
 
+    renderRecords(snap);
     const all = snap.save?.settings?.leaderboard;
     renderRank(Array.isArray(all) ? all : EMPTY_RECORDS);
     // 提醒横幅：闸门为真**且**这一实例里没被压掉。只读态横幅归 T8（D29），此处不重复。
     reminderEl.toggleAttribute('hidden', !(snap.reminderDue && !reminderDismissed));
+  }
+
+  /** 个人纪录的四个维度（D57）：口径全部来自 app 层，本屏不自己算业务。 */
+  function renderRecords(snap: ControllerSnapshot): void {
+    const today = localDayString(now(), tzOffsetMin);
+    const rec = computeRecords(snap.save, today);
+    const nickname = typeof deps.profile?.load === 'function' ? deps.profile.load().nickname : '';
+    const rows: ReadonlyArray<{ key: string; label: string; value: string }> = [
+      { key: 'level', label: '等级 / 经验', value: `L${rec.level} · ${rec.exp} 经验` },
+      { key: 'mastered', label: '已掌握的卡', value: `${rec.mastered} 张` },
+      { key: 'selfMade', label: '自己添的卡', value: `${rec.selfMade} 张` },
+      {
+        key: 'days',
+        label: '复习天数',
+        value: `${rec.reviewDays} 天 · 连续 ${rec.streak} 天`,
+      },
+    ];
+    recordsEl.replaceChildren();
+    for (const row of rows) {
+      recordsEl.appendChild(
+        h('div', { class: 'stat' }, [
+          h('dt', { class: 'stat-label' }, row.label),
+          h('dd', { 'data-record': row.key, class: 'stat-value' }, row.value),
+        ]),
+      );
+    }
+    // 「最长连续」单独一句：它只在"现在没连着"时才和上面不同，写在行里容易看岔
+    const hint = recordsHintText(nickname, rec.bestStreak, rec.streak);
+    const hintEl = recordsSectionEl.querySelector('[data-ui="records-hint"]');
+    if (hintEl) hintEl.textContent = hint;
   }
 
   const onRecall = (): void => {

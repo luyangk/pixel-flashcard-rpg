@@ -6,7 +6,7 @@
  * 把"宿主需要外部提供什么"单独声明，`main.ts` 只 import 本文件 + `mountHost`，
  * 屏组件之间也不为此多出运行时依赖（type-only import 在 verbatimModuleSyntax 下零残留）。
  */
-import type { AnswerMode, Card, Deck, Sm2Params } from '@core/types';
+import type { AnswerMode, Card, Deck, PlayerProfile, Sm2Params } from '@core/types';
 import type { Rng } from '@core/rng';
 import type { CardCandidate, NameCandidate, ParseResult } from '@core/llmParse';
 import type { ChatResult, LlmConfig } from '../platform/llmTypes';
@@ -139,6 +139,11 @@ export interface HostAdapters {
   readonly refreshChoices?: (input: {
     readonly cardId: string;
   }) => Promise<{ readonly ok: boolean; readonly reason?: string; readonly choices?: readonly string[] }>;
+  /** 玩家身份（D57；菜单显示昵称、设置页可改）：宿主接 `platform/profileStore`。 */
+  readonly profile?: {
+    readonly load: () => PlayerProfile;
+    readonly save: (profile: PlayerProfile) => boolean;
+  };
   /** 设置屏「关于」分组（D54）：版本 + 检查更新（查 SW，不刷新页面）。 */
   readonly pwa?: {
     readonly version: () => string;

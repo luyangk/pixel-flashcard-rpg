@@ -86,6 +86,20 @@ export interface BattleSettings {
  * expToNext/victoryExp/applyExp 消费后全程整数域，小数无合法来源）。
  * v2.1 形状前的旧档缺此字段，由 migrateSave 补默认 {exp:0}。
  */
+/**
+ * 玩家身份（D57）：昵称 + 短 ID。
+ *
+ * **不进存档**（存本机 `localStorage`，见 `platform/profileStore`）：它不是游戏进度，
+ * 且该活过「重置存档」（与 AI Key 同款口径）。将来做"战绩卡"交换时，由玩家点导出，
+ * 再把昵称写进那份小文件 —— 比"备份里悄悄带着"更符合最小暴露。
+ */
+export interface PlayerProfile {
+  /** 昵称（≤12 码点；空串 = 还没起名，显示时回落「无名侠客」）。 */
+  nickname: string;
+  /** 短 ID（`u-` + 8 位十六进制；空串 = 尚未生成）。 */
+  userId: string;
+}
+
 export interface ProgressSettings {
   exp: number;
 }

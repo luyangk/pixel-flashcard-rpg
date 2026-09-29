@@ -275,7 +275,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **87 文件 / 1294 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **89 文件 / 1306 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -294,6 +294,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D57 个人纪录（等级/经验 · 已掌握 · 自建 · 复习天数与连续）+ 本地昵称/短 ID | `tests/app/records.test.ts` RC#1–#4（并集/连续边界/脏数据）、`tests/ui/menu.test.ts` MN#R1–R4（四维 + 旧榜不动）、`tests/platform/profileStore.test.ts` PF#1–#5、`tests/ui/settings.update.test.ts` SU#P1–P3、`tests/ui/host.test.ts` HS#R1–R2（装配层：漏透传 now/profile 必红）；6 条变异全部会红 |
 | D56 干扰项同领域（池子只取同领域 + prompt 锁领域 + 单卡「重出选项」+ 预置卡自带 90 条干扰项与老档回填，含 1 张卡额度记账） | `tests/ui/battleScreen.test.ts` BS#A11/A12、`tests/app/llmFlow.test.ts` LC#S1–S4、`tests/app/library.test.ts` LB#D1–D3、`tests/ui/practice.test.ts` PR#C1–C3、`tests/ui/hostAdapters.test.ts` AD#14/#15（装配层与额度）；12 条变异全部会红（其中"回填覆盖玩家重出的选项""只认 id 不认来源""加载器漏传 choices"各自都有用例拦） |
 | D55 源库真的经读取服务读（含渲染结果的专用解析器 + 失败原因分两侧） | `tests/platform/feedFetch.test.ts` FF#10–#15（用**真实渲染结果**当夹具）、`tests/ui/practiceSources.test.ts` PS#8–#10、`tests/ui/hostAdapters.test.ts` AD#13（装配层：配了就真的打到读取服务）；`docs/SOURCES.md` §3.2 记录了三条实测（可达 / CORS / 返回的是渲染结果）；9 条变异全部会红 |
 | D54 PWA 更新可见（设置页「关于」：当前版本 + 检查更新，**不自动刷新**） | `tests/platform/pwaUpdate.test.ts`（PU#1–#6）、`tests/ui/settings.update.test.ts`（SU#1–#4）、`tests/e2e/dist.boot.test.ts` · DB#11（真产物里版本号是 **13 位构建戳而非 dev** —— vite `define` 漏了必红）、5 条变异全部会红 |

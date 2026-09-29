@@ -24,6 +24,7 @@ import { digestHtml } from '../platform/htmlDigest';
 import { clearInbox, loadInbox, saveInbox } from '../platform/inboxStore';
 import { fetchSourceItems } from '../platform/feedFetch';
 import { loadSources, saveSources } from '../platform/sourceStore';
+import { ensureProfile, loadProfile, saveProfile } from '../platform/profileStore';
 import { checkForUpdate, pageBuild, reloadPage } from '../platform/pwaUpdate';
 import { fetchPage, type PageFetchResult } from '../platform/pageFetch';
 import { bossFightParams, setBossName } from '../app/bossFlow';
@@ -124,6 +125,8 @@ export interface AssembleDeps {
   readonly feedFetchImpl?: FetchLike;
   /** 来源库口径（测试用；生产接 platform/feedFetch + platform/sourceStore）。 */
   readonly sourcesOverride?: HostAdapters['sources'];
+  /** 玩家身份口径（测试用；生产接 platform/profileStore）。 */
+  readonly profileOverride?: HostAdapters['profile'];
   /** 「重出选项」口径（测试用；生产接 llmFlow.suggestChoices + library.setCardChoices + 额度记账）。 */
   readonly refreshChoicesOverride?: HostAdapters['refreshChoices'];
   /** 「关于」口径（测试用；生产接 platform/pwaUpdate）。 */
@@ -392,6 +395,14 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
      * 来源库（D53）：读订阅源走 `platform/feedFetch`，玩家那份库走 `platform/sourceStore`。
      * `fetchItems` **不注入 fetchImpl** —— 生产就该用真 fetch；测试用 override 换掉整口。
      */
+    /**
+     * 玩家身份（D57）：**每次调用现读**（改完昵称立刻生效，与 LLM 配置同一接缝）。
+     * 首次取用时补一个短 ID（只生成一次并落盘）。
+     */
+    profile: deps.profileOverride ?? {
+      load: () => ensureProfile(() => `u-${Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, '0')}`),
+      save: (profile) => saveProfile(profile),
+    },
     /** 「关于」（D54）：版本显示 + 检查更新（只查不刷；`apply` 才 reload）。 */
     pwa: deps.pwaOverride ?? {
       version: pageBuild,

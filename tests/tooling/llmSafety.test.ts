@@ -95,11 +95,14 @@ describe('LLM 安全不变量', () => {
     // `localStorage` 的归属要**逐字列出**（多一个必须显式登记）：
     // ① llmConfig.ts = 玩家的 LLM Key；② inboxStore.ts = 待读清单（链接/标题/粘来的正文）；
     // ③ sourceStore.ts = 采新卡的来源库（玩家自己加/删的源；D53 —— 同样是"本机工具配置"，
-    //    不进存档、不进备份、不存 Key）。
+    //    不进存档、不进备份、不存 Key）；
+    // ④ profileStore.ts = 玩家身份（昵称 + 短 ID；D57 —— 它不是游戏进度，且该活过"重置存档"，
+    //    与 AI Key 同款口径）。
     const platformHits = hits(codeOf(['src/platform']), 'localStorage');
     expect(platformHits).toEqual([
       'src/platform/inboxStore.ts',
       'src/platform/llmConfig.ts',
+      'src/platform/profileStore.ts',
       'src/platform/sourceStore.ts',
     ]);
   });

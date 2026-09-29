@@ -768,3 +768,68 @@ describe('mountHost —— 采新卡入口的落点（Plan 8 · T12）', () => {
     expect(ui(mk(collectStubs), 'collect-entry').hidden).toBe(false);
   });
 });
+
+/* ------------------------------------------------------------------ D57：纪录与身份的接线 */
+
+/**
+ * 判别力（装配层独有的两个坑）：
+ * - HS#R1 菜单那条路**必须**把 now / tzOffsetMin / profile 透传下去 —— 漏了 `now`，
+ *   连续天数会按 1970-01-01 算（永远 0），而屏级用例全绿（它们自己注了时钟）；
+ * - HS#R2 设置屏必须能改昵称（`profile` 口漏透传 ⇒ 整组隐藏）。
+ */
+describe('mountHost —— 个人纪录与玩家身份（D57）', () => {
+  it('HS#R1 菜单显示纪录与昵称（漏透传 now/profile 必红）', () => {
+    const base = makeSave();
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: {
+          ...base,
+          settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    const { deps } = adapters({
+      now: () => Date.UTC(2026, 9, 27, 4, 0, 0),
+      tzOffsetMin: 480,
+      profile: { load: () => ({ nickname: '阿竹', userId: 'u-deadbeef' }), save: () => true },
+    });
+    const root = makeRoot();
+    mountHost(root, ctrl, deps);
+
+    expect(ui(root, 'records-section')).not.toBeNull();
+    expect(ui(root, 'records-hint').textContent).toContain('阿竹');
+    expect(ui(root, 'records').textContent).toContain('等级');
+  });
+
+  it('HS#R2 设置屏能改昵称（profile 口漏透传 ⇒ 整组隐藏）', () => {
+    const base = makeSave();
+    const ctrl = makeCtrl(
+      makeSnap({
+        screen: 'menu',
+        save: {
+          ...base,
+          settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } },
+        },
+      }),
+    );
+    const saved: Array<{ nickname: string; userId: string }> = [];
+    const { deps } = adapters({
+      profile: {
+        load: () => ({ nickname: '阿竹', userId: 'u-deadbeef' }),
+        save: (p) => {
+          saved.push({ ...p });
+          return true;
+        },
+      },
+    });
+    const root = makeRoot();
+    mountHost(root, ctrl, deps);
+    click(root.querySelector('[data-nav="settings"]') as HTMLElement);
+
+    expect(ui(root, 'profile-group').hidden).toBe(false);
+    (ui(root, 'profile-nickname') as HTMLInputElement).value = '竹影';
+    click(ui(root, 'profile-save'));
+    expect(saved).toEqual([{ nickname: '竹影', userId: 'u-deadbeef' }]);
+  });
+});

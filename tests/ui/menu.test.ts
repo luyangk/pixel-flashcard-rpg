@@ -14,6 +14,9 @@ import { levelFromExp, playerStatsFor } from '../../src/app/growth';
 import { mountMenu, type MenuTarget } from '../../src/ui/menu';
 import { all, click, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, makeSrs, ui } from './support';
 
+/** 本文件自己的时间锚（与其它 UI 用例同款：注入时钟，测试里不读真表）。 */
+const NOW = Date.UTC(2026, 9, 27, 4, 0, 0);
+
 afterEach(() => {
   document.body.replaceChildren();
 });
@@ -198,5 +201,71 @@ describe('mountMenu —— 拆除', () => {
     expect(all(root, '[data-nav]')).toHaveLength(0);
     ctrl.push(makeSnap({ save: saveWithLeaderboard(9) }));
     expect(all(root, '[data-ui="rank-row"]')).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ D57：个人纪录 */
+
+/**
+ * 判别力：
+ * - MN#R1 四个维度都渲染出来（把纪录做成一个数字的实现必红）；
+ * - MN#R2 口径正确：等级/经验来自存档、已掌握与自建卡按来源分类、复习天数取并集；
+ * - MN#R3 昵称在注入口里时写进说明；没复习过时如实说"从今天开始"；
+ * - MN#R4 本地榜**不动**（玩家要求两个都留）。
+ */
+describe('mountMenu —— 个人纪录（D57）', () => {
+  const rec = (root: HTMLElement, key: string): string =>
+    root.querySelector(`[data-record="${key}"]`)?.textContent ?? '';
+
+  it('MN#R1/R2 四个维度都渲染，且口径正确', () => {
+    const root = makeRoot();
+    const save = makeSave({
+      cards: [
+        { ...makeCard('a'), srs: { ...makeCard('a').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-26', '2026-10-27'] } },
+        { ...makeCard('b'), srs: { ...makeCard('b').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-25'] } },
+        { ...makeCard('c'), source: { type: 'llm', createdAt: NOW } },
+      ],
+    });
+    save.settings.progress = { exp: 120 };
+    const ctrl = makeCtrl(makeSnap({ screen: 'menu', save }));
+    mountMenu(root, ctrl, {
+      onNav: () => undefined,
+      now: () => Date.UTC(2026, 9, 27, 4, 0, 0), // 本地（+480）= 2026-10-27 12:00
+      tzOffsetMin: 480,
+    });
+
+    expect(rec(root, 'level')).toContain('120 经验');
+    expect(rec(root, 'mastered')).toContain('2 张');
+    expect(rec(root, 'selfMade')).toContain('1 张'); // 只有 llm 那张算自建
+    expect(rec(root, 'days')).toContain('3 天'); // 25/26/27 的并集
+    expect(rec(root, 'days')).toContain('连续 3 天'); // 25/26/27 三天连着（并集之后就是连续三天）
+  });
+
+  it('MN#R3 昵称进说明；从没复习过时如实说"从今天开始"', () => {
+    const withName = makeRoot();
+    mountMenu(withName, makeCtrl(makeSnap({ screen: 'menu', save: makeSave() })), {
+      onNav: () => undefined,
+      now: () => Date.UTC(2026, 9, 27, 4, 0, 0),
+      tzOffsetMin: 480,
+      profile: { load: () => ({ nickname: '阿竹', userId: 'u-deadbeef' }) },
+    });
+    const hint = withName.querySelector('[data-ui="records-hint"]')?.textContent ?? '';
+    expect(hint).toContain('阿竹');
+    expect(hint).toContain('从 1 开始'); // 空账本的文案
+  });
+
+  it('MN#R4 本地榜仍在（两个都留）', () => {
+    const root = makeRoot();
+    const save = makeSave();
+    save.settings.leaderboard = [
+      { id: 'r1', at: NOW, result: 'won', kind: 'encounter', domain: '生活常识', cards: 3, misses: 0, level: 1, score: 80 },
+    ];
+    mountMenu(root, makeCtrl(makeSnap({ screen: 'menu', save })), {
+      onNav: () => undefined,
+      now: () => Date.UTC(2026, 9, 27, 4, 0, 0),
+      tzOffsetMin: 480,
+    });
+    expect(root.querySelector('[data-ui="leaderboard"]')?.children.length).toBe(1);
+    expect(root.querySelector('[data-ui="records-section"]')).not.toBeNull();
   });
 });

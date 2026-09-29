@@ -22,6 +22,8 @@ import type { ChatResult, LlmConfig } from '../platform/llmTypes';
 // maskKey 是 Key 展示形态的**唯一权威**（永不回显明文）：设置屏只消费它，不自己拼掩码。
 // 平台 LLM 配置模块的其余读写口仍由宿主装配（见 hostAdapters），本文件只取这一个纯函数。
 import { maskKey } from '../platform/llmConfig';
+import { DEFAULT_NICKNAME, NICKNAME_MAX } from '../platform/profileStore';
+import type { PlayerProfile } from '@core/types';
 import { h, setHidden } from './dom';
 import { showToast } from './toast';
 
@@ -97,6 +99,14 @@ export interface SettingsDeps {
     readonly version: () => string;
     readonly check: () => Promise<{ readonly status: 'updated' | 'current' | 'unsupported'; readonly build: string | null; readonly message: string }>;
     readonly apply: () => void;
+  };
+  /**
+   * 玩家身份（D57）：昵称可改、ID 只读（宿主接 `platform/profileStore`）。
+   * 缺省 ⇒ 整组隐藏（同其它分组：不显示点了没反应的入口）。
+   */
+  readonly profile?: {
+    readonly load: () => PlayerProfile;
+    readonly save: (profile: PlayerProfile) => boolean;
   };
   /** toast 存活毫秒（测试给 0 免定时器）。 */
   readonly toastMs?: number;
@@ -311,6 +321,43 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     resetActionsEl,
   ]);
 
+  /* ------------------------------------------------------------ 玩家（D57：昵称与 ID） */
+  const nicknameInput = h('input', {
+    'data-ui': 'profile-nickname',
+    class: 'llm-input',
+    type: 'text',
+    placeholder: DEFAULT_NICKNAME,
+    autocomplete: 'off',
+    maxlength: String(NICKNAME_MAX),
+  }) as HTMLInputElement;
+  const nicknameSaveBtn = h(
+    'button',
+    { 'data-ui': 'profile-save', class: 'collect-btn', type: 'button' },
+    '保存昵称',
+  ) as HTMLButtonElement;
+  const profileIdEl = h('p', { 'data-ui': 'profile-id', class: 'field-hint' });
+  nicknameSaveBtn.addEventListener('click', () => {
+    if (destroyed || deps.profile === undefined) return;
+    const next: PlayerProfile = { ...deps.profile.load(), nickname: nicknameInput.value };
+    if (!deps.profile.save(next)) {
+      toast('没能存到这台设备上（浏览器可能禁用了本地存储）。');
+      return;
+    }
+    toast('昵称改好了。');
+    render(ctrl.snapshot());
+  });
+  const profileEl = h('section', { 'data-ui': 'profile-group', class: 'settings-group' }, [
+    h('h3', { class: 'field-title' }, '玩家'),
+    h(
+      'p',
+      { class: 'field-hint' },
+      '昵称只存在这台设备上（不进存档、不进备份）；ID 是将来交换战绩时的标识，只读。',
+    ),
+    nicknameInput,
+    h('div', { class: 'save-actions' }, [nicknameSaveBtn]),
+    profileIdEl,
+  ]);
+
   /* ------------------------------------------------------------ 关于（D54：版本与更新） */
   const pwaVersionEl = h('p', { 'data-ui': 'pwa-version', class: 'field-hint' });
   const pwaCheckBtn = h('button', { 'data-ui': 'pwa-check', class: 'collect-btn', type: 'button' }, '检查更新') as HTMLButtonElement;
@@ -435,6 +482,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     poolEl,
     paramEl,
     storyEl,
+    profileEl,
     llmEl,
     pwaEl,
     saveEl,
@@ -747,6 +795,17 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
       setHidden(llmQuotaTextEl, false);
     } else {
       setHidden(llmQuotaTextEl, true);
+    }
+
+    // 玩家组（D57）：有口才显示；昵称输入框在非编辑时回填当前值（避免把玩家正在敲的字擦掉）
+    const profileReady = deps.profile !== undefined && typeof deps.profile.save === 'function';
+    setHidden(profileEl, !profileReady);
+    if (profileReady) {
+      const p = deps.profile?.load() ?? { nickname: '', userId: '' };
+      if (document.activeElement !== nicknameInput) nicknameInput.value = p.nickname;
+      nicknameInput.placeholder = DEFAULT_NICKNAME;
+      profileIdEl.textContent =
+        p.userId.length > 0 ? `ID：${p.userId}` : 'ID：还没生成（刷新一次就好）';
     }
 
     // 关于组（D54）：三个口齐才显示；缺省整组收起（不显示点了没反应的入口）
