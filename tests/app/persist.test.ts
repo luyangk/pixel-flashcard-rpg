@@ -342,7 +342,7 @@ describe('Final Fix Wave · C-1（终审 Critical）—— 载入走 migrateSave
     expect(reasonOf(detailed)).toContain('只读');
     // ④ 写入面一律 fail-closed 抛 SaveReadOnlyError（mutate / settleAndRecord / markDirty）
     await expect(coord.mutate((s) => { s.meta.plays = 1; })).rejects.toBeInstanceOf(SaveReadOnlyError);
-    await expect(coord.settleAndRecord({ cards: [makeCard('nope')], exp: 5, won: true })).rejects.toBeInstanceOf(SaveReadOnlyError);
+    await expect(coord.settleAndRecord({ cards: [makeCard('nope')], exp: 5 })).rejects.toBeInstanceOf(SaveReadOnlyError);
     expect(() => coord.markDirty()).toThrow(SaveReadOnlyError);
     // ⑤ markExported 用失败位（它的语义本就是"有没有记上"）
     expect(await coord.markExported(clock.now())).toBe(false);
@@ -1125,7 +1125,7 @@ describe('settleAndRecord —— 战斗结算 exp 回写 progress.exp', () => {
     const clock = useFakeClock(NOW);
     const { store } = wrapStore(createMemoryStorage());
     const coord = await createCoordinator(store, { now: clock.now });
-    await coord.settleAndRecord({ cards: null as unknown as Card[], exp: NaN, won: true });
+    await coord.settleAndRecord({ cards: null as unknown as Card[], exp: NaN });
     const s = coord.snapshot();
     expect(s.settings.progress.exp).toBe(0); // NaN 消毒为 0：宁可漏发，不写脏权威位
     expect(s.meta.plays).toBe(1); // plays 恒 +1："打过一局"与胜负无关
@@ -1138,7 +1138,7 @@ describe('settleAndRecord —— 战斗结算 exp 回写 progress.exp', () => {
     const { store } = wrapStore(createMemoryStorage());
     const coord = await createCoordinator(store, { now: clock.now });
     for (const junk of [-5, 1.5, Infinity, '3' as unknown as number, undefined as unknown as number]) {
-      await coord.settleAndRecord({ cards: [], exp: junk, won: true });
+      await coord.settleAndRecord({ cards: [], exp: junk });
     }
     // 1.5 → floor = 1（合法非负整数量纲内的保守取整）；其余畸形一律消毒为 0
     expect(coord.snapshot().settings.progress.exp).toBe(1);

@@ -288,7 +288,7 @@ describe('mountHost —— 换屏与本地路由', () => {
       makeSnap({
         screen: 'result',
         fight: { state: { pool: ['c1'] } as never, pool, current: null },
-        lastResult: { won: false, expGained: 0, levelBefore: 1, levelAfter: 1, leveledUp: false, misses: 1, poolLen: 1 },
+        lastResult: { won: false, mode: 'fight', expGained: 0, levelBefore: 1, levelAfter: 1, leveledUp: false, misses: 1, poolLen: 1 },
       }),
     );
 

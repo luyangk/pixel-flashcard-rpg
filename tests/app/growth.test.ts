@@ -467,7 +467,7 @@ describe('releaseSubset / settleFight —— 已消耗回合才落账（N-2）',
     const r = settleFight(null as unknown as Card[], null as unknown as FightView, {
       gradeOf: () => GRADES.good, tzOffsetMin: TZ, nowMs: NOW, params: PARAMS,
     });
-    expect(r).toEqual({ cards: [], exp: 0, won: false });
+    expect(r).toEqual({ cards: [], exp: 0, won: false, cleared: false });
   });
 });
 

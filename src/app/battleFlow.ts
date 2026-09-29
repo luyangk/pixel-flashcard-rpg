@@ -26,7 +26,7 @@ import type { Rng } from '@core/rng';
 import type { Grade } from '@core/sm2';
 import { buildPool } from '@core/deckBuild';
 import { deriveStats, enemyHpForPool, enemyPowerFor, type PlayerStats } from '@core/stats';
-import { createBattle, answer, type BattleState } from '@core/battle';
+import { createBattle, answer, type BattleMode, type BattleState } from '@core/battle';
 import type { SessionCards } from './sessionTypes';
 
 /**
@@ -80,6 +80,13 @@ export interface StartFightOptions {
    * 与 T2 中间态逐字同值，SF#5 的 atk=12/maxHp=100 锚点因此不漂移。
    */
   readonly stats?: PlayerStats;
+  /**
+   * 显式卡池（Plan 7 · T2）：给定时**原样成池**（按给定顺序、过滤不可用卡），
+   * 跳过 80/20 抽样 —— 练功屏勾选的那几张就是要练的那几张。空数组 ⇒ 与"筛后 0 张"同路。
+   */
+  readonly cardIds?: readonly string[];
+  /** 战斗形态（Plan 7 · T1）：`'drill'` = 木桩练功（锁血、不反击、池尽即 cleared）。 */
+  readonly mode?: BattleMode;
 }
 
 /** 有限正整数校验（与 deckBuild.isPositiveInt 同口径，此处用于前置分流而非依赖其回落）。 */
@@ -123,12 +130,19 @@ export function startFight(
     };
   }
 
-  const pool = buildPool(library, {
-    size: opts.size,
-    deckIds: opts.deckIds,
-    rng: opts.rng,
-    nowMs: opts.nowMs,
-  });
+  // 显式卡池（勾选练功）：原样成池、保序、过滤不可用卡；**不**走 80/20 抽样。
+  const explicit = Array.isArray(opts.cardIds) ? opts.cardIds : null;
+  const pool =
+    explicit === null
+      ? buildPool(library, {
+          size: opts.size,
+          deckIds: opts.deckIds,
+          rng: opts.rng,
+          nowMs: opts.nowMs,
+        })
+      : explicit
+          .map((id) => library.find((c) => c && c.id === id))
+          .filter((c): c is Card => c !== undefined && c !== null);
 
   if (pool.length === 0) {
     // 库非空但筛后为 0（deckIds 指向空/不存在卡组）：缺口即整个请求量。
@@ -150,7 +164,7 @@ export function startFight(
   const stats = isUsableStats(opts.stats) ? opts.stats : deriveStats(1, 0, 0);
 
   return toView(
-    createBattle(pool, enemyHp, stats, opts.rng, enemyPowerFor(difficulty)),
+    createBattle(pool, enemyHp, stats, opts.rng, enemyPowerFor(difficulty), opts.mode ?? 'fight'),
     pool,
     difficulty,
   );

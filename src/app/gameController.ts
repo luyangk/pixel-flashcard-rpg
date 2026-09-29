@@ -171,8 +171,28 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     // **不变量**：此处两步都不得自行 flush 之外的收口，flush 只由 recordRun 负责
     // （若后续重构拆掉 recordRun 的 flushToClean，本链的"落盘完成"承诺随之失效——
     // GC#6 的 exp>0/榜单 1 条/plays=1 三断言即该不变量的回归钉子）。
+    // **木桩练功**（Plan 7 · D46）：写卡片与经验，但**不记局数、不写榜单**。
+    // 练功不是"打了一局"：它不该影响教学局判定（plays）、也不该出现在战绩榜里。
+    // 这里显式早退，避免榜单/净化/里程碑那三段按"胜局"口径被牵连。
+    if (result.cleared) {
+      await guardedWrite(async () => {
+        await coord.settleAndRecord({ cards: result.cards, exp: result.exp }, { recordPlay: false });
+      });
+      const expAfterDrill = coord.snapshot().settings.progress.exp;
+      return {
+        won: false,
+        mode: 'drill',
+        expGained: result.exp,
+        levelBefore,
+        levelAfter: levelFromExp(expAfterDrill),
+        leveledUp: levelFromExp(expAfterDrill) > levelBefore,
+        misses: countMisses(view.state),
+        poolLen: view.pool.length,
+      };
+    }
+
     await guardedWrite(async () => {
-      await coord.settleAndRecord({ cards: result.cards, exp: result.exp, won });
+      await coord.settleAndRecord({ cards: result.cards, exp: result.exp });
     });
 
     // 榜单：kind 取本局难度（boss 档在 T8 经 intent.difficulty 传入后由 fight 侧带出）。
@@ -214,6 +234,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     const levelAfter = levelFromExp(expAfter);
     return {
       won,
+      mode: 'fight',
       expGained: result.exp,
       levelBefore,
       levelAfter,
@@ -251,13 +272,23 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         // 语义：**显式指定优先**；只有"没指定档位"（备战屏的正常开战就是这种）才在首战时
         // 降到教学局。这样 Test/测试与 Boss 档都能确定性地指名自己要的档。
         const requested = i.difficulty;
+        const mode = i.mode === 'drill' ? 'drill' : 'fight';
+        // 木桩练功（Plan 7 · D46）**不参与教学局**：练功不是"首战"，难度固定遭遇战档。
         const difficulty =
-          requested === undefined ? ((save.meta?.plays ?? 0) === 0 ? 'tutorial' : 'encounter') : requested;
+          mode === 'drill'
+            ? requested ?? 'encounter'
+            : requested === undefined
+              ? (save.meta?.plays ?? 0) === 0
+                ? 'tutorial'
+                : 'encounter'
+              : requested;
         const res = startFight(
           { decks: save.decks, cards: save.cards },
           {
             size: i.size,
             deckIds: i.deckIds,
+            cardIds: i.cardIds,
+            mode,
             rng,
             nowMs: now(),
             stats: playerStatsFor(save),
@@ -290,7 +321,9 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         if (next === fight) break; // 空卡/畸形视图：引用幂等短路（相位守卫之上的兜底）
         grades.set(current.id, i.grade);
         fight = next;
-        if (next.state.phase === 'won' || next.state.phase === 'lost') {
+        // 三种终局都要结算：won / lost / **cleared（木桩练功打完池子，Plan 7 · T2）**。
+        // 漏掉 cleared ⇒ 练功永远不落库（SRS 白涨、屏停在 fight）——DS#1 钉住。
+        if (next.state.phase === 'won' || next.state.phase === 'lost' || next.state.phase === 'cleared') {
           lastResult = await settleToStorage(next);
           // 终局后 fight **刻意保留**：result 屏要展示终局棋盘与战报（controllerTypes
           // 的快照注释随之澄清为"结算离场（finish/toMenu）后为 null"）。

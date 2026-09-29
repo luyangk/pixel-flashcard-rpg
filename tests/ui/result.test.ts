@@ -25,6 +25,7 @@ afterEach(() => {
 
 function summary(over: Partial<RunSummary> = {}): RunSummary {
   return {
+    mode: 'fight',
     won: true,
     expGained: 12,
     levelBefore: 1,

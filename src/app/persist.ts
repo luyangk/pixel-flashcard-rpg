@@ -114,7 +114,13 @@ export interface Coordinator {
    */
   snapshot(): SaveFile;
   /** 战斗结算落库编排点（M-2）：写回 cards、累加 progress.exp、plays+1。只读态抛 SaveReadOnlyError。 */
-  settleAndRecord(result: SettleResult): Promise<void>;
+  /**
+   * 结算落库：卡片（SRS）+ 经验 + **局数 +1**。
+   *
+   * `opts.recordPlay === false`（Plan 7 · D46）：木桩练功照常写卡片与经验，但**不记局数**
+   * ——练功不是"打了一局"，它不该影响任何以 plays 为口径的东西（教学局判定、战绩口径）。
+   */
+  settleAndRecord(result: SettleRecordInput, opts?: { readonly recordPlay?: boolean }): Promise<void>;
   /** 外部失控改过 snapshot() 后的显式标脏（正常路径不需要，SN#3b 测试用）。只读态抛 SaveReadOnlyError。 */
   markDirty(): void;
   /**
@@ -182,6 +188,18 @@ export interface Coordinator {
 }
 
 export type FlushResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * 结算落库的**输入面**：coordinator 只读 `cards`（整表替换）与 `exp`（累加）。
+ *
+ * 为什么不用 `growth.SettleResult`：那会把"结算的业务口径"（won/cleared/难度…）
+ * 拽进持久化层，而持久化对它们一无所知（`won` 早就不被使用了）。调用方传完整对象
+ * 也天然满足这个窄面。
+ */
+export interface SettleRecordInput {
+  readonly cards: readonly Card[];
+  readonly exp: number;
+}
 
 /** 只读态的拒绝文案（flush 的失败位与 SaveReadOnlyError 共用同一句话，口径单一）。 */
 export const READ_ONLY_REASON =
@@ -563,15 +581,19 @@ export async function createCoordinator(
    * cards 非数组 → 不动库存卡（保留旧值即最保守解）。won=false 同样计 plays：
    * "打过一局"与胜负无关，PRD 的游玩计数即此口径。
    */
-  async function settleAndRecord(result: SettleResult): Promise<void> {
+  async function settleAndRecord(
+    result: SettleRecordInput,
+    opts?: { readonly recordPlay?: boolean },
+  ): Promise<void> {
     // C-1 只读闩锁：显式带操作名抛错（比让 mutate 代抛更好定位——"结算是被什么挡下的"）
     if (readOnly) throw new SaveReadOnlyError('settleAndRecord');
     const nextCards = Array.isArray(result?.cards) ? sanitizeCards(result.cards) : null;
     const gained = nonNegOr0(result?.exp);
+    const countPlay = opts?.recordPlay !== false;
     await mutate((s) => {
       if (nextCards !== null) s.cards = nextCards;
       s.settings.progress.exp = nonNegOr0(s.settings.progress.exp) + gained;
-      s.meta.plays = nonNegOr0(s.meta.plays) + 1;
+      if (countPlay) s.meta.plays = nonNegOr0(s.meta.plays) + 1;
     });
   }
 

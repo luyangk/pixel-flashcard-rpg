@@ -162,12 +162,26 @@ export interface SettleDeps {
   params: Sm2Params;
 }
 
+/**
+ * 木桩练功的经验（Plan 7 · D46）：遭遇战经验的 **1/20**，**至少 1 点**。
+ *
+ * 为什么给经验：练功是真实作答，给一点正反馈（"练了一晚上总得留下点什么"）；
+ * 为什么给 1/20：配合"敌人不攻击、不判胜负"，任何更高的比例都会让升级变成零风险刷取
+ * （用户原话："能刷一百遍也算用户努力了"）。
+ */
+export function drillExpGained(encounterExp: number): number {
+  const base = typeof encounterExp === 'number' && Number.isFinite(encounterExp) && encounterExp > 0 ? encounterExp : 0;
+  return Math.max(1, Math.round(base / 20));
+}
+
 export interface SettleResult {
   /** 与入参 cards 同长度同顺序的新数组；未参战卡保持原引用。 */
   cards: Card[];
-  /** 本场经验：won 才发，按释放子计；lost 恒 0。落库义务在调用方（写进 progress.exp）。 */
+  /** 本场经验：won 才发，按释放子计；lost 恒 0；**drill 按 1/20 发**。落库义务在调用方。 */
   exp: number;
   won: boolean;
+  /** 是否是"木桩练功走完一遍"（Plan 7 · T2）：调用方据此不记局数、不写榜单。 */
+  cleared: boolean;
 }
 
 /**
@@ -184,16 +198,21 @@ export function settleFight(
   view: FightView,
   deps: SettleDeps,
 ): SettleResult {
-  if (!Array.isArray(cards)) return { cards: [], exp: 0, won: false };
+  if (!Array.isArray(cards)) return { cards: [], exp: 0, won: false, cleared: false };
   const state = view?.state;
   const pool = Array.isArray(view?.pool) ? view.pool : [];
   const won = state?.phase === 'won';
+  const drill = state?.mode === 'drill';
+  const cleared = state?.phase === 'cleared';
 
   const { consumedIds, released } = consumedAndRelease(state as BattleState, pool);
 
   const next = cards.map((c) => {
     if (c == null || !consumedIds.has(c.id)) return c; // 未参战/脏项：原样透传，SRS 零推进
-    return applyReview(c, deps.gradeOf(c), deps.nowMs, deps.tzOffsetMin, deps.params).card;
+    // 练功不计"有效复习日"（D46 的口径落在**这一处**，控制器与 UI 都不必再知道这件事）
+    return applyReview(c, deps.gradeOf(c), deps.nowMs, deps.tzOffsetMin, deps.params, {
+      countEffectiveDay: !drill,
+    }).card;
   });
 
   // 难度档（R-T3-p4-b 的 T8 兑现）：boss 局的经验必须按 boss 口径发——榜单那边
@@ -201,6 +220,7 @@ export function settleFight(
   // 同一局就会出现"记分算卷灵、发经验算遭遇"的两套账。档位是 view 的既有字段
   // （battleFlow.toView 带出，缺省 undefined = 遭遇战），故不需要新增参数。
   const difficulty = view?.difficulty === 'boss' ? 'boss' : 'encounter';
-  const exp = won ? victoryExp(released, difficulty) : 0;
-  return { cards: next, exp, won };
+  // 练功走完一遍也发经验（1/20，至少 1 点）；正常胜局照旧；败局 0。
+  const exp = cleared ? drillExpGained(victoryExp(released, 'encounter')) : won ? victoryExp(released, difficulty) : 0;
+  return { cards: next, exp, won, cleared };
 }

@@ -38,6 +38,8 @@ export type ControllerScreen = 'boot' | 'menu' | 'prologue' | 'prepare' | 'fight
  */
 export type RunSummary = Readonly<{
   won: boolean;
+  /** 本局形态（Plan 7 · T2）：`'drill'` = 木桩练功（结算屏与榜单/局数的分流依据）。 */
+  mode: 'fight' | 'drill';
   expGained: number;
   levelBefore: number;
   levelAfter: number;
@@ -90,6 +92,13 @@ export type GameIntent =
       deckIds?: string[];
       /** 缺省由控制器按是否首战决定（首战 = 教学局 tutorial）。 */
       difficulty?: 'tutorial' | 'encounter' | 'boss';
+      /**
+       * 显式卡池（Plan 7 · T2）：给定时**原样成池**（勾选结果），不经过 80/20 抽样；
+       * 空数组 ⇒ 与 `no-cards` 同一条引导（"一张能用的都没有"）。
+       */
+      cardIds?: string[];
+      /** 战斗形态（Plan 7 · T1）：`'drill'` = 木桩练功。缺省 `'fight'`。 */
+      mode?: 'fight' | 'drill';
     }
   | { type: 'answer'; grade: Grade }
   | { type: 'finish' }

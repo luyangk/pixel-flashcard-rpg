@@ -38,11 +38,19 @@ export function applyReview(
   nowMs: number,
   tzOffsetMin: number,
   params: Sm2Params,
+  opts: {
+    /**
+     * 是否把这次复习记进"有效复习日"账本（**Boss 达标口径**，Plan 7 · D46）。
+     * 缺省 `true`（既有调用方一字不改）；**木桩练功传 `false`** —— 练功照常推进 SRS，
+     * 但推不动卷灵达标（否则木桩成了零风险刷 Boss 的捷径）。
+     */
+    readonly countEffectiveDay?: boolean;
+  } = {},
 ): ReviewOutcome {
   const reviewedSrs = review(card.srs, grade, nowMs, params);
   const reviewedCard: Card = { ...card, srs: reviewedSrs };
   return {
-    card: recordEffectiveReview(reviewedCard, nowMs, tzOffsetMin),
+    card: opts.countEffectiveDay === false ? reviewedCard : recordEffectiveReview(reviewedCard, nowMs, tzOffsetMin),
     graded: grade,
     answeredAt: nowMs,
   };
