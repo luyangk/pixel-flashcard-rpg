@@ -1106,3 +1106,14 @@ h1 {
   padding: 0.85rem;
   border-color: var(--neon-cyan);
 }
+
+/* 练功屏卡行的「改」入口（Plan 8 · T7）：不抢戏的小按钮 */
+.practice-card [data-ui='card-edit'] {
+  grid-column: 2;
+  justify-self: start;
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+  border-color: var(--wash);
+}

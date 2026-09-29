@@ -33,6 +33,15 @@ export interface PracticeDeps {
   readonly quotaText?: () => string;
   /** 采新卡分区（Plan 8 · T6）：整块依赖面透传给 `mountPracticeCollect`。 */
   readonly collect?: Omit<CollectDeps, 'toastMs' | 'onQuotaChanged'>;
+  /**
+   * 就地改正一张卡的正/背面（Plan 8 · T7；宿主接 `app/library.updateCard`）。
+   * 缺省 ⇒ 卡行不显示「改」入口（不显示点了没反应的按钮）。
+   */
+  readonly updateCard?: (input: {
+    readonly cardId: string;
+    readonly front: string;
+    readonly back: string;
+  }) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
   /** 到期判定的时钟（缺省 0：一切都是"未到期"，测试要确定性就注入）。 */
   readonly now?: () => number;
   readonly tzOffsetMin?: number;
@@ -107,6 +116,14 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
   const picked = new Set<string>();
   /** 默认勾选时因池上限被截掉的张数（屏上如实说明）。 */
   let cappedOut = 0;
+  /** 正在就地编辑的那张卡（Plan 8 · T7；null = 没有行处于编辑态）。 */
+  let editingId: string | null = null;
+  /**
+   * 编辑草稿。**必须单独存**：每次渲染都会重建输入框，若 value 一律取自存档里的卡，
+   * 那么"保存失败后重绘"会把玩家刚敲的字擦掉（PR#15 当场抓到）。
+   */
+  let editDraft: { cardId: string; front: string; back: string } | null = null;
+  let savingEdit = false;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
@@ -290,16 +307,74 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
         }
         render(ctrl.snapshot());
       });
-      const row = h('div', { 'data-card-row': card.id, class: 'practice-card' }, [
-        check,
-        h('span', { class: 'practice-front' }, card.front ?? ''),
-        h('span', { class: 'practice-back' }, card.back ?? ''),
-        h(
-          'span',
-          { class: 'practice-meta' },
-          `${stabilityLabel(card)} · ${sourceLabel(card.source)} · ${dueLabel(card, tzOffsetMin)}`,
-        ),
-      ]);
+      const meta = `${stabilityLabel(card)} · ${sourceLabel(card.source)} · ${dueLabel(card, tzOffsetMin)}`;
+      const children: HTMLElement[] = [check];
+      if (editingId === card.id) {
+        // 就地编辑：正/背两个输入框 + 保存/取消。值取自**草稿**（不是存档），
+        // 并且每次输入都回写草稿 —— 这样"保存失败后的重绘"不会把玩家敲的字擦掉。
+        const draft =
+          editDraft !== null && editDraft.cardId === card.id
+            ? editDraft
+            : { cardId: card.id, front: card.front ?? '', back: card.back ?? '' };
+        editDraft = draft;
+        const frontInput = h('input', {
+          'data-card-edit-front': card.id,
+          class: 'candidate-input',
+          type: 'text',
+          value: draft.front,
+        }) as HTMLInputElement;
+        frontInput.addEventListener('input', () => {
+          if (editDraft !== null && editDraft.cardId === card.id) editDraft.front = frontInput.value;
+        });
+        const backInput = h('input', {
+          'data-card-edit-back': card.id,
+          class: 'candidate-input',
+          type: 'text',
+          value: draft.back,
+        }) as HTMLInputElement;
+        backInput.addEventListener('input', () => {
+          if (editDraft !== null && editDraft.cardId === card.id) editDraft.back = backInput.value;
+        });
+        const saveBtn = h(
+          'button',
+          { 'data-card-edit-save': card.id, class: 'collect-btn', type: 'button' },
+          savingEdit ? '保存中…' : '保存',
+        ) as HTMLButtonElement;
+        saveBtn.disabled = savingEdit;
+        saveBtn.addEventListener('click', () => void onSaveEdit(card.id, frontInput.value, backInput.value));
+        const cancelBtn = h(
+          'button',
+          { 'data-card-edit-cancel': card.id, class: 'collect-btn', type: 'button' },
+          '取消',
+        ) as HTMLButtonElement;
+        cancelBtn.addEventListener('click', () => {
+          if (savingEdit) return;
+          editingId = null;
+          editDraft = null;
+          render(ctrl.snapshot());
+        });
+        children.push(frontInput, backInput, h('div', { class: 'collect-row' }, [saveBtn, cancelBtn]));
+      } else {
+        children.push(
+          h('span', { class: 'practice-front' }, card.front ?? ''),
+          h('span', { class: 'practice-back' }, card.back ?? ''),
+          h('span', { class: 'practice-meta' }, meta),
+        );
+        if (typeof deps.updateCard === 'function') {
+          const editBtn = h(
+            'button',
+            { 'data-ui': 'card-edit', 'data-card-edit': card.id, class: 'collect-btn', type: 'button' },
+            '改',
+          ) as HTMLButtonElement;
+          editBtn.addEventListener('click', () => {
+            editingId = card.id;
+            editDraft = { cardId: card.id, front: card.front ?? '', back: card.back ?? '' };
+            render(ctrl.snapshot());
+          });
+          children.push(editBtn);
+        }
+      }
+      const row = h('div', { 'data-card-row': card.id, class: 'practice-card' }, children);
       cardListEl.appendChild(row);
     }
     const total = cards.length;
@@ -309,6 +384,31 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
     setHidden(capHintEl, cappedOut === 0);
     drillBtn.disabled = picked.size === 0 || typeof deps.onDrill !== 'function';
     drillBtn.textContent = picked.size === 0 ? '练这一域（先勾几张）' : `练这一域（${picked.size} 张）`;
+  }
+
+  /** 保存就地编辑：失败**保留输入**并如实提示（玩家刚敲的字不能丢）。 */
+  async function onSaveEdit(cardId: string, front: string, back: string): Promise<void> {
+    if (destroyed || savingEdit || typeof deps.updateCard !== 'function') return;
+    // **先把当前输入记进草稿**：保存可能失败，而失败后要原样还给玩家他刚敲的字。
+    // 只靠 input 事件同步草稿不够稳（程序化赋值/未来别的改动路径不会触发 input）。
+    editDraft = { cardId, front, back };
+    savingEdit = true;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.updateCard({ cardId, front, back });
+      if (!destroyed && res.ok) {
+        editingId = null;
+        editDraft = null;
+        toast('改好了。');
+      } else if (!destroyed) {
+        toast(res.reason ?? '没能保存这次修改。');
+      }
+    } catch (e) {
+      if (!destroyed) toast(`没能保存：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      savingEdit = false;
+      if (!destroyed) render(ctrl.snapshot());
+    }
   }
 
   function render(snap: ControllerSnapshot): void {

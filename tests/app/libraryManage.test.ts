@@ -14,7 +14,7 @@ import type { SaveFile } from '@core/types';
 import type { GameStorage } from '@platform/storage';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { validateSave } from '@core/saveMigrate';
-import { DECK_NAME_MAX, removeCard, removeDeck, renameDeck } from '../../src/app/library';
+import { DECK_NAME_MAX, addCard, removeCard, removeDeck, renameDeck, updateCard } from '../../src/app/library';
 import { createCoordinator, type Coordinator } from '../../src/app/persist';
 
 const NOW = Date.UTC(2026, 9, 28, 6, 0, 0);
@@ -171,5 +171,102 @@ describe('removeCard —— 删单张卡', () => {
 
     expect((await removeCard(coord, { cardId: 'c1' })).ok).toBe(false); // 已经删过了
     expect((await removeCard(coord, { cardId: '' })).ok).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 8 · T7 */
+
+/**
+ * updateCard —— 就地改正背面（Plan 8 · T7）。
+ *
+ * 为什么需要：`addCard` 只能加、`removeCard` 只能删，"看到错字只能删了重加"是这个功能
+ * 最别扭的地方（用户实测反馈里也点到过"不知道如何修改"）。
+ *
+ * 判别力：
+ * - UM#1 改完真的落盘、`flush` 后过 `validateSave`；
+ * - UM#2 同值不重写（写放大纪律）；
+ * - UM#3 空正面/空背面拒绝、卡不存在拒绝、只读态拒绝（与 addCard 同款闸门）；
+ * - UM#4 **新背面撞上某条干扰项 ⇒ 把那条剔掉**（否则选择题会出现"干扰项就是正确答案"）；
+ * - UM#5 改内容不动 SRS / 不动来源（改的是文案，不是学习进度）。
+ */
+describe('updateCard —— 就地改正背面（Plan 8 · T7）', () => {
+  async function makeOne() {
+    const { coord, writes, store } = await makeCoord();
+    const res = await addCard(coord, {
+      front: '唐朝开国皇帝是谁？',
+      back: '李渊',
+      deckId: 'd1',
+      id: 'u1',
+      nowMs: NOW,
+      choices: ['李世民', '杨坚', '赵匡胤'],
+    });
+    expect(res.ok).toBe(true);
+    return { coord, writes, store };
+  }
+
+  it('UM#1 改内容成功并落盘（过 validateSave）', async () => {
+    const { coord, store } = await makeOne();
+    const res = await updateCard(coord, { cardId: 'u1', front: '唐朝第一个皇帝是谁？', back: '李渊（唐高祖）' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.front).toBe('唐朝第一个皇帝是谁？');
+    expect(res.value.back).toBe('李渊（唐高祖）');
+    await coord.flush();
+    const disk = await store.load();
+    const card = disk?.cards.find((c) => c.id === 'u1');
+    expect(card?.back).toBe('李渊（唐高祖）');
+    expect(validateSave(disk).ok).toBe(true);
+  });
+
+  it('UM#2 同值不重写（不点亮 dirty）', async () => {
+    const { coord } = await makeOne();
+    await coord.flush();
+    const res = await updateCard(coord, { cardId: 'u1', front: '唐朝开国皇帝是谁？', back: '李渊' });
+    expect(res.ok).toBe(true);
+    expect(coord.dirty()).toBe(false);
+  });
+
+  it('UM#3 空值 / 卡不存在 / 只读态都拒绝且不写盘', async () => {
+    const { coord, store } = await makeOne();
+    await coord.flush();
+    const before = JSON.stringify(await store.load());
+
+    for (const bad of [
+      { cardId: 'u1', front: '   ', back: 'x' },
+      { cardId: 'u1', front: 'x', back: '' },
+      { cardId: 'nope', front: 'x', back: 'y' },
+      { cardId: '', front: 'x', back: 'y' },
+    ]) {
+      const res = await updateCard(coord, bad);
+      expect(res.ok, JSON.stringify(bad)).toBe(false);
+      if (!res.ok) expect(res.reason.length).toBeGreaterThan(0);
+    }
+    expect(JSON.stringify(await store.load())).toBe(before);
+
+    // 只读态：坏档 ⇒ 闩锁
+    const roStore = createMemoryStorage();
+    await roStore.save({ schemaVersion: 99 } as unknown as SaveFile);
+    const ro = await createCoordinator(roStore, { now: () => NOW, debounceMs: 0 });
+    const roRes = await updateCard(ro, { cardId: 'u1', front: 'x', back: 'y' });
+    expect(roRes.ok).toBe(false);
+    if (!roRes.ok) expect(roRes.reason.length).toBeGreaterThan(0);
+  });
+
+  it('UM#4 新背面撞上某条干扰项 ⇒ 那条被剔掉，其余保留', async () => {
+    const { coord } = await makeOne();
+    const res = await updateCard(coord, { cardId: 'u1', front: '唐朝开国皇帝是谁？', back: '李世民' });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // "李世民"原本是干扰项之一，现在成了正确答案 ⇒ 它不能继续当干扰项
+    expect(res.value.choices).toEqual(['杨坚', '赵匡胤']);
+  });
+
+  it('UM#5 改内容不动 SRS 与来源', async () => {
+    const { coord } = await makeOne();
+    const before = coord.snapshot().cards.find((c) => c.id === 'u1');
+    await updateCard(coord, { cardId: 'u1', front: '新正面', back: '新背面' });
+    const after = coord.snapshot().cards.find((c) => c.id === 'u1');
+    expect(after?.srs).toEqual(before?.srs);
+    expect(after?.source).toEqual(before?.source);
   });
 });

@@ -261,6 +261,54 @@ export async function removeDeck(
   return { ok: true, value: { cards: doomed } };
 }
 
+/**
+ * 就地改正一张卡的正/背面（Plan 8 · T7）。
+ *
+ * 为什么需要：`addCard` 只能加、`removeCard` 只能删 —— "看到错字只能删了重加"是本功能
+ * 最别扭的地方（用户实测反馈里点到过"不知道如何修改"）。写入闸门与 `addCard` 同款：
+ * 空值/卡不存在/只读态一律可上屏拒绝；**同值不重写**（写放大纪律）。
+ *
+ * 一处容易漏的连带：**新背面若撞上某条 `choices`（干扰项），那条必须剔掉** ——
+ * 否则将来的选择题会出现"干扰项就是正确答案"。其余 `choices` 原样保留。
+ * 改的是**文案**，所以 SRS 与来源一律不动。
+ */
+export async function updateCard(
+  coord: Coordinator,
+  input: { readonly cardId: string; readonly front: string; readonly back: string },
+): Promise<LibraryResult<Card>> {
+  if (!input || typeof input !== 'object') return { ok: false, reason: '改卡失败：没有拿到内容。' };
+  if (isBlank(input.cardId)) return { ok: false, reason: '改卡失败：没有指定是哪一张。' };
+  if (isBlank(input.front)) return { ok: false, reason: '正面不能是空的——写一句问题或提示吧。' };
+  if (isBlank(input.back)) return { ok: false, reason: '背面不能是空的——写一句答案吧。' };
+  if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
+
+  const front = input.front.trim();
+  const back = input.back.trim();
+  const existing = coord.snapshot().cards.find((c) => c && c.id === input.cardId);
+  if (existing === undefined) {
+    return { ok: false, reason: '这张卡已经不在了——刷新一下再看看。' };
+  }
+  if (existing.front === front && existing.back === back) {
+    return { ok: true, value: existing }; // 同值不重写
+  }
+
+  const keptChoices = (existing.choices ?? []).filter((c) => c !== back);
+  const next: Card = {
+    ...existing,
+    front,
+    back,
+    ...(keptChoices.length > 0 ? { choices: keptChoices } : {}),
+  };
+  // 干扰项被剔空 ⇒ 连字段一起去掉（"没有干扰项"与"空数组"是两回事，与 addCard 同口径）
+  if (keptChoices.length === 0) delete next.choices;
+
+  await coord.mutate((s) => {
+    const idx = s.cards.findIndex((c) => c && c.id === input.cardId);
+    if (idx >= 0) s.cards[idx] = next;
+  });
+  return { ok: true, value: next };
+}
+
 /** 删除单张卡（学习过程中发现某张卡写得不好时用）。 */
 export async function removeCard(
   coord: Coordinator,

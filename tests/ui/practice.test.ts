@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Card, SaveFile, SRSState } from '@core/types';
 import { mountPractice, DRILL_POOL_MAX, sourceLabel } from '../../src/ui/practice';
-import { all, click, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, ui } from './support';
+import { all, click, flushMicrotasks, makeCard, makeCtrl, makeDeck, makeRoot, makeSave, makeSnap, ui } from './support';
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -232,5 +232,82 @@ describe('mountPractice —— 分区切换（Plan 8 · T6）', () => {
 
     const bare = setup([card('c1')]);
     expect(ui(bare.root, 'practice-tabs').hidden).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ Plan 8 · T7 */
+
+/**
+ * 看旧卡就地编辑（Plan 8 · T7）。
+ *
+ * 判别力：
+ * - PR#13 注入写口才有「改」入口（缺省不显示点了没反应的按钮）；
+ * - PR#14 保存把**输入框里的值**交给写口，成功后回到只读态并刷新；
+ * - PR#15 保存失败**保留输入**并如实提示（清空/丢掉玩家刚敲的字是最恼人的失败）；
+ * - PR#16 取消不改动任何东西。
+ */
+describe('mountPractice —— 就地编辑（Plan 8 · T7）', () => {
+  it('PR#13 缺省不显示「改」；注入写口后显示', () => {
+    const bare = setup([card('c1')]);
+    openFirstDeck(bare.root);
+    expect(bare.root.querySelector('[data-ui="card-edit"]')).toBeNull();
+
+    const withEdit = setup([card('c1')], { updateCard: () => Promise.resolve({ ok: true }) });
+    openFirstDeck(withEdit.root);
+    expect(withEdit.root.querySelector('[data-ui="card-edit"]')).not.toBeNull();
+  });
+
+  it('PR#14 保存把输入框里的值交给写口，成功后回到只读态', async () => {
+    const calls: Array<{ cardId: string; front: string; back: string }> = [];
+    const { root } = setup([card('c1')], {
+      updateCard: (input) => {
+        calls.push({ ...input });
+        return Promise.resolve({ ok: true });
+      },
+    });
+    openFirstDeck(root);
+    click(root.querySelector('[data-ui="card-edit"]') as HTMLElement);
+    const front = root.querySelector('[data-card-edit-front]') as HTMLInputElement;
+    const back = root.querySelector('[data-card-edit-back]') as HTMLInputElement;
+    front.value = '改过的正面';
+    back.value = '改过的背面';
+    click(root.querySelector('[data-card-edit-save]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect(calls).toEqual([{ cardId: 'c1', front: '改过的正面', back: '改过的背面' }]);
+    expect(root.querySelector('[data-card-edit-front]')).toBeNull(); // 回到只读态
+    expect(ui(root, 'toast').textContent).toContain('改好了');
+  });
+
+  it('PR#15 保存失败保留输入并如实提示', async () => {
+    const { root } = setup([card('c1')], {
+      updateCard: () => Promise.resolve({ ok: false, reason: '存档无法读取（只读保护）。' }),
+    });
+    openFirstDeck(root);
+    click(root.querySelector('[data-ui="card-edit"]') as HTMLElement);
+    const front = root.querySelector('[data-card-edit-front]') as HTMLInputElement;
+    front.value = '我敲的字';
+    click(root.querySelector('[data-card-edit-save]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect(ui(root, 'toast').textContent).toContain('只读');
+    const stillThere = root.querySelector('[data-card-edit-front]') as HTMLInputElement | null;
+    expect(stillThere, '失败后必须留在编辑态（否则玩家刚敲的字就没了）').not.toBeNull();
+    expect(stillThere?.value).toBe('我敲的字');
+  });
+
+  it('PR#16 取消回到只读态，且不调写口', async () => {
+    let called = 0;
+    const { root } = setup([card('c1')], {
+      updateCard: () => {
+        called += 1;
+        return Promise.resolve({ ok: true });
+      },
+    });
+    openFirstDeck(root);
+    click(root.querySelector('[data-ui="card-edit"]') as HTMLElement);
+    click(root.querySelector('[data-card-edit-cancel]') as HTMLElement);
+    expect(root.querySelector('[data-card-edit-front]')).toBeNull();
+    expect(called).toBe(0);
   });
 });
