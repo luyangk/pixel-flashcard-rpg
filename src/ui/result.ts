@@ -58,6 +58,8 @@ export interface ResultHandle {
 
 const DEFAULT_FLASH_MS = 800;
 const DEFAULT_HOLD_MS = 1200;
+/** 木桩练功的结算文案（Plan 7 · T5 / D46）：不判胜负，只有"练了多少张"。 */
+const DRILL_OUTCOME = '练功完成';
 const REVEAL_TEXT = '假的。幸好你没记住它。';
 /**
  * 败局的一句"下一步"（终审 J-1/J-2：两处必败都没有任何解释与引导）。
@@ -132,6 +134,8 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
   ]);
 
   const loseHintEl = h('p', { 'data-ui': 'lose-hint', class: 'lose-hint', hidden: true }, LOSE_HINT);
+  // 木桩练功的结算行：不判胜负，只说"练了多少张"（练功的收束感来自这句，而不是胜/败）
+  const drillSummaryEl = h('p', { 'data-ui': 'drill-summary', class: 'drill-summary', hidden: true });
   const beatEl = h('p', { 'data-ui': 'beat', class: 'beat', hidden: true });
   const replayBtn = h('button', { 'data-ui': 'replay', class: 'replay-btn', type: 'button' }, '再来一场') as HTMLButtonElement;
   const menuBtn = h('button', { 'data-ui': 'to-menu', class: 'menu-btn', type: 'button' }, '回菜单') as HTMLButtonElement;
@@ -148,6 +152,7 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
   const screen = h('div', { 'data-ui': 'result-screen', class: 'result-screen' }, [
     summaryEl,
     emptyEl,
+    drillSummaryEl,
     loseHintEl,
     fakeEl,
     beatEl,
@@ -220,21 +225,27 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
     const res = snap.lastResult;
     setHidden(summaryEl, res === null);
     setHidden(emptyEl, res !== null);
+    const isDrill = res !== null && res.mode === 'drill';
     if (res) {
-      outcomeEl.textContent = res.won ? '胜' : '败';
+      // 木桩练功不判胜负（D46）：这里既不是"胜"也不是"败"，只说练了多少张
+      outcomeEl.textContent = isDrill ? DRILL_OUTCOME : res.won ? '胜' : '败';
       outcomeEl.setAttribute('data-won', String(res.won));
+      outcomeEl.setAttribute('data-mode', isDrill ? 'drill' : 'fight');
       expEl.textContent = `经验 +${res.expGained}`;
       levelEl.textContent = res.leveledUp
         ? `等级 ${res.levelBefore} → ${res.levelAfter}（升级！）`
         : `等级 ${res.levelAfter}`;
       statsEl.textContent = `出战 ${res.poolLen} 张 · 空转 ${res.misses} 次`;
+      drillSummaryEl.textContent = `练功完成：${res.poolLen} 张 · 经验 +${res.expGained}`;
     }
-    // 败局才有那句"下一步"（胜局不需要劝说）
-    setHidden(loseHintEl, !(res !== null && !res.won));
-    renderFake(res !== null && !res.won);
+    setHidden(drillSummaryEl, !isDrill);
+    // 败局才有那句"下一步"（胜局不需要劝说；**练功也不是败局** —— 练功不判胜负，
+    // 那句"回去背卡"的劝导对它是噪音）
+    setHidden(loseHintEl, !(res !== null && !res.won && !isDrill));
+    renderFake(res !== null && !res.won && !isDrill);
 
-    // 只胜局抽碎片（LORE §5.2；败局的叙事面是假记忆演出）
-    if (!beatDrawn && res !== null && res.won && beats.length > 0) {
+    // 只胜局抽碎片（LORE §5.2；败局的叙事面是假记忆演出；练功两者都不是）
+    if (!beatDrawn && res !== null && res.won && !isDrill && beats.length > 0) {
       beatDrawn = true; // 先置位：onBeatDrawn 抛错/重入都不该让下一次 render 再抽一句
       // 游标兜底读法：story 是必填位、validateSave 已保证在场，但渲染层不该因为一次脏快照
       // 而炸掉整屏。**只把 undefined 当 0**（"字段不在"），显式 null/负数/小数照旧交给
@@ -250,7 +261,7 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
     }
 
     // 败局 + 有素材 + 还没起过 ⇒ 起演出（挂载时判与后续推快照两条路共用）
-    if (!staged && res !== null && !res.won && fakes.length > 0) {
+    if (!staged && res !== null && !res.won && !isDrill && fakes.length > 0) {
       staged = true;
       scheduleNext();
     }

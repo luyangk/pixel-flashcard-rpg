@@ -137,13 +137,26 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
   const { ctrl, coord, store, now, tzOffsetMin } = deps;
 
   /* ------------------------------------------------------------ 上一局参数（「再来一场」） */
-  let last: { size: number; deckIds?: string[]; difficulty?: 'tutorial' | 'encounter' | 'boss' } = { size: 15 };
+  let last: {
+    size: number;
+    deckIds?: string[];
+    difficulty?: 'tutorial' | 'encounter' | 'boss';
+    /** Plan 7 · T5：「再练一次」要复用**同一批勾选的卡**与同一形态（drill）。 */
+    mode?: 'fight' | 'drill';
+    cardIds?: string[];
+  } = { size: 15 };
   const wrapped: GameController = {
     snapshot: () => ctrl.snapshot(),
     subscribe: (cb) => ctrl.subscribe(cb),
     intent: (i: GameIntent) => {
       if (i.type === 'startFight') {
-        last = { size: i.size, deckIds: i.deckIds ? [...i.deckIds] : undefined, difficulty: i.difficulty };
+        last = {
+          size: i.size,
+          deckIds: i.deckIds ? [...i.deckIds] : undefined,
+          difficulty: i.difficulty,
+          mode: i.mode,
+          cardIds: i.cardIds ? [...i.cardIds] : undefined,
+        };
       }
       return ctrl.intent(i);
     },

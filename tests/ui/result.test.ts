@@ -299,3 +299,60 @@ describe('mountResult —— 再来一场', () => {
     expect(ui(root, 'replay').hidden).toBe(true);
   });
 });
+
+/* ------------------------------------------------------------------ Plan 7 · T5 */
+
+/**
+ * 结算屏的木桩形态（Plan 7 · T5）。
+ *
+ * 判别力：
+ * - RS#D1 drill **不是"败"**：练功不判胜负 ⇒ 既不能显示「败」，也不能给"下一步"引导
+ *   （那句是劝败者回去背卡的，对练功是噪音），更不能演假记忆；
+ * - RS#D2 drill **不抽战报碎片**（碎片是"每胜一场"的叙事面，练功不是胜场）；
+ * - RS#D3 drill 照常显示练了多少张与经验（1/20 也要看得见，否则玩家以为白练了）。
+ */
+describe('mountResult —— 木桩练完（Plan 7 · T5）', () => {
+  const drillSummary = (over: Partial<RunSummary> = {}): RunSummary => ({
+    won: false,
+    mode: 'drill',
+    expGained: 1,
+    levelBefore: 1,
+    levelAfter: 2,
+    leveledUp: true,
+    misses: 2,
+    poolLen: 3,
+    ...over,
+  });
+
+  it('RS#D1 显示"练功完成"，且不显示「败」/「下一步」/假记忆', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'result', lastResult: drillSummary() }));
+    mountResult(root, ctrl, {
+      beats: ['混沌又退了一尺。'],
+      fakes: [pickFakes([makeCard('c1')], 1, { rng: mulberry32(1), wordTable: new Map([['唐朝', '宋朝']]) })[0]],
+    });
+    expect(ui(root, 'outcome').textContent).toContain('练功');
+    expect(ui(root, 'outcome').textContent).not.toBe('败');
+    expect(ui(root, 'lose-hint').hidden).toBe(true);
+    expect(ui(root, 'fake-memory').hidden).toBe(true);
+  });
+
+  it('RS#D2 不抽战报碎片（碎片是胜场的叙事面）', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'result', lastResult: drillSummary() }));
+    const drawn: number[] = [];
+    mountResult(root, ctrl, { beats: ['混沌又退了一尺。'], onBeatDrawn: (c) => drawn.push(c) });
+    expect(ui(root, 'beat').hidden).toBe(true);
+    expect(drawn).toEqual([]);
+  });
+
+  it('RS#D3 照常显示练了多少张与经验（+1 也要看得见）', () => {
+    const root = makeRoot();
+    const ctrl = makeCtrl(makeSnap({ screen: 'result', lastResult: drillSummary() }));
+    mountResult(root, ctrl, {});
+    expect(ui(root, 'exp').textContent).toContain('+1');
+    expect(ui(root, 'stats').textContent).toContain('3');
+    expect(ui(root, 'drill-summary').hidden).toBe(false);
+    expect(ui(root, 'drill-summary').textContent).toContain('练功完成');
+  });
+});

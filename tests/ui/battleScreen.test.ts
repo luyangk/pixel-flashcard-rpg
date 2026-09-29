@@ -836,3 +836,53 @@ describe('mountBattleScreen —— 问答模式（Plan 6 · T7）', () => {
     expect(hidden(bad.root, 'answer-choices')).toBe(false); // 仍在选择题形态
   });
 });
+
+/* ------------------------------------------------------------------ Plan 7 · T5 */
+
+/**
+ * 战斗屏的木桩形态（Plan 7 · T5）。
+ *
+ * 判别力：
+ * - BS#D1 drill 时敌人标签是「练功木桩 · 耐久 ∞」（照显示"敌 70"会让人以为木桩在掉血）；
+ * - BS#D2 drill **不显示教学局提示**（它按遭遇战参数走，但不是首战教学局）；
+ * - BS#D3 fight 分支照旧（对照组，防"一刀切成都显示木桩"）。
+ */
+describe('mountBattleScreen —— 木桩形态（Plan 7 · T5）', () => {
+  const drillSave = (): SaveFile => makeSave();
+  function drillSnap(): ControllerSnapshot {
+    const f0 = makeFight(0, []);
+    return makeSnap({ save: drillSave(), fight: { ...f0, state: { ...f0.state, mode: 'drill' } } });
+  }
+
+  it('BS#D1 drill 显示木桩标签与「耐久 ∞」，且不出现敌方数字', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    h.ctrl.push(drillSnap());
+
+    expect(hidden(h.root, 'dummy-label')).toBe(false);
+    expect(text(h.root, 'dummy-label')).toContain('练功木桩');
+    expect(text(h.root, 'dummy-label')).toContain('耐久');
+    expect(text(h.root, 'hp')).toContain('我方');
+    expect(text(h.root, 'hp')).not.toMatch(/敌 \d/);
+  });
+
+  it('BS#D2 drill 不显示教学局提示（它不是首战教学局）', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    h.ctrl.push(drillSnap());
+    expect(hidden(h.root, 'tutorial-hint')).toBe(true);
+    // 对照：教学局照旧显示
+    const t = setup();
+    mountBattleScreen(t.root, t.ctrl, t.deps);
+    const f0 = makeFight(0, []);
+    t.ctrl.push(makeSnap({ fight: { ...f0, difficulty: 'tutorial' } }));
+    expect(hidden(t.root, 'tutorial-hint')).toBe(false);
+  });
+
+  it('BS#D3 fight 分支照旧：没有木桩标签，敌方是数字', () => {
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    expect(hidden(h.root, 'dummy-label')).toBe(true);
+    expect(text(h.root, 'hp')).toMatch(/敌 \d/);
+  });
+});

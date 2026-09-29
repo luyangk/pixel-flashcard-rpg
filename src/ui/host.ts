@@ -172,7 +172,10 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
       }
       case 'result': {
         const pool = snap.fight?.pool ?? [];
-        const lost = snap.lastResult !== null && !snap.lastResult.won;
+        // 只有**真正的败局**才演假记忆：木桩练功不会输（Plan 7 · D46），
+        // 给它演"记忆开始褪色"是纯噪音（清单 #5）。终局判定落在宿主这一处。
+        const lost =
+          snap.lastResult !== null && !snap.lastResult.won && snap.lastResult.mode !== 'drill';
         // 假记忆素材在**挂屏这一刻**生成（纯演出、零数值后果；宿主决定条数上限 2）
         const fakes = lost && deps.wordTable ? pickFakes([...pool], 2, { rng: deps.rng, wordTable: deps.wordTable }) : [];
         return mountResult(root, ctrl, {

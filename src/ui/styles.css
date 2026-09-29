@@ -910,3 +910,18 @@ h1 {
 .verdict [data-ui='verdict-result'][data-verdict-kind='unknown'] {
   color: var(--paper-dim);
 }
+
+/* 木桩练功的敌人标签（Plan 7 · T5）：木色，与敌人血条口径区分开 */
+.dummy-label {
+  font-size: 0.85rem;
+  color: #c8a165;
+  letter-spacing: 0.05em;
+}
+
+/* 木桩练功的结算行（Plan 7 · T5）：中性色，不带胜负色彩 */
+.drill-summary {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+  color: #c8a165;
+  letter-spacing: 0.04em;
+}

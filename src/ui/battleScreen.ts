@@ -60,6 +60,8 @@ const UNKNOWN_PREFIX = '没判成 —— ';
 const MODE_TO_QA_TEXT = '换成问答模式';
 const MODE_TO_CHOICE_TEXT = '换回选择题';
 const UNKNOWN_RESULT = '这题没判成';
+/** 木桩练功的敌人标签（Plan 7 · T5）：练功不判胜负，所以不显示"敌 N"这种血量口径。 */
+const DUMMY_LABEL = '练功木桩 · 耐久 ∞';
 
 const DEFAULT_BANNER_TEXT = '只读模式：存档当前不可写，本局的改动不会保存';
 const MISS_HINT_TEXT = '空转 —— 这题没想起来，怪物纹丝不动';
@@ -169,6 +171,7 @@ export function mountBattleScreen(
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const hpEl = h('div', { 'data-ui': 'hp', class: 'hp' });
+  const dummyLabelEl = h('div', { 'data-ui': 'dummy-label', class: 'dummy-label', hidden: true }, DUMMY_LABEL);
   const stageHost = h('div', {
     'data-ui': 'stage-host',
     class: 'stage-host',
@@ -297,6 +300,7 @@ export function mountBattleScreen(
 
   const screen = h('div', { 'data-ui': 'battle-screen', class: 'battle-screen' }, [
     hpEl,
+    dummyLabelEl,
     tutorialHintEl,
     quitBtn,
     stageHost,
@@ -563,8 +567,13 @@ export function mountBattleScreen(
     const fresh = fight ? newEvents(fight.state.log) : ((seenLogLen = 0), EMPTY_EVENTS);
     renderCard(snap);
 
+    const isDrill = fight?.state.mode === 'drill';
+    setHidden(dummyLabelEl, !isDrill);
     if (fight) {
-      hpEl.textContent = `我方 ${fight.state.playerHp}/${fight.state.maxPlayerHp} · 敌 ${fight.state.enemyHp}`;
+      // drill 没有"敌血"这回事（引擎里锁住了）：显示"敌 70"会让人以为木桩在掉血
+      hpEl.textContent = isDrill
+        ? `我方 ${fight.state.playerHp}/${fight.state.maxPlayerHp}`
+        : `我方 ${fight.state.playerHp}/${fight.state.maxPlayerHp} · 敌 ${fight.state.enemyHp}`;
     } else {
       hpEl.textContent = '';
     }

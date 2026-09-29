@@ -481,3 +481,75 @@ describe('mountHost —— AI 依赖透传到四屏（HS#11）', () => {
     expect(resets).toBe(1);
   });
 });
+
+/* ------------------------------------------------------------------ Plan 7 · T5 */
+
+/**
+ * 宿主侧：木桩练功不演假记忆（Plan 7 · T5）。
+ *
+ * 判别力：只要 `!won` 就演假记忆的实现 ⇒ 练完一局木桩会看到"记忆开始褪色"（纯噪音，
+ * 而且与"练功不会输"的设定矛盾）。
+ */
+describe('mountHost —— 木桩练完不演假记忆（Plan 7 · T5）', () => {
+  /**
+   * 计数用的词表：`pickFakes`/`tamperWord` 只要真的开始挑素材就会**遍历**这张表。
+   *
+   * 为什么必须看"有没有遍历"而不是"假记忆区可不可见"：result.ts 自己也有一道
+   * `!isDrill` 的闸门 ⇒ 宿主漏判 mode 时屏上照样不显示，**可见性看不见这个 bug**
+   * （变异实测：M4 首版因此没牙）。真正要钉的是"练功压根不去生成假记忆素材"。
+   */
+  function countingWordTable(pairs: Array<[string, string]>) {
+    const inner = new Map(pairs);
+    let walks = 0;
+    return {
+      walks: () => walks,
+      table: {
+        [Symbol.iterator]: () => {
+          walks += 1;
+          return inner[Symbol.iterator]();
+        },
+      } as unknown as ReadonlyMap<string, string>,
+    };
+  }
+
+  it('HS#D1 lastResult.mode=drill ⇒ 不挂假记忆；fight 败局照旧挂', () => {
+    const cases: Array<{ mode: 'fight' | 'drill'; expectFake: boolean }> = [
+      { mode: 'drill', expectFake: false },
+      { mode: 'fight', expectFake: true },
+    ];
+    for (const c of cases) {
+      const root = makeRoot();
+      const base = makeSave();
+      // 素材里必须真的含可替换的词，否则 pickFakes 回空数组 ⇒ 这条用例对"漏了 mode 判断"
+      // 的实现没有区分力（变异实测发现的假绿：M4 首版没牙）
+      // 篡改发生在**背面**（tamperWord 只扫 card.back）⇒ 词必须放在 back 里
+      const pool = [makeCard('c1', { front: '开国皇帝是谁？', back: '唐朝的李渊' })];
+      const ctrl = makeCtrl(
+        makeSnap({
+          screen: 'result',
+          save: { ...base, settings: { ...base.settings, story: { prologueSeen: true, beatIndex: 0, arcSeen: 0 } } },
+          fight: { state: { pool: ['c1'] } as never, pool, current: null },
+          lastResult: {
+            won: false,
+            mode: c.mode,
+            expGained: c.mode === 'drill' ? 1 : 0,
+            levelBefore: 1,
+            levelAfter: 1,
+            leveledUp: false,
+            misses: 1,
+            poolLen: 1,
+          },
+        }),
+      );
+      const spy = countingWordTable([['唐朝', '宋朝']]);
+      const { deps } = adapters({ wordTable: spy.table });
+      mountHost(root, ctrl, deps);
+      expect(root.querySelector('[data-ui="result-screen"]')).not.toBeNull();
+      const fakeHidden = (ui(root, 'fake-memory') as HTMLElement).hidden;
+      expect(fakeHidden, `${c.mode} 的假记忆显隐`).toBe(!c.expectFake);
+      // drill：**一次都不该去挑素材**（非 0 即证明宿主漏了 mode 判断）
+      expect(spy.walks() > 0, `${c.mode} 是否真的挑过假记忆素材`).toBe(c.expectFake);
+      document.body.replaceChildren();
+    }
+  });
+});
