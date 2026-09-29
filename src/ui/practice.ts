@@ -18,6 +18,7 @@ import { localDayString } from '@core/reviewLedger';
 import type { Card, SourceInfo } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import { h, setHidden } from './dom';
+import { mountPracticeCollect, type CollectDeps } from './practiceCollect';
 import { showToast } from './toast';
 
 /** 练功池上限（与 bossFightParams 的 min(卡数,25) 同口径）。 */
@@ -30,6 +31,8 @@ export interface PracticeDeps {
   readonly onDrill?: (input: { readonly cardIds: readonly string[] }) => void;
   /** 「今日新知识额度」那一行（Plan 8 用；缺省则不显示）。 */
   readonly quotaText?: () => string;
+  /** 采新卡分区（Plan 8 · T6）：整块依赖面透传给 `mountPracticeCollect`。 */
+  readonly collect?: Omit<CollectDeps, 'toastMs' | 'onQuotaChanged'>;
   /** 到期判定的时钟（缺省 0：一切都是"未到期"，测试要确定性就注入）。 */
   readonly now?: () => number;
   readonly tzOffsetMin?: number;
@@ -108,6 +111,10 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
   /* ------------------------------------------------------------ DOM 外壳 */
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
   backBtn.addEventListener('click', () => {
+    if (tab === 'collect') {
+      setTab('browse');
+      return;
+    }
     if (openDeckId !== null) {
       // 在卡列表里 ⇒ 先回领域列表（两段式返回，别把玩家一步弹回主菜单）
       openDeckId = null;
@@ -161,12 +168,30 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
     '卡库里还没有卡片。先去卡组页加几张，或者在计划里的「采新卡」里采一批。',
   );
 
+  /* ------------------------------------------------------------ 分区切换（看旧卡 / 采新卡） */
+  let tab: 'browse' | 'collect' = 'browse';
+  const tabBrowseBtn = h('button', { 'data-ui': 'tab-browse', class: 'tab-btn', type: 'button' }, '看旧卡') as HTMLButtonElement;
+  const tabCollectBtn = h('button', { 'data-ui': 'tab-collect', class: 'tab-btn', type: 'button' }, '采新卡') as HTMLButtonElement;
+  const tabsEl = h('div', { 'data-ui': 'practice-tabs', class: 'tabs' }, [tabBrowseBtn, tabCollectBtn]);
+  const collectHostEl = h('div', { 'data-ui': 'collect-host', class: 'collect-host', hidden: true });
+  let collectHandle: { unmount(): void } | null = null;
+
+  function setTab(next: 'browse' | 'collect'): void {
+    if (tab === next) return;
+    tab = next;
+    render(ctrl.snapshot());
+  }
+  tabBrowseBtn.addEventListener('click', () => setTab('browse'));
+  tabCollectBtn.addEventListener('click', () => setTab('collect'));
+
   const screen = h('div', { 'data-ui': 'practice-screen', class: 'practice-screen' }, [
     headerEl,
     quotaEl,
+    tabsEl,
     emptyEl,
     deckListEl,
     cardsEl,
+    collectHostEl,
   ]);
   root.appendChild(screen);
 
@@ -288,9 +313,30 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
 
   function render(snap: ControllerSnapshot): void {
     const cards = Array.isArray(snap.save?.cards) ? snap.save.cards : [];
-    setHidden(emptyEl, cards.length > 0);
-    setHidden(cardsEl, openDeckId === null);
-    setHidden(deckListEl, openDeckId !== null);
+    const collecting = tab === 'collect';
+    // 采新卡分区：进入时才挂（省一次清单读取），离开即拆（子分区自己订阅快照）
+    if (collecting && collectHandle === null && deps.collect !== undefined && deps.collect !== null) {
+      collectHandle = mountPracticeCollect(collectHostEl, ctrl, {
+        ...deps.collect,
+        toastMs: deps.toastMs,
+        now: deps.now,
+        // 额度在存档里，而写它的人是宿主：子分区生成/入库后回调这里重渲染额度行
+        onQuotaChanged: () => render(ctrl.snapshot()),
+      });
+    }
+    if (!collecting && collectHandle !== null) {
+      collectHandle.unmount();
+      collectHandle = null;
+    }
+    setHidden(collectHostEl, !collecting);
+    // 注入口是个**对象**（一组依赖），不是函数 —— 首版按 typeof === 'function' 判，
+    // 于是"注入了也永远不显示分区条"（PR#12 当场抓到）
+    setHidden(tabsEl, deps.collect === undefined || deps.collect === null);
+    tabBrowseBtn.setAttribute('aria-pressed', String(!collecting));
+    tabCollectBtn.setAttribute('aria-pressed', String(collecting));
+    setHidden(emptyEl, cards.length > 0 || collecting);
+    setHidden(cardsEl, collecting || openDeckId === null);
+    setHidden(deckListEl, collecting || openDeckId !== null);
     if (typeof deps.quotaText === 'function') {
       quotaEl.textContent = deps.quotaText();
       setHidden(quotaEl, false);
@@ -309,6 +355,8 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
   function destroy(): void {
     if (destroyed) return;
     destroyed = true;
+    collectHandle?.unmount();
+    collectHandle = null;
     unsubscribe();
     if (toastOff) {
       toastOff();

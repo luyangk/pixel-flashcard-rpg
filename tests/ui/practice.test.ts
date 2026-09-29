@@ -190,3 +190,47 @@ describe('mountPractice —— 看旧卡（Plan 7 · T6）', () => {
     expect(navs).toEqual(['menu']);
   });
 });
+
+/* ------------------------------------------------------------------ Plan 8 · T6 */
+
+/**
+ * 练功屏的分区切换（Plan 8 · T6）：看旧卡 / 采新卡。
+ *
+ * 判别力：注入 `collect` 才显示分区条（缺省 = 不显示点了没反应的入口）；
+ * 切到采新卡时**旧卡区整块收起**（两个分区不能同时占屏，否则玩家以为要两边都做）。
+ */
+describe('mountPractice —— 分区切换（Plan 8 · T6）', () => {
+  const collectDeps = {
+    collectCards: () =>
+      Promise.resolve({
+        ok: true as const,
+        candidates: [],
+        quota: { day: '2026-11-01', cards: 0, judges: 0 },
+        requests: 0,
+        truncated: false,
+      }),
+  };
+
+  it('PR#12 注入采新卡 ⇒ 显示分区条并可切换；缺省则不显示', () => {
+    const withCollect = setup([card('c1')], { collect: collectDeps });
+    const tabs = ui(withCollect.root, 'practice-tabs');
+    expect(tabs.hidden).toBe(false);
+    expect(ui(withCollect.root, 'tab-browse').getAttribute('aria-pressed')).toBe('true');
+
+    click(ui(withCollect.root, 'tab-collect'));
+    expect(ui(withCollect.root, 'tab-collect').getAttribute('aria-pressed')).toBe('true');
+    expect(ui(withCollect.root, 'practice-deck-view').hidden).toBe(true); // 旧卡区收起
+    expect(ui(withCollect.root, 'practice-decks').hidden).toBe(true);
+    expect(ui(withCollect.root, 'collect-host').hidden).toBe(false);
+    // 用 querySelector 判"在不在"：`ui()` 在缺元素时会**抛**，拿它做"不存在"的断言必然自相矛盾
+    expect(withCollect.root.querySelector('[data-ui="practice-collect"]')).not.toBeNull(); // 子分区真的挂上了
+
+    click(ui(withCollect.root, 'tab-browse'));
+    expect(ui(withCollect.root, 'collect-host').hidden).toBe(true);
+    expect(ui(withCollect.root, 'practice-decks').hidden).toBe(false);
+    expect(withCollect.root.querySelector('[data-ui="practice-collect"]')).toBeNull(); // 离开即拆
+
+    const bare = setup([card('c1')]);
+    expect(ui(bare.root, 'practice-tabs').hidden).toBe(true);
+  });
+});

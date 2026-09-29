@@ -989,3 +989,120 @@ h1 {
   border-color: #c8a165;
   background: linear-gradient(180deg, var(--ink-700), var(--ink-800));
 }
+
+/* ------------------------------------ 练功屏：分区与采新卡（Plan 8 · T6） */
+.tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.tab-btn {
+  flex: 1 1 0;
+  min-height: 2.4rem;
+}
+
+.tab-btn[aria-pressed='true'] {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+}
+
+.collect-host,
+.practice-collect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.collect-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.collect-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--paper);
+}
+
+.collect-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.collect-label {
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+}
+
+.collect-input,
+.collect-text,
+.collect-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.collect-text {
+  min-height: 5rem;
+  line-height: 1.6;
+}
+
+.ingest-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* 条目：整行可点（"进入一层"的主操作） */
+.ingest-link {
+  text-align: left;
+  min-height: 2.4rem;
+  font-size: 0.9rem;
+}
+
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.inbox-item {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.inbox-title {
+  flex: 1 1 8rem;
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+  word-break: break-all;
+}
+
+.cand-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.candidate {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.5rem;
+}
+
+.candidate .candidate-input:last-child {
+  grid-column: 2;
+}
+
+.collect-save {
+  font-size: 1.05rem;
+  padding: 0.85rem;
+  border-color: var(--neon-cyan);
+}
