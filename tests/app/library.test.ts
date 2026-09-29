@@ -12,11 +12,11 @@
  *   落盘自检会整包拒 ⇒ dirty 永久为真、此后任何改动都写不进（T7 评审判 I-2）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SaveFile } from '@core/types';
+import type { Card, SaveFile } from '@core/types';
 import type { GameStorage } from '@platform/storage';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { validateSave } from '@core/saveMigrate';
-import { addCard, addDeck } from '../../src/app/library';
+import { addCard, addDeck, setCardChoices } from '../../src/app/library';
 import { SaveReadOnlyError, createCoordinator, type Coordinator } from '../../src/app/persist';
 
 const NOW = Date.UTC(2026, 9, 27, 4, 0, 0);
@@ -364,5 +364,59 @@ describe('addCard —— 干扰项 choices（Plan 6 · T5）', () => {
     const got = res.value.choices?.[0] ?? '';
     expect(Array.from(got).length).toBe(200);
     expect(validateSave(coord.snapshot()).ok).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ D56：只改选项的写口 */
+
+/**
+ * 判别力：
+ * - LB#D1 只改 `choices`：正/背与 SRS 一字不动（"重出选项"不该动内容）；
+ * - LB#D2 脏值（全空/全非字符串）⇒ **整条拒绝**？—— 口径是"清空"也有意义（等于没有干扰项），
+ *   所以空数组**允许**并落成"缺席"（与 LB#C2 同款：缺席 = 没有干扰项）；
+ * - LB#D3 与现值相同 ⇒ 不写存储（幂等：省一次落盘、也免得把 savedAt 刷来刷去）。
+ */
+describe('app/library —— setCardChoices（D56）', () => {
+  /** 复用文件里既有的 makeCoord/seed 夹具（别另起一套：两套夹具必然有一天分叉）。 */
+  async function rig(): Promise<{ coord: Coordinator; writes: () => number }> {
+    const { coord, writes } = await makeCoord(seed());
+    await addCard(coord, { front: 'F', back: 'B', deckId: 'deck-a', id: 'c1', nowMs: NOW, sourceType: 'manual' });
+    await coord.flush();
+    return { coord, writes };
+  }
+  const cardOf = (coord: Coordinator, id: string): Card | undefined =>
+    coord.snapshot().cards.find((c) => c && c.id === id);
+
+  it('LB#D1 只改 choices：正/背与稳定度一字不动', async () => {
+    const { coord } = await rig();
+    const before = cardOf(coord, 'c1');
+    const res = await setCardChoices(coord, { cardId: 'c1', choices: ['错一', '错二', '错三'] });
+    expect(res.ok).toBe(true);
+    const after = cardOf(coord, 'c1');
+    expect(after?.choices).toEqual(['错一', '错二', '错三']);
+    expect(after?.front).toBe(before?.front);
+    expect(after?.back).toBe(before?.back);
+    expect(after?.srs).toEqual(before?.srs);
+  });
+
+  it('LB#D2 清空（空数组）⇒ 落成"缺席"（没有干扰项，不是空数组）', async () => {
+    const { coord } = await rig();
+    await setCardChoices(coord, { cardId: 'c1', choices: ['x'] });
+    expect(cardOf(coord, 'c1')?.choices).toEqual(['x']);
+    await setCardChoices(coord, { cardId: 'c1', choices: [] });
+    expect(cardOf(coord, 'c1')?.choices).toBeUndefined();
+  });
+
+  it('LB#D3 找不到卡 ⇒ 如实拒绝且零写入；同值 ⇒ 不写存储', async () => {
+    const { coord, writes } = await rig();
+    const miss = await setCardChoices(coord, { cardId: 'nope', choices: ['a'] });
+    expect(miss.ok).toBe(false);
+
+    await setCardChoices(coord, { cardId: 'c1', choices: ['a'] });
+    await coord.flush();
+    const w0 = writes();
+    await setCardChoices(coord, { cardId: 'c1', choices: ['a'] }); // 同值
+    await coord.flush();
+    expect(writes()).toBe(w0);
   });
 });

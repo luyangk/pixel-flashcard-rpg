@@ -315,6 +315,44 @@ export async function updateCard(
   return { ok: true, value: next };
 }
 
+/**
+ * 只换一张卡的干扰项（D56「重出选项」）—— 正/背、SRS、来源一律不动。
+ *
+ * 为什么单独开一个写口而不是复用 `updateCard`：那个口的语义是"改文案"（front/back 必填），
+ * 而这里只动 `choices`；混在一起会让"空背面=拒绝"这类闸门误伤重出选项这条路。
+ * 口径与 `addCard`/`updateCard` 同款：卡不存在 / 只读态一律可上屏拒绝；
+ * **同值不重写**；**空数组 = 去掉干扰项**（"没有干扰项"与"空数组"是两回事）。
+ */
+export async function setCardChoices(
+  coord: Coordinator,
+  input: { readonly cardId: string; readonly choices: readonly string[] },
+): Promise<LibraryResult<Card>> {
+  if (!input || typeof input !== 'object') return { ok: false, reason: '重出选项失败：没有拿到内容。' };
+  if (isBlank(input.cardId)) return { ok: false, reason: '重出选项失败：没有指定是哪一张。' };
+  if (coord.readOnly()) return { ok: false, reason: READ_ONLY_LIBRARY_REASON };
+
+  const existing = coord.snapshot().cards.find((c) => c && c.id === input.cardId);
+  if (existing === undefined) return { ok: false, reason: '这张卡已经不在了——刷新一下再看看。' };
+
+  const back = typeof existing.back === 'string' ? existing.back.trim() : '';
+  // 消毒与生成侧同一口径（core 的单一真相）：去掉空白、与答案相同的、重复的
+  const cleaned = sanitizeChoices(input.choices, back);
+  const before = existing.choices ?? [];
+  if (cleaned.length === before.length && cleaned.every((c, i) => c === before[i])) {
+    return { ok: true, value: existing }; // 同值不重写
+  }
+
+  const next: Card = { ...existing };
+  if (cleaned.length > 0) next.choices = cleaned;
+  else delete next.choices;
+
+  await coord.mutate((s) => {
+    const idx = s.cards.findIndex((c) => c && c.id === input.cardId);
+    if (idx >= 0) s.cards[idx] = next;
+  });
+  return { ok: true, value: next };
+}
+
 /** 删除单张卡（学习过程中发现某张卡写得不好时用）。 */
 export async function removeCard(
   coord: Coordinator,

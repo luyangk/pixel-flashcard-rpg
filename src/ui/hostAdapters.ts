@@ -28,7 +28,7 @@ import { checkForUpdate, pageBuild, reloadPage } from '../platform/pwaUpdate';
 import { fetchPage, type PageFetchResult } from '../platform/pageFetch';
 import { bossFightParams, setBossName } from '../app/bossFlow';
 import { setEggOnDeck } from '../app/codexFlow';
-import { judgeAnswer, suggestBossNames, suggestCards, suggestEgg, type ChatFn } from '../app/llmFlow';
+import { judgeAnswer, suggestBossNames, suggestCards, suggestChoices, suggestEgg, type ChatFn } from '../app/llmFlow';
 import type { GameController, GameIntent } from '../app/controllerTypes';
 import type { Coordinator } from '../app/persist';
 import {
@@ -42,8 +42,8 @@ import {
 import { saveBeatCursor } from '../app/storyState';
 import { ingestUrl } from '../app/ingestFlow';
 import { collectCards } from '../app/knowledgeFlow';
-import { updateCard } from '../app/library';
-import { DAILY_CARD_CAP, DAILY_JUDGE_CAP, planJudge, remainingCards, remainingJudges } from '../app/quota';
+import { setCardChoices, updateCard } from '../app/library';
+import { DAILY_CARD_CAP, DAILY_JUDGE_CAP, planCharge, planJudge, remainingCards, remainingJudges } from '../app/quota';
 import { resetSave } from '../app/resetFlow';
 import { exportAndMark, importBackupAndSave } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
@@ -124,6 +124,8 @@ export interface AssembleDeps {
   readonly feedFetchImpl?: FetchLike;
   /** 来源库口径（测试用；生产接 platform/feedFetch + platform/sourceStore）。 */
   readonly sourcesOverride?: HostAdapters['sources'];
+  /** 「重出选项」口径（测试用；生产接 llmFlow.suggestChoices + library.setCardChoices + 额度记账）。 */
+  readonly refreshChoicesOverride?: HostAdapters['refreshChoices'];
   /** 「关于」口径（测试用；生产接 platform/pwaUpdate）。 */
   readonly pwaOverride?: HostAdapters['pwa'];
   /**
@@ -437,6 +439,32 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         }
         await setLlmQuota(coord, plan.quota);
         return judgeAnswer({ chat: boundChat() }, input);
+      }),
+
+    /**
+     * 「重出选项」（D56）：**先记后做**（与判卷同款纪律）—— 一次真实调用 = 1 张卡的额度。
+     *
+     * 为什么记在**卡片**额度上：它不产出卡，但它是"知识准备"这条路上的开销，和辅建卡/采新卡
+     * 共用同一本账最省心（也挡住"连点重出把额度当免费"的用法）。到顶时不调用，如实回原因。
+     */
+    refreshChoices:
+      deps.refreshChoicesOverride ??
+      (async ({ cardId }) => {
+        const snap = coord.snapshot();
+        const card = snap.cards.find((c) => c && c.id === cardId);
+        if (card === undefined) return { ok: false as const, reason: '这张卡已经不在了——刷新一下再看看。' };
+        const deckName = snap.decks.find((d) => d && d.id === card.deckId)?.name ?? '';
+        const charge = planCharge(coord.snapshot().settings.llmQuota, 1, now(), tzOffsetMin);
+        // `planCharge` 是**预留**（当场记账）：granted === 0 就是"今天一张都不剩了"，不必调用
+        if (charge.granted < 1) {
+          return { ok: false as const, reason: `今天的新知识额度用完了（${DAILY_CARD_CAP} 张），明天再来。` };
+        }
+        await setLlmQuota(coord, charge.quota);
+        const res = await suggestChoices({ chat: boundChat() }, { front: card.front ?? '', back: card.back ?? '', deckName });
+        if (!res.ok) return { ok: false as const, reason: res.reason };
+        const saved = await setCardChoices(coord, { cardId, choices: res.choices });
+        if (!saved.ok) return { ok: false as const, reason: saved.reason };
+        return { ok: true as const, choices: res.choices };
       }),
   };
 

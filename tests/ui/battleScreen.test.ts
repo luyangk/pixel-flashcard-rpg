@@ -44,7 +44,9 @@ function makeSave(): SaveFile {
   return {
     schemaVersion: 1,
     decks,
-    cards: [makeCard('c1')],
+    // 档里必须有**战斗池那几张卡**：干扰项现在只从"同一领域的卡"里取（D56），
+    // 而生产里本局池本来就是存档的子集 —— 夹具也必须是自洽的（缺了就成了"同领域无卡"）
+    cards: [makeCard('c1'), makeCard('c2'), makeCard('c3')],
     settings: {
       bossThresholdTier: 30,
       sm2Params: { initialEase: 2.5, minEase: 1.3, firstInterval: 10 / 60, secondInterval: 6 },
@@ -614,6 +616,50 @@ describe('mountBattleScreen —— 选择题与判定面板（Plan 6 · T6）', 
     expect(h.ctrl.intents).toHaveLength(0);
     verdictBtn(h.root, 'verdict-continue').click();
     expect(h.ctrl.intents).toEqual([{ type: 'answer', grade: GRADES.again }]);
+  });
+
+  it('BS#A11 干扰项只取**同领域**：别的领域的卡背面不许出现在选项里（D56）', () => {
+    // 现场症状：多领域合练时，生活常识的题里出现了 AI 领域的选项 ——
+    // 因为旧实现把**本局池里所有卡**都当成了干扰项来源。
+    const bio: Card = { ...makeCard('bio'), deckId: 'deck-a', back: '血红蛋白含铁，结合氧后呈红色' };
+    const ai: Card = { ...makeCard('ai'), deckId: 'deck-b', back: 'Agent 开始胡言乱语并编造工具返回结果' };
+    const other: Card = { ...makeCard('other'), deckId: 'deck-b', back: '工具的开源协议类型' };
+    const state: BattleState = { ...makeFight(0, []).state, pool: ['bio', 'ai', 'other'] };
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    h.ctrl.push(
+      makeSnap({
+        fight: { state, pool: [bio, ai, other], current: bio },
+        // 存档里 deck-a 只有 bio 这一张 ⇒ 同领域凑不出干扰项，应回落「看答案」而不是借用 deck-b
+        save: { ...makeSave(), cards: [bio, ai, other] },
+      }),
+    );
+    for (const label of choiceBtns(h.root).map((b) => b.textContent ?? '')) {
+      expect(label, `选项里混进了别的领域：${label}`).not.toContain('Agent');
+      expect(label).not.toContain('开源协议');
+    }
+    // 同领域一张卡都凑不出 ⇒ 不出选项 + 说明原因（既有口径）
+    expect(choiceBtns(h.root)).toHaveLength(0);
+    expect(hidden(h.root, 'no-choice-hint')).toBe(false);
+  });
+
+  it('BS#A12 同领域有多张卡时，干扰项**只**从同领域取（混池里挑得对）', () => {
+    const card: Card = { ...makeCard('bio'), deckId: 'deck-a', back: '血液为什么是红色' };
+    const mate: Card = { ...makeCard('mate'), deckId: 'deck-a', back: '同领域老实卡' };
+    const alien: Card = { ...makeCard('alien'), deckId: 'deck-b', back: '别的领域卡' };
+    const state: BattleState = { ...makeFight(0, []).state, pool: ['bio', 'mate', 'alien'] };
+    const h = setup();
+    mountBattleScreen(h.root, h.ctrl, h.deps);
+    h.ctrl.push(
+      makeSnap({
+        fight: { state, pool: [card, mate, alien], current: card },
+        save: { ...makeSave(), cards: [card, mate, alien] },
+      }),
+    );
+    const labels = choiceBtns(h.root).map((b) => b.textContent ?? '');
+    expect(labels).toContain('血液为什么是红色'); // 正确项
+    expect(labels).toContain('同领域老实卡'); // 同领域干扰项
+    expect(labels).not.toContain('别的领域卡'); // 跨领域一律不要
   });
 
   it('BS#A6 领域只有一张卡（凑不出干扰项）⇒ 不出选项、回落看答案并说明原因', () => {

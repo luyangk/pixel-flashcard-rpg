@@ -132,6 +132,13 @@ export interface HostAdapters {
   /* AI（Plan 5 · T4/T5；全部可选——没有它们时对应 UI 整块隐藏） */
   /** 设置屏「AI（可选）」分组的读写口（Key 的唯一存放点 + 唯一网络出口）。 */
   readonly llm?: LlmSettingsDeps;
+  /**
+   * 「重出选项」（D56；练功·看旧卡里每张卡一个按钮）：一次 LLM 调用只重出这张卡的干扰项，
+   * **记 1 张卡的额度**（宿主接 `llmFlow.suggestChoices` + `library.setCardChoices` + 额度记账）。
+   */
+  readonly refreshChoices?: (input: {
+    readonly cardId: string;
+  }) => Promise<{ readonly ok: boolean; readonly reason?: string; readonly choices?: readonly string[] }>;
   /** 设置屏「关于」分组（D54）：版本 + 检查更新（查 SW，不刷新页面）。 */
   readonly pwa?: {
     readonly version: () => string;

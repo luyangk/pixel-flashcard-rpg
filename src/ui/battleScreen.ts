@@ -436,12 +436,18 @@ export function mountBattleScreen(
     }
     if (choicesFor === current.id) return;
     choicesFor = current.id;
-    const others = (snap.fight?.pool ?? []).filter((c) => c && c.id !== current.id);
+    /**
+     * 干扰项**只取同一领域**（D56）。
+     *
+     * 为什么删掉"本局池里其他卡"那一条：多领域合练（D50）与"AI 卡被存进同一领域"都会让本局池
+     * 跨领域，于是生活常识的题里出现 AI 的选项（现场症状）。同领域凑不够就少给选项，
+     * 一张都凑不出就回落「看答案」—— 宁可选项少，也不给一个明显不搭的干扰项。
+     */
     const sameDeck = (snap.save?.cards ?? []).filter(
       (c) => c && c.id !== current.id && c.deckId === current.deckId,
     );
     const poolTexts: string[] = [];
-    for (const c of [...others, ...sameDeck]) {
+    for (const c of sameDeck) {
       if (typeof c.back === 'string') poolTexts.push(c.back);
       for (const extra of c.choices ?? []) poolTexts.push(extra);
     }

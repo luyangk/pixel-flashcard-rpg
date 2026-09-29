@@ -247,6 +247,7 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               onNav: () => onNav('menu'),
               initialTab: practiceTab,
               onDrill: deps.onDrill,
+              refreshChoices: deps.refreshChoices,
               quotaText: deps.practiceQuotaText,
               updateCard: deps.updateCard,
               // 采新卡整块（Plan 8 · T9）：抓取 / 生成 / 清单 / 入库——**缺一个就整块收起**

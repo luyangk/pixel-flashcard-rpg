@@ -39,6 +39,15 @@ export interface PracticeDeps {
   /** 采新卡分区（Plan 8 · T6）：整块依赖面透传给 `mountPracticeCollect`。 */
   readonly collect?: Omit<CollectDeps, 'toastMs' | 'onQuotaChanged'>;
   /**
+   * 「重出选项」（D56；宿主接 `app/llmFlow.suggestChoices` + `app/library.setCardChoices`）。
+   *
+   * 为什么需要它：自带 `choices` **永远优先于池子**，所以旧卡里那些跑题的干扰项
+   * （"生活常识的题配 AI 的选项"）只能靠"重出一次"来修。缺省 ⇒ 不显示按钮。
+   */
+  readonly refreshChoices?: (
+    input: { readonly cardId: string },
+  ) => Promise<{ readonly ok: boolean; readonly reason?: string; readonly choices?: readonly string[] }>;
+  /**
    * 就地改正一张卡的正/背面（Plan 8 · T7；宿主接 `app/library.updateCard`）。
    * 缺省 ⇒ 卡行不显示「改」入口（不显示点了没反应的按钮）。
    */
@@ -141,6 +150,8 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
    */
   let editDraft: { cardId: string; front: string; back: string } | null = null;
   let savingEdit = false;
+  /** 正在重出选项的那张卡（D56；null = 没有）。防连点，也让按钮显示"重出中…"。 */
+  let refreshingId: string | null = null;
 
   /* ------------------------------------------------------------ DOM 外壳 */
   const backBtn = h('button', { 'data-ui': 'back', class: 'back-btn', type: 'button' }, '返回') as HTMLButtonElement;
@@ -514,12 +525,47 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
           });
           children.push(editBtn);
         }
+        if (typeof deps.refreshChoices === 'function') {
+          // 与「改」并排：这两件事都是"这张卡不对，我修一下"（一个改文案、一个换干扰项）
+          const reBtn = h(
+            'button',
+            {
+              'data-ui': 'card-rechoices',
+              'data-card-rechoices': card.id,
+              class: 'collect-btn',
+              type: 'button',
+            },
+            refreshingId === card.id ? '重出中…' : '重出选项',
+          ) as HTMLButtonElement;
+          reBtn.disabled = refreshingId !== null;
+          reBtn.addEventListener('click', () => void onRefreshChoices(card.id));
+          children.push(reBtn);
+        }
       }
       const row = h('div', { 'data-card-row': card.id, class: 'practice-card' }, children);
       cardListEl.appendChild(row);
     }
     // 底部那条"本次练功"的文案由 render() 统一算（领域列表上也要更新它）
     deckViewTitleEl.textContent = `${deckName(snap, openDeckId) ?? '这个领域'} · 共 ${cards.length} 张`;
+  }
+
+  /**
+   * 重出这张卡的干扰项（D56）。成功/失败都如实说；**额度记账在宿主**（一次调用 = 1 张卡）。
+   */
+  async function onRefreshChoices(cardId: string): Promise<void> {
+    if (destroyed || refreshingId !== null || typeof deps.refreshChoices !== 'function') return;
+    refreshingId = cardId;
+    render(ctrl.snapshot());
+    try {
+      const res = await deps.refreshChoices({ cardId });
+      if (destroyed) return;
+      toast(res.ok ? '选项重出了（这次算 1 张卡的量）。' : (res.reason ?? '这次没能重出选项。'));
+    } catch (e) {
+      if (!destroyed) toast(`没能重出选项：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      refreshingId = null;
+      if (!destroyed) render(ctrl.snapshot());
+    }
   }
 
   /** 保存就地编辑：失败**保留输入**并如实提示（玩家刚敲的字不能丢）。 */

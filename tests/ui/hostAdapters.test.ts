@@ -728,3 +728,98 @@ describe('assembleHost —— 订阅源是否真的经读取服务（D55）', ()
     expect(bare?.ok).toBe(false); // 假 fetch 回的是渲染 HTML，RSS 解析器当然认不出
   });
 });
+
+/* ------------------------------------------------------------------ D56：重出选项的装配 */
+
+/**
+ * 判别力（这是"接缝"用例，屏级/平台级都测不到它）：
+ * - AD#14 一次「重出选项」= ①模型被调用一次 ②卡的 choices 落进存档 ③**卡片额度 -1**；
+ * - AD#15 额度为 0 时**不调用模型**（钱不能白花），直接回可上屏的原因 ——
+ *   "先记后做"的纪律与判卷同款，删掉记账这一步 AD#14 必红。
+ */
+describe('assembleHost —— 重出选项（D56）', () => {
+  it('AD#14 「重出选项」走通：模型被调、choices 落盘、额度 -1', async () => {
+    const calls: string[] = [];
+    const fakeFetch = (async (_url: string | URL, init?: RequestInit) => {
+      calls.push(String(init?.body ?? ''));
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"choices":["错一","错二","错三"]}' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const seed = makeSave({ cards: [{ ...makeCard('c1'), choices: ['旧干扰项'] }] });
+    const rig = await makeRig({ seed });
+    const assembly = assembleHost({
+      ctrl: rig.assembly.ctrl,
+      coord: rig.coord,
+      store: rig.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      llmFetchImpl: fakeFetch,
+      llmConfigIo: {
+        load: () => ({ baseUrl: 'https://api.example', apiKey: 'sk-X', model: 'm' }),
+        save: () => true,
+        clear: () => undefined,
+      },
+    });
+
+    const quotaBefore = rig.coord.snapshot().settings.llmQuota?.cards ?? 0;
+    const res = await assembly.adapters.refreshChoices?.({ cardId: 'c1' });
+    expect(res?.ok, res?.reason).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(rig.coord.snapshot().cards.find((c) => c.id === 'c1')?.choices).toEqual(['错一', '错二', '错三']);
+    expect(rig.coord.snapshot().settings.llmQuota?.cards).toBe(quotaBefore + 1); // 一次调用 = 1 张
+  });
+
+  it('AD#15 额度用完 ⇒ **不调用模型**，如实回原因', async () => {
+    const calls: string[] = [];
+    const fakeFetch = (async () => {
+      calls.push('boom');
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const seed = makeSave();
+    // `makeSave` 的 settings 一定有 llmQuota（形状与生产同构），这里只改计数
+    if (seed.settings.llmQuota) seed.settings.llmQuota = { day: '2026-10-27', cards: 200, judges: 0 };
+    const rig = await makeRig({ seed });
+    const assembly = assembleHost({
+      ctrl: rig.assembly.ctrl,
+      coord: rig.coord,
+      store: rig.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      llmFetchImpl: fakeFetch,
+      llmConfigIo: {
+        load: () => ({ baseUrl: 'https://api.example', apiKey: 'sk-X', model: 'm' }),
+        save: () => true,
+        clear: () => undefined,
+      },
+    });
+
+    const res = await assembly.adapters.refreshChoices?.({ cardId: 'c1' });
+    expect(res?.ok).toBe(false);
+    expect(res?.reason ?? '').toContain('额度');
+    expect(calls).toEqual([]); // 一分钱都不该花
+  });
+});

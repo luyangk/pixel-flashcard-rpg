@@ -31,9 +31,17 @@
    - **记账**：每次「重出选项」记 **1 张卡**的额度（它是一次真实 LLM 调用，且这个按钮可连点）。屏上如实写着这一点，到顶就说"明天再来"。
    - 缺 LLM 配置 ⇒ 按钮**不显示**（不显示点了没反应的入口）。
 
-**测试**：`tests/ui/battleScreen.test.ts`（BC#? 混合池里只取同领域；同领域不足 ⇒ 少给/回落）、`tests/app/llmFlow.test.ts`（LC#? prompt 里含领域锁；`suggestChoices` 解析与消毒）、`tests/ui/practice.test.ts`（PR#? 「重出选项」缺 LLM 口不显示 / 点了调写口 / 记账 +1）、`tests/app/library.test.ts`（只改 choices 的写口不破坏其它字段）。
+**测试（已落地）**：`tests/ui/battleScreen.test.ts` BS#A11/A12（跨领域卡的背面不许进选项；混池里只挑同领域）、
+`tests/app/llmFlow.test.ts` LC#S1–S4（prompt 契约 / 消毒 / 坏形状 / 调用失败）、`tests/ui/practice.test.ts` PR#C1–C3、
+`tests/app/library.test.ts` LB#D1–D3（`setCardChoices` 只改选项、同值不重写）、
+`tests/ui/hostAdapters.test.ts` AD#14/#15（**装配层**：一次调用 = 额度 -1；额度为 0 时一次模型调用都不发）。
 
-**变异**：① 池子仍吃全池；② prompt 去掉领域锁；③ 重出选项不记账；④ 缺 LLM 口也显示按钮。
+**已落地（commit 见 git log）**：+12 用例；`src/ui/battleScreen.ts` 池子改同领域、`src/core/llmParse.ts` 新增
+`parseChoices`、`src/app/llmFlow.ts` prompt 锁领域 + `suggestChoices`、`src/app/library.ts` 新增 `setCardChoices`、
+`src/ui/practice.ts` 与 `src/ui/hostAdapters.ts` 接线（含 1 张卡额度记账）。
+
+**变异**：① 池子仍吃全池；② prompt 去掉领域锁；③ 重出选项不记账；④ 缺 LLM 口也显示按钮；
+⑤ 重出时把答案本身收进干扰项；⑥ `setCardChoices` 顺手改了背面 —— **6 条全部会红（已跑）**。
 
 ### T2 个人纪录 + 玩家身份（D57）
 

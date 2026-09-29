@@ -204,6 +204,30 @@ export function parseCards(text: string, opts: { max?: number } = {}): ParseResu
   });
 }
 
+/**
+ * 解析「重出选项」的返回（D56）：`{"choices":[…]}` → 消毒后的选项数组。
+ *
+ * 返回形状与 `parseVerdict` 同款（**不用** `ParseResult`：那边是"一组条目"，
+ * 这里是"一个对象里的一个数组"，硬套 `value: T[]` 只会多一层无意义的嵌套）。
+ * 一条都消毒不出来（缺字段 / 全是答案本身 / 全是脏项）⇒ **失败**：
+ * 调用方要能如实说"这次没重出成功"，而不是把这张卡的干扰项静默清空。
+ */
+export function parseChoices(
+  text: string,
+  back: string,
+): { ok: true; choices: string[] } | { ok: false; reason: string } {
+  const fail = { ok: false as const, reason: '没能读懂模型给的选项。' };
+  if (typeof text !== 'string') return fail;
+  const extracted = extractJson(text);
+  if (!extracted.ok) return fail;
+  const raw = extracted.value;
+  const container = Array.isArray(raw) ? raw[0] : raw; // 有的模型会把对象包进数组
+  if (container === null || typeof container !== 'object') return fail;
+  const choices = sanitizeChoices((container as Record<string, unknown>).choices, back);
+  if (choices.length === 0) return fail;
+  return { ok: true, choices };
+}
+
 /** 解析称号候选。 */
 export function parseNames(text: string, opts: { max?: number } = {}): ParseResult<NameCandidate> {
   const o = opts ?? {};

@@ -14,7 +14,15 @@
  */
 import type { ChatMessage, ChatResult } from '../platform/llmTypes';
 import type { CardCandidate, NameCandidate, ParseResult } from '../core/llmParse';
-import { CARD_FIELD_MAX, CHOICES_MAX, parseCards, parseEgg, parseNames, parseVerdict } from '../core/llmParse';
+import {
+  CARD_FIELD_MAX,
+  CHOICES_MAX,
+  parseCards,
+  parseChoices,
+  parseEgg,
+  parseNames,
+  parseVerdict,
+} from '../core/llmParse';
 
 /** 注入的调用器（生产接 `platform/llmHttp.chat`；测试给假的）。 */
 export type ChatFn = (messages: readonly ChatMessage[]) => Promise<ChatResult>;
@@ -48,6 +56,12 @@ const CARD_SYSTEM = [
   '4. front ≤ 40 字，back ≤ 80 字，tags 最多 3 个、每个 ≤ 6 字；',
   `5. choices 是给这张卡出选择题用的**错误选项**（3 条，每条 ≤ 30 字）：要"像答案但不对"、` +
     `与 back 同类同粒度，**不要与 back 相同或同义**，彼此也不重复；确实想不出就留空数组；`,
+  // D56：干扰项**必须同领域**。现场症状是生活常识的题里出现 AI 领域的选项（池子串味 +
+  // 生成时没锁领域），所以这里把口径写死：要像"同一门学问里的常见误解"，不是别的学科的词。
+  '5b. choices 必须与 back **属于同一个知识领域、同一个主题**：要像"这门学问里常见的误解"，' +
+    '不得引入其他领域/其他学科的概念（例如生物题的选项里不许出现 AI、编程、历史的名词）；',
+  `5c. 干扰项要"看上去对、其实错"：常见误解、把因果/顺序/数量级弄反、把相近概念张冠李戴；` +
+    `不要写"以上都不对""我不知道"这类占位；`,
   `6. choices 最多 ${CHOICES_MAX} 条（超出只取前 ${CHOICES_MAX} 条）；`,
   '7. 一张卡只考一个知识点；资料信息不足时宁可少出卡，绝不编造；',
   '8. 最多 20 张。',
@@ -71,6 +85,60 @@ const EGG_SYSTEM = [
   '3. 必须是真实可靠的常识或典故，宁短勿编；',
   '4. 语言克制、有文气，不堆砌形容词。',
 ].join('\n');
+
+const CHOICES_SYSTEM = [
+  '你在给一张已有的记忆卡**重新出选择题的干扰项**（玩家觉得原来的选项不对劲，要求重出）。',
+  '硬性要求：',
+  '1. 只输出一个 JSON 对象，形如 {"choices":["干扰项1","干扰项2","干扰项3"]}，不要任何解释；',
+  '2. **恰好 3 条**，每条 ≤ 30 字；',
+  '3. 必须与「答案」**属于同一个知识领域、同一个主题**：要像这门学问里常见的误解，',
+  '   不得引入其他领域/其他学科的概念；',
+  '4. 每条都要"看上去对、其实错"：常见误解、把因果/顺序/数量级弄反、把相近概念张冠李戴；',
+  '5. **不得与答案相同或同义**，彼此之间也不得重复；不要写"以上都不对"这类占位。',
+].join('\n');
+
+/** 重出选项的提示词（D56；导出以便测试钉住"锁领域"这条契约）。 */
+export function buildChoicesPrompt(input: {
+  readonly front: string;
+  readonly back: string;
+  readonly deckName: string;
+}): ChatMessage[] {
+  return [
+    { role: 'system', content: CHOICES_SYSTEM },
+    {
+      role: 'user',
+      content: wrapUntrusted(
+        '待重出的卡片',
+        [
+          `领域：${clip(input?.deckName, 40)}`,
+          `卡面：${clip(input?.front, 200)}`,
+          `答案：${clip(input?.back, 400)}`,
+        ].join('\n'),
+      ),
+    },
+  ];
+}
+
+/**
+ * 重出一张卡的干扰项（D56，**只回选项，不写盘、不落账**）。
+ *
+ * 为什么单独有这条：自带 `choices` **永远优先于池子**（`core/choices` 的三级顺序），
+ * 所以旧卡里那些跑题的选项只能靠"重出一次"来修；额度记账归装配层（1 张卡/次）。
+ */
+export async function suggestChoices(
+  deps: LlmDeps,
+  input: { readonly front: string; readonly back: string; readonly deckName: string },
+): Promise<{ ok: true; choices: readonly string[] } | { ok: false; reason: string }> {
+  const back = typeof input?.back === 'string' ? input.back.trim() : '';
+  if (back.length === 0) return { ok: false, reason: '这张卡还没有答案，先补上答案再重出选项。' };
+  const res = await ask(deps, buildChoicesPrompt({ front: input?.front ?? '', back, deckName: input?.deckName ?? '' }));
+  if (!res.ok) return { ok: false, reason: res.reason };
+  // 解析口径归 core（`sanitizeChoices` 是单一真相）：
+  // 一条都消毒不出来 ⇒ 失败，而不是把这张卡的干扰项静默清空
+  const parsed = parseChoices(res.text, back);
+  if (!parsed.ok) return { ok: false, reason: parsed.reason };
+  return { ok: true, choices: parsed.choices };
+}
 
 /**
  * 判卷提示词（Plan 6 · T3 / D42）。

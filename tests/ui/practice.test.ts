@@ -488,3 +488,48 @@ describe('mountPractice —— 就地编辑（Plan 8 · T7）', () => {
     expect(called).toBe(0);
   });
 });
+
+/* ------------------------------------------------------------------ D56：重出选项 */
+
+/**
+ * 判别力：
+ * - PR#C1 缺 `refreshChoices` 口 ⇒ **不显示**按钮（不显示点了没反应的入口）；
+ * - PR#C2 点了把 **cardId** 交给写口，成功后如实提示（并说明这算一次额度）；
+ * - PR#C3 失败（额度到顶 / 网络）⇒ 原话提示，不谎报成功。
+ */
+describe('mountPractice —— 重出选项（D56）', () => {
+  it('PR#C1 缺口不显示；有口才显示', () => {
+    const bare = setup([card('c1')]);
+    openFirstDeck(bare.root);
+    expect(bare.root.querySelector('[data-ui="card-rechoices"]')).toBeNull();
+
+    const withIt = setup([card('c1')], { refreshChoices: () => Promise.resolve({ ok: true, choices: ['x'] }) });
+    openFirstDeck(withIt.root);
+    expect(withIt.root.querySelector('[data-ui="card-rechoices"]')).not.toBeNull();
+  });
+
+  it('PR#C2 点了把 cardId 交给写口，成功后如实提示', async () => {
+    const calls: string[] = [];
+    const { root } = setup([card('c1')], {
+      refreshChoices: (input) => {
+        calls.push(input.cardId);
+        return Promise.resolve({ ok: true, choices: ['错一', '错二', '错三'] });
+      },
+    });
+    openFirstDeck(root);
+    (root.querySelector('[data-ui="card-rechoices"]') as HTMLElement).click();
+    await flushMicrotasks();
+    expect(calls).toEqual(['c1']);
+    expect(ui(root, 'toast').textContent).toContain('选项');
+  });
+
+  it('PR#C3 失败 ⇒ 原话提示，不谎报成功', async () => {
+    const { root } = setup([card('c1')], {
+      refreshChoices: () => Promise.resolve({ ok: false, reason: '今天的额度用完了，明天再来。' }),
+    });
+    openFirstDeck(root);
+    (root.querySelector('[data-ui="card-rechoices"]') as HTMLElement).click();
+    await flushMicrotasks();
+    expect(ui(root, 'toast').textContent).toContain('额度用完了');
+  });
+});

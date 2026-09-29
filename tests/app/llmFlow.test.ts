@@ -24,6 +24,7 @@ import {
   suggestEgg,
   wrapUntrusted,
   type ChatFn,
+  suggestChoices,
 } from '../../src/app/llmFlow';
 import { CHOICES_MAX } from '../../src/core/llmParse';
 import type { ChatMessage, ChatResult } from '../../src/platform/llmTypes';
@@ -279,5 +280,50 @@ describe('卡片提示词 —— 生成卡时一并产出干扰项（D41）', ()
   it('LF#17b choices 条数上限写进提示词（与 core 的 CHOICES_MAX 同口径）', () => {
     const system = buildCardPrompt({ text: '资料', deckName: '唐诗' }).find((m) => m.role === 'system')?.content ?? '';
     expect(system).toContain(String(CHOICES_MAX));
+  });
+});
+
+/* ------------------------------------------------------------------ D56：干扰项锁领域 / 重出选项 */
+
+/**
+ * 判别力：
+ * - LC#S1 **prompt 契约**：生成卡的提示词里必须写明"干扰项与答案同属一个知识领域"
+ *   （只写"像答案"的实现必红 —— 现场就是它把 AI 概念塞进了生物题的选项里）；
+ * - LC#S2 `suggestChoices`：正常回 3 条、消毒截断、**不许包含正确答案本身**；
+ * - LC#S3 模型回坏形状（不是数组/全空）⇒ 如实失败，不拿"没有干扰项"糊过去；
+ * - LC#S4 调用失败（网络/解析）⇒ 回 `{ok:false, reason}`，绝不编造。
+ */
+describe('app/llmFlow —— 重出选项（D56）', () => {
+  it('LC#S1 生成卡的提示词里锁死"干扰项同领域"', () => {
+    const messages = buildCardPrompt({ text: '血红蛋白含铁，所以血液是红的。', deckName: '生活常识', max: 5 });
+    const system = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    expect(system).toContain('同一个知识领域');
+    expect(system).toContain('常见误解');
+  });
+
+  it('LC#S2 suggestChoices 回 3 条消毒过的干扰项，且不含正确答案', async () => {
+    const chat = (): Promise<ChatResult> =>
+      Promise.resolve({
+        ok: true,
+        text: JSON.stringify({ choices: ['它其实是蓝色的', '血液里没有铁', '与氧气无关', '含铁结合氧后呈红色'] }),
+      });
+    const res = await suggestChoices({ chat }, { front: '血液为什么是红的？', back: '含铁结合氧后呈红色', deckName: '生活常识' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.choices).toHaveLength(3); // 与答案相同的那条被丢掉
+      expect(res.choices).not.toContain('含铁结合氧后呈红色');
+    }
+  });
+
+  it('LC#S3 模型回坏形状 ⇒ 如实失败（不拿空数组糊过去）', async () => {
+    const bad = (): Promise<ChatResult> => Promise.resolve({ ok: true, text: '随便一段话' });
+    const res = await suggestChoices({ chat: bad }, { front: 'F', back: 'B', deckName: 'D' });
+    expect(res.ok).toBe(false);
+  });
+
+  it('LC#S4 调用失败 ⇒ 回 {ok:false, reason}', async () => {
+    const net = (): Promise<ChatResult> => Promise.resolve({ ok: false, reason: '连不上模型。' });
+    const res = await suggestChoices({ chat: net }, { front: 'F', back: 'B', deckName: 'D' });
+    expect(res).toEqual({ ok: false, reason: '连不上模型。' });
   });
 });
