@@ -59,6 +59,8 @@ export const SPRITE_FILES = [
   'arc-1.png',
   'arc-2.png',
   'arc-3.png',
+  // Plan 7 · T4：练功木人桩（木桩练功的敌人位）
+  'drill-dummy.png',
   '_contact-sheet.png',
 ];
 
@@ -757,6 +759,71 @@ def boss4(out):
     s.px(34, 3, CY[1])
     s.px(32, 2, CY[2])
     return save(s, out, "boss-4.png")
+
+
+# ---------------------------------------------------------------------------
+# drill-dummy.png —— 练功木人桩 32×32（Plan 7 · T4 / D46）
+# 用途：木桩练功的"敌人"位。**尺寸刻意取 32×32（与小怪同档）**：练功用遭遇战参数，
+# 木桩就该是小怪那个体量（64×64 是卷灵的档，渲染时两者都是 2× 放大 ⇒ 会显得比小怪大一倍）。
+# 绘制口径与其它素材一致，但**刻意不用霓虹**——木桩是练功对象，不是怪物（PRD §7 / LORE §6）。
+# 剪影优先：宽十字底座 → 粗桩身 → 两条上臂 + 一条中臂 → 短腿，1x 下一眼是"人形桩"。
+# ---------------------------------------------------------------------------
+def dummy(out):
+    """练功木人桩：木色三臂桩 + 绳箍 + 十字底座，左上来光。
+
+    二轮修订（目检 6× 后改的四处）：①底座两端做成与横梁连通的翘起（首版像挂了两块小方块）；
+    ②桩顶收窄到 r=3 并去掉多余的"帽子"方块（首版读成棒棒糖头）；③木纹改成不等长的断续线
+    （首版每 6px 一道等长横线，机械感重）；④中臂上移一格、绳箍下移一格，腾开下半身的拥挤。
+    """
+    s = new32(INK + PAPER + SEPIA)
+    # ---- 底座（先画，桩身压住中段）----
+    s.rect(4, 27, 27, 30, S1, fill=True)           # 横梁
+    s.rect(4, 27, 27, 28, S0, fill=True)           # 梁上缘受光
+    s.rect(4, 30, 27, 30, S2, fill=True)           # 梁下缘背光
+    s.rect(3, 25, 7, 27, S1, fill=True)            # 左端翘起（与梁连通，不是浮块）
+    s.rect(3, 25, 7, 26, S0, fill=True)
+    s.rect(24, 25, 28, 27, S1, fill=True)          # 右端翘起
+    s.rect(24, 25, 28, 26, S0, fill=True)
+    # ---- 短腿：从左下斜插到桩底（三稿下移一格 + 上缘受光，与底座/绳箍分开）----
+    _strip(s, [(15, 24), (11, 27), (8, 29)], S1, K0, w=3)
+    band(s, [(15, 23), (11, 26), (8, 28)], S0)
+    # ---- 桩身 ----
+    s.rect(12, 7, 19, 27, S1, fill=True)
+    s.rect(12, 7, 14, 27, S0, fill=True)           # 左缘受光（光自左上）
+    s.rect(18, 7, 19, 27, S2, fill=True)           # 右缘背光
+    # 木纹：不等长、不等距的断续深线（避免机械感）
+    s.rect(16, 12, 17, 12, S2, fill=True)
+    s.rect(15, 19, 17, 19, S2, fill=True)
+    s.px(16, 24, S2)
+    # ---- 桩顶：窄圆首（收进桩身，不做棒棒糖头）----
+    s.circle(16, 6, 3, S1, fill=True)
+    s.circle(15, 5, 2, S0, fill=True, only=S1)
+    # 三稿：去掉头顶那颗孤立白点（1px 白在头顶会读成"眼睛/鬼脸"，而这是木桩）
+    # ---- 三臂：上左 / 上右 / 中左（3px 粗、端头圆）----
+    s.rect(6, 11, 13, 13, S1, fill=True)
+    s.rect(6, 11, 13, 11, S0, fill=True)
+    s.circle(6, 12, 1, S1, fill=True)
+    s.rect(13, 11, 13, 13, S2, fill=True)          # 臂根 1px 暗线：把臂与桩/绳箍分开
+    s.rect(18, 15, 25, 17, S1, fill=True)
+    s.rect(18, 15, 25, 15, S0, fill=True)
+    s.circle(25, 16, 1, S1, fill=True)
+    s.rect(18, 15, 18, 17, S2, fill=True)
+    s.rect(7, 19, 12, 21, S1, fill=True)
+    s.rect(7, 19, 12, 19, S0, fill=True)
+    s.circle(7, 20, 1, S1, fill=True)
+    s.rect(12, 19, 12, 21, S2, fill=True)
+    # ---- 绳箍：两道（PAPER 系，与木色拉开；上箍上移一格腾开臂根，下箍上移到腿根之上）----
+    for by in (8, 22):
+        s.rect(12, by, 19, by + 1, P3, fill=True)
+        s.rect(12, by, 19, by, P4, fill=True)
+        for sx in (13, 16, 18):
+            s.px(sx, by + 1, P4)
+    # ---- 轮廓与磨损 ----
+    selout(s, K0)
+    s.px(9, 12, P4)                                # 臂上磨痕
+    s.px(22, 16, P4)
+    s.px(9, 20, P4)
+    return save(s, out, "drill-dummy.png")
 
 
 # ---------------------------------------------------------------------------
@@ -1542,6 +1609,7 @@ def contact_sheet(out_dir, sheet_path, scale=4):
 
 ALL = {
     "hero": hero,
+    "drill-dummy": dummy,
     "mob-1": mob1,
     "mob-2": mob2,
     "mob-3": mob3,

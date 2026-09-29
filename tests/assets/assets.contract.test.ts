@@ -295,6 +295,8 @@ const SPRITE_SPECS: Spec[] = [
   { file: 'arc-1.png', size: 64, alpha: 'rgba', use: '暗线一幕·源头（残片指向远方微光）' },
   { file: 'arc-2.png', size: 64, alpha: 'rgba', use: '暗线二幕·真相（知识投下的影子）' },
   { file: 'arc-3.png', size: 64, alpha: 'rgba', use: '暗线三幕·留白（侠客立于门前，门缝一线光）' },
+  // Plan 7 · T4：练功木人桩（**32×32，与小怪同档**：练功用遭遇战参数，体量就该是小怪那个）
+  { file: 'drill-dummy.png', size: 32, alpha: 'required', use: '练功木人桩（木桩练功的敌人位）' },
 ];
 
 /** 纯函数：返回违规清单（空数组 = 通过）。 */
