@@ -449,6 +449,65 @@ describe('E2E#5 备份导出与提醒闸门', () => {
   });
 });
 
+describe('E2E#7 练功（木桩）：菜单 → 练功 → 勾选 → 练完一圈', () => {
+  it('练功不判胜负、不进榜单、不计局数、不推进卷灵达标，但 SRS 与经验照走', async () => {
+    const h = await boot();
+    clickThroughPrologue(h.root);
+    await settle();
+
+    const before = h.coord.snapshot();
+    const playsBefore = before.meta.plays;
+    const expBefore = before.settings.progress.exp;
+    const boardBefore = (before.settings.leaderboard ?? []).length;
+    // **必须当场抄成数字**：`coord.snapshot()` 是活视图，结算后 `before.cards` 会跟着变
+    // （首版把 Map 建在结算之后 ⇒ "练前 reps"读到的其实是练后的值，断言恒假）
+    const repsBefore = new Map(before.cards.map((c) => [c.id, c.srs.reps]));
+
+    // 菜单 → 练功（第五个入口）
+    (h.root.querySelector('[data-nav="practice"]') as HTMLElement).click();
+    expect(h.root.querySelector('[data-ui="practice-screen"]')).not.toBeNull();
+
+    // 打开引导领域（生活常识）→ 默认已勾"到期 + 新卡" → 开练
+    const deck = h.root.querySelector('[data-deck="preset-life"]') as HTMLElement | null;
+    expect(deck, '练功屏里没有引导领域').not.toBeNull();
+    deck?.click();
+    const picks = h.root.querySelectorAll('input[data-pick]:checked');
+    expect(picks.length, '默认没勾任何卡（到期/新卡口径没生效）').toBeGreaterThan(0);
+    (h.root.querySelector('[data-ui="drill-start"]') as HTMLElement).click();
+    await settle();
+
+    // 木桩形态：形态与难度档取自**快照**（本夹具把战斗屏换成了 stub，战斗屏的 DOM 断言
+    // 归 tests/ui/battleScreen.test.ts 的 BS#D1–D3；这里钉的是"真的开了这一局"）
+    const view = h.ctrl.snapshot().fight;
+    expect(view?.state.mode).toBe('drill');
+    expect(view?.difficulty).toBe('encounter');
+    expect(h.spies().mountBattle, '练功没有真的挂起战斗屏').toBeGreaterThan(0);
+
+    // 打完池子（木桩不反击、不判胜负）：全答对即可
+    await playUntilEnd(h.ctrl);
+    await settle();
+    const after = h.coord.snapshot();
+    expect(h.ctrl.snapshot().fight?.state.phase).toBe('cleared');
+    expect(h.ctrl.snapshot().lastResult?.mode).toBe('drill');
+    // 四条"不"：不判胜负、不进榜单、不计局数、不进有效复习日
+    expect(h.ctrl.snapshot().lastResult?.won).toBe(false);
+    expect((after.settings.leaderboard ?? []).length).toBe(boardBefore);
+    expect(after.meta.plays).toBe(playsBefore);
+    for (const c of after.cards) expect(c.srs.effectiveReviewDays).toEqual([]);
+    // 两条"照走"：经验 +≥1、SRS 真的推进（练了就是练了）。
+    // 注意比的是"相对练之前涨了"而不是某个绝对值：预置卡的初始 reps 由内容种子决定，
+    // 写死阈值会随内容改动假红（首版写 `> 3` 就撞上了这个）。
+    expect(after.settings.progress.exp).toBeGreaterThan(expBefore);
+    expect(after.cards.some((c) => c.srs.reps > (repsBefore.get(c.id) ?? 0))).toBe(true);
+
+    // 结算屏是"练功完成"，没有假记忆
+    expect(h.root.querySelector('[data-ui="result-screen"]')).not.toBeNull();
+    expect((h.root.querySelector('[data-ui="drill-summary"]') as HTMLElement).hidden).toBe(false);
+    expect((h.root.querySelector('[data-ui="fake-memory"]') as HTMLElement).hidden).toBe(true);
+    h.host.unmount();
+  });
+});
+
 describe('E2E#6 只读演练（D29）', () => {
   it('坏档接管：横幅在场、原文可导出、序章与只读组合不炸', async () => {
     const bad = { schemaVersion: 2, decks: [], cards: [], settings: {}, meta: { savedAt: 1, plays: 0 } } as unknown as SaveFile;

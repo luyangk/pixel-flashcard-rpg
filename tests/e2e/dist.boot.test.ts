@@ -232,6 +232,50 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     await settle();
   }, 40_000);
 
+  it('DB#7 产物里的「练功」真的能开一局木桩（菜单入口 / 勾选 / 木桩战）', async () => {
+    const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
+    const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
+    const click = (sel: string): boolean => {
+      const el = q(sel);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 24; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+
+    // 回到菜单（不依赖上一个用例停在哪儿），进练功屏
+    if (q('[data-ui="back"]')) {
+      click('[data-ui="back"]');
+      await settle();
+    }
+    expect(click('[data-nav="practice"]'), '菜单里没有「练功」入口').toBe(true);
+    await settle();
+    expect(q('[data-ui="practice-screen"]'), '练功屏没挂上').not.toBeNull();
+
+    // 打开第一个领域 → 默认已勾"到期 + 新卡" → 开练
+    expect(click('[data-deck]'), '练功屏里没有领域行').toBe(true);
+    await settle();
+    const picked = win.document.querySelectorAll('input[data-pick]:checked');
+    expect(picked.length, '默认没勾任何卡').toBeGreaterThan(0);
+    const cardRows = win.document.querySelectorAll('[data-card-row]');
+    expect(cardRows.length, '卡列表是空的').toBeGreaterThan(0);
+    expect(click('[data-ui="drill-start"]')).toBe(true);
+    await settle();
+
+    // 木桩战：木桩标签在、血量行不再出现"敌 N"
+    expect(q('[data-ui="dummy-label"]'), '战斗屏没有木桩标签（drill 形态没接上）').not.toBeNull();
+    expect(q('[data-ui="dummy-label"]')?.hidden).toBe(false);
+    expect(q('[data-ui="hp"]')?.textContent ?? '').not.toMatch(/敌 \d/);
+    // 选项还在（作答方式与形态正交：练功里同样是选择题默认）
+    expect(win.document.querySelectorAll('button[data-choice]').length).toBeGreaterThan(0);
+
+    // 收尾：退出本局回菜单（别把后续用例留在战斗屏上）
+    expect(click('[data-ui="quit"]')).toBe(true);
+    await settle();
+  }, 40_000);
+
   it('DB#5 产物里「重置存档」真的能清档重装（main.ts 漏传 presetContent ⇒ 整组不显示）', async () => {
     const win = (globalThis as unknown as { __bootWin: { document: Document } }).__bootWin;
     const q = (sel: string): HTMLElement | null => win.document.querySelector(sel) as HTMLElement | null;
