@@ -940,10 +940,65 @@ h1 {
   min-height: 2.75rem;
 }
 
+/* 领域行 + 「移出本次」（D50：多领域合练时每行多一个退出动作） */
+.practice-deck-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.practice-deck-row .practice-deck {
+  flex: 1 1 auto;
+}
+
+.deck-remove {
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  padding: 0 0.6rem;
+}
+
 .practice-deck-view {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* 卡列表头顶的「← 换领域」（D50：以前只有屏顶那个含混的「返回」，玩家找不到路） */
+.deck-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.deck-switch {
+  flex: 0 0 auto;
+}
+
+.deck-view-title {
+  font-size: 0.88rem;
+  color: var(--paper-dim);
+  word-break: break-word;
+}
+
+/* 底部常驻的"本次练功"条（D50）：领域列表与卡列表共用同一条 */
+.drill-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--radius);
+  background: var(--ink-800);
+}
+
+.drill-bar-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.drill-bar-actions .drill-start {
+  flex: 1 1 auto;
+  margin-top: 0;
 }
 
 /* 卡行：勾选框 + 正面 + 背面 + 元信息（四列在窄屏上会被挤，故用两行布局） */

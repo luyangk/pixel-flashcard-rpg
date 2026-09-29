@@ -261,6 +261,25 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
     expect(picked.length, '默认没勾任何卡').toBeGreaterThan(0);
     const cardRows = win.document.querySelectorAll('[data-card-row]');
     expect(cardRows.length, '卡列表是空的').toBeGreaterThan(0);
+
+    // D50：换领域（卡列表里要有这个入口）→ 打开第二个领域 → 跨领域合练要算上它
+    expect(click('[data-ui="deck-switch"]'), '卡列表里没有「换领域」入口').toBe(true);
+    await settle();
+    const decks = win.document.querySelectorAll('[data-deck]');
+    expect(decks.length, '练功屏里只有一个领域').toBeGreaterThan(1);
+    (decks[1] as HTMLElement).click();
+    await settle();
+    // 手动勾一张（若还有没勾的）——这样"第二个领域进了本次"不依赖"它刚好到期"，
+    // 前面某个用例动过 SRS 也不会假红
+    const boxes = Array.from(win.document.querySelectorAll('input[data-pick]')) as HTMLInputElement[];
+    const spare = boxes.find((b) => !b.checked);
+    if (spare) {
+      spare.checked = true;
+      spare.dispatchEvent(new Event('change'));
+    }
+    await settle();
+    expect(q('[data-ui="drill-bar"]')?.textContent ?? '', '跨领域合练没算上第二个领域').toContain('来自 2 个领域');
+
     expect(click('[data-ui="drill-start"]')).toBe(true);
     await settle();
 

@@ -35,6 +35,31 @@ function saveWith(cards: Card[]): SaveFile {
   return { ...base, decks: [makeDeck('d1', '唐诗')], cards };
 }
 
+/** 两个领域的夹具（多领域合练用，D50）。 */
+function saveWithTwoDecks(a: Card[], b: Card[]): SaveFile {
+  const base = makeSave();
+  return { ...base, decks: [makeDeck('d1', '唐诗'), makeDeck('d2', '成语')], cards: [...a, ...b] };
+}
+
+function setupTwo(a: Card[], b: Card[], deps: Parameters<typeof mountPractice>[2] = {}) {
+  const root = makeRoot();
+  const ctrl = makeCtrl(makeSnap({ screen: 'menu', save: saveWithTwoDecks(a, b) }));
+  mountPractice(root, ctrl, { now: () => NOW, toastMs: 0, ...deps });
+  return { root, ctrl };
+}
+
+const deckBtnById = (root: HTMLElement, deckId: string): HTMLButtonElement =>
+  ui(root, 'practice-decks').querySelector(`button[data-deck="${deckId}"]`) as HTMLButtonElement;
+const deckRemoveBtn = (root: HTMLElement, deckId: string): HTMLButtonElement | null =>
+  ui(root, 'practice-decks').querySelector(`button[data-deck-remove="${deckId}"]`) as HTMLButtonElement | null;
+const pickBox = (root: HTMLElement, cardId: string): HTMLInputElement =>
+  ui(root, 'practice-cards').querySelector(`input[data-pick="${cardId}"]`) as HTMLInputElement;
+const togglePick = (root: HTMLElement, cardId: string, on: boolean): void => {
+  const box = pickBox(root, cardId);
+  box.checked = on;
+  box.dispatchEvent(new Event('change'));
+};
+
 function setup(cards: Card[], deps: Parameters<typeof mountPractice>[2] = {}) {
   const root = makeRoot();
   const ctrl = makeCtrl(makeSnap({ screen: 'menu', save: saveWith(cards) }));
@@ -97,13 +122,17 @@ describe('mountPractice —— 看旧卡（Plan 7 · T6）', () => {
     expect(picks(root).sort()).toEqual(['c1', 'c2']);
   });
 
-  it('PR#5 超过池上限 ⇒ 截取并如实说明还有多少张没进池', () => {
+  it('PR#5 超过池上限 ⇒ 按"最紧迫优先"截取，并如实说明还有多少张没进池', () => {
+    // **刻意让"列表顺序"与"紧迫程度"相反**（c0 是刚到期、c27 最久没练）：
+    // 否则"按列表顺序截"与"按最紧迫截"结果相同，这条用例就没有判别力（变异实测抓到过）。
     const many = Array.from({ length: DRILL_POOL_MAX + 3 }, (_, i) =>
       card(`c${i}`, { srs: srs({ due: NOW - i - 1 }) }),
     );
     const { root } = setup(many);
     openFirstDeck(root);
     expect(picks(root)).toHaveLength(DRILL_POOL_MAX);
+    // 该进池的是 c3…c27（最紧迫的 25 张），而出题顺序仍是**列表顺序**
+    expect(picks(root)).toEqual(Array.from({ length: DRILL_POOL_MAX }, (_, i) => `c${i + 3}`));
     expect(ui(root, 'practice-cap-hint').hidden).toBe(false);
     expect(ui(root, 'practice-cap-hint').textContent).toContain('3');
   });
@@ -188,6 +217,154 @@ describe('mountPractice —— 看旧卡（Plan 7 · T6）', () => {
     expect(ui(root, 'practice-decks').hidden).toBe(false);
     click(ui(root, 'back'));
     expect(navs).toEqual(['menu']);
+  });
+});
+
+/* ------------------------------------------------------------------ D50（现场反馈） */
+
+/**
+ * 练功屏的「换领域」与多领域合练（D50，现场反馈）。
+ *
+ * 判别力：
+ * - PR#17 卡列表里有**显式**的换领域入口（只有屏顶那个含混「返回」的实现必红），
+ *   且换领域**不清勾选**（清空的实现必红：玩家得重勾一遍）；
+ * - PR#18 两个领域的勾选**合起来**交给 `onDrill`，且文案如实报"来自 2 个领域"；
+ * - PR#19 「移出本次」只移该领域（连带清掉它自己的勾选），别的领域不受影响；
+ * - PR#20 上限是**跨领域合计** 25（每域各算 25 的实现必红），超出部分如实说明；
+ * - PR#21 **领域列表上就能开练**（必须先点进某个领域才能开练的实现必红）；
+ * - PR#22 「清空勾选」归零，领域行不再标"已加入"；
+ * - PR#23 玩家**显式取消**的卡不会被自动补齐重新勾上。
+ */
+describe('mountPractice —— 换领域与多领域合练（D50）', () => {
+  const due = (id: string, deckId: string, order = 1): Card =>
+    card(id, { deckId, srs: srs({ due: NOW - order }) });
+
+  it('PR#17 卡列表里有显式「换领域」，点了回领域列表且勾选保留', () => {
+    const { root } = setupTwo([due('a1', 'd1')], [due('b1', 'd2')]);
+    openFirstDeck(root);
+    // 显式入口在（只有屏顶「返回」的实现必红）
+    expect(root.querySelector('[data-ui="deck-switch"]'), '卡列表里没有「换领域」入口').not.toBeNull();
+    expect(ui(root, 'deck-view-title').textContent).toContain('唐诗');
+
+    const before = picks(root);
+    expect(before).toEqual(['a1']);
+    click(ui(root, 'deck-switch'));
+    // 回到领域列表，且刚才勾的**还在**（换领域不等于清空）
+    expect(ui(root, 'practice-decks').hidden).toBe(false);
+    expect(ui(root, 'practice-deck-view').hidden).toBe(true);
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 1');
+    // 再进来：还是勾着的（上一条若只改了文案、其实清空了，这里会红）
+    click(deckBtnById(root, 'd1'));
+    expect(picks(root)).toEqual(['a1']);
+  });
+
+  it('PR#18 两个领域的勾选合起来开练，文案如实报"来自 2 个领域"', () => {
+    const seen: string[][] = [];
+    const { root } = setupTwo([due('a1', 'd1')], [due('b1', 'd2')], {
+      onDrill: (input) => void seen.push([...input.cardIds]),
+    });
+    click(deckBtnById(root, 'd1'));
+    click(ui(root, 'deck-switch'));
+    click(deckBtnById(root, 'd2'));
+    expect(picks(root).sort()).toEqual(['b1']);
+    click(ui(root, 'deck-switch'));
+    expect(ui(root, 'practice-picks').textContent).toContain('来自 2 个领域');
+    click(ui(root, 'drill-start'));
+    expect(seen).toEqual([['a1', 'b1']]);
+  });
+
+  it('PR#19 「移出本次」只移该领域，另一域的勾选不受影响', () => {
+    const seen: string[][] = [];
+    // a3 **未到期**且被玩家显式勾上：移出 d1 必须连带清掉这条"手动记录"，
+    // 否则再进来它又自己勾上了（"移出"就等于没生效）。
+    const { root } = setupTwo(
+      [due('a1', 'd1'), due('a2', 'd1', 2), card('a3', { deckId: 'd1', srs: srs({ due: NOW + 999_999 }) })],
+      [due('b1', 'd2')],
+      { onDrill: (input) => void seen.push([...input.cardIds]) },
+    );
+    click(deckBtnById(root, 'd1'));
+    togglePick(root, 'a3', true); // 手动加一张没到期的
+    expect(picks(root).sort()).toEqual(['a1', 'a2', 'a3']);
+    click(ui(root, 'deck-switch'));
+    click(deckBtnById(root, 'd2'));
+    click(ui(root, 'deck-switch'));
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 4');
+
+    const remove = deckRemoveBtn(root, 'd1');
+    expect(remove, '已纳入的领域没有「移出本次」').not.toBeNull();
+    remove?.click();
+    // 移出的是**整个 d1**：它的三张卡都不在本次里，d2 的那张不受影响
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 1');
+    expect(deckRemoveBtn(root, 'd1'), '移出后还留着「移出本次」').toBeNull();
+    expect(deckRemoveBtn(root, 'd2'), '移出 d1 连带把 d2 也移出了').not.toBeNull();
+    click(ui(root, 'drill-start'));
+    expect(seen).toEqual([['b1']]);
+
+    // 再进 d1：只有"该练的"（a1/a2）回来，手动勾的那张没到期的**不该**自己勾上
+    click(deckBtnById(root, 'd1'));
+    expect(picks(root).sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('PR#20 上限是跨领域合计 25，超出部分如实说明', () => {
+    const many = (deckId: string, prefix: string): Card[] =>
+      Array.from({ length: 20 }, (_, i) => due(`${prefix}${i}`, deckId, i + 1));
+    const { root } = setupTwo(many('d1', 'a'), many('d2', 'b'), { onDrill: () => undefined });
+    click(deckBtnById(root, 'd1'));
+    click(ui(root, 'deck-switch'));
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 20');
+    click(deckBtnById(root, 'd2'));
+    click(ui(root, 'deck-switch'));
+    // 上限是合计 25（每域各算 25 的实现会给出 40）
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 25');
+    expect(ui(root, 'practice-cap-hint').hidden).toBe(false);
+    expect(ui(root, 'practice-cap-hint').textContent).toContain('15');
+  });
+
+  it('PR#21 领域列表上就能开练（不必先进某个领域）', () => {
+    const seen: string[][] = [];
+    const { root } = setupTwo([due('a1', 'd1')], [due('b1', 'd2')], {
+      onDrill: (input) => void seen.push([...input.cardIds]),
+    });
+    // 一个领域都没进 ⇒ 一个都没勾 ⇒ 按钮说明怎么开始
+    expect((ui(root, 'drill-start') as HTMLButtonElement).disabled).toBe(true);
+    expect(ui(root, 'drill-start').textContent).toContain('先勾');
+    click(deckBtnById(root, 'd1'));
+    click(ui(root, 'deck-switch'));
+    click(deckBtnById(root, 'd2'));
+    click(ui(root, 'deck-switch'));
+    // **还在领域列表上**就能开练（`click` 对隐藏元素也生效，所以必须显式断言它可见 ——
+    // 变异实测：只断言"点了有反应"时，"底部条只在卡列表里显示"的实现照样全绿）
+    expect(ui(root, 'practice-decks').hidden).toBe(false);
+    expect(ui(root, 'drill-bar').hidden, '领域列表上不显示「开始练功」').toBe(false);
+    expect(ui(root, 'drill-bar').textContent).toContain('来自 2 个领域');
+    expect((ui(root, 'drill-start') as HTMLButtonElement).disabled).toBe(false);
+    click(ui(root, 'drill-start'));
+    expect(seen).toEqual([['a1', 'b1']]);
+  });
+
+  it('PR#22 「清空勾选」归零，领域行不再标"已加入"', () => {
+    const { root } = setupTwo([due('a1', 'd1')], [due('b1', 'd2')]);
+    click(deckBtnById(root, 'd1'));
+    click(ui(root, 'deck-switch'));
+    click(deckBtnById(root, 'd2'));
+    click(ui(root, 'deck-switch'));
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 2');
+    expect(deckRemoveBtn(root, 'd1')).not.toBeNull();
+
+    click(ui(root, 'picks-clear'));
+    expect(ui(root, 'practice-picks').textContent).toContain('已选 0');
+    expect(deckRemoveBtn(root, 'd1')).toBeNull();
+    expect((ui(root, 'drill-start') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('PR#23 显式取消的卡不会被自动补齐重新勾上', () => {
+    const { root } = setupTwo([due('a1', 'd1'), due('a2', 'd1', 2)], [], { onDrill: () => undefined });
+    click(deckBtnById(root, 'd1'));
+    expect(picks(root).sort()).toEqual(['a1', 'a2']);
+    togglePick(root, 'a2', false);
+    // 重渲染（任何一次快照订阅都会触发）之后不许把它加回来
+    togglePick(root, 'a1', true);
+    expect(picks(root)).toEqual(['a1']);
   });
 });
 

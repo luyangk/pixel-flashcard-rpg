@@ -232,3 +232,27 @@ export function parseShareQuery(search: string): SharedInput | null;
 - [x] Step 2 红 → Step 3 实现 → Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
 - [x] 变异自检（每条都真的会红）：① `hidden: false` 写死 ⇒ DC#E2/HS#E3 红；② 入口只切路由不切分区 ⇒ HS#E2 红；③ 从菜单进练功屏沿用上次落点 ⇒ HS#E2 红；④ 宿主无条件透传 `onCollect` ⇒ HS#E3 红
 - [x] 真产物兜底：**DB#9** 在 `dist/` 里从菜单进卡组 → 入口可见 → 点进去 `tab-collect` 已按下且 `practice-collect` 挂上（`main.ts` 漏传采集口 ⇒ 红）
+
+---
+
+### Task 13: 练功屏 —— 显式「换领域」+ 多领域合练（D50）
+
+**Files:** Modify `src/ui/practice.ts`、`src/ui/styles.css`；Test `tests/ui/practice.test.ts`、`tests/e2e/dist.boot.test.ts`；`README.md`、`docs/PRD.md`
+
+**现场反馈（原话）：**「看旧卡选择领域后找不到后退的按钮，不知道怎么选其他领域，并且，希望练功时领域也可以多选，不然部分领域卡数不够」
+
+**口径（PRD D50，逐条钉住）：**
+- 卡列表顶部加显式 `[data-ui="deck-switch"]`「← 换领域」+ 当前领域名 `[data-ui="deck-view-title"]`；
+  屏顶「返回」的两段式语义不变（卡列表 → 领域列表 → 菜单），换领域**不清勾选**；
+- 本次练功可纳入**多个领域**：`openedDeckIds`（已纳入）+ `picked`（显式勾）+ `dropped`（显式取消）；
+- 选择模型（每次渲染**派生**，不缓存）：卡池 = 已纳入领域的卡；`shouldPickByDefault` 且未被 `dropped`
+  的卡自动补齐；**显式勾的优先占位**；上限**合计** 25；超出部分如实计 `cappedOut`；
+- 领域行显示「本次已选 N 张」，已纳入的行多一个 `[data-deck-remove]`「移出本次」（该领域整块退出，
+  它的勾选一并清掉）；底部 `[data-ui="drill-bar"]` 常驻「本次已选 N / 25 · 来自 M 个领域」+
+  `[data-ui="picks-clear"]`「清空勾选」+ `[data-ui="drill-start"]`「开始练功」——**领域列表上也能直接开练**；
+- 不动 core/app：`startFight` 的 `cardIds` 分支本来就"原样成池、保序"，跨领域卡池天然支持。
+
+- [x] Step 1 失败测试：PR#17 换领域入口 + 勾选保留；PR#18 两域合练交给 `onDrill` 的是并集且文案报"来自 2 个领域"；PR#19 「移出本次」只移该域；PR#20 上限是**跨域合计**且如实报"还有 N 张没进池"；PR#21 领域列表上就能开练；PR#22 清空勾选归零；PR#23 显式取消的卡不被自动补齐重新勾上
+- [x] Step 2 红 → Step 3 实现（先把底部条改成常驻 + 派生式 `selection()`）→ Step 4 `npm run verify` 五段全绿 → Step 5 Commit + 推送 → 确认 CI/Deploy 双绿
+- [x] 变异自检（6 条**全部**会红）：① 换领域时清空勾选；② 上限按**每个领域**各算 25；③ 移除领域时不清该域勾选记录；④ `dropped` 不生效（取消的又被自动补齐）；⑤ 底部条只在卡列表里显示；⑥ 卡列表里没有「换领域」入口
+- [x] 真产物扩展：**DB#7** 改成「打开 A → 换领域 → 打开 B → 手动勾一张 → 底部条报『来自 2 个领域』→ 开练」
