@@ -36,12 +36,18 @@ import presetJson from '../assets/content/preset.json';
 
 import { createGameController } from './app/gameController';
 import { createCoordinator } from './app/persist';
-import { backfillPresetChoices, installPresetContent, isFreshLibrary } from './app/presetContent';
+import {
+  backfillPresetChoices,
+  installMissingPresetDecks,
+  installPresetContent,
+  isFreshLibrary,
+} from './app/presetContent';
 import { parseShareQuery } from './app/shareIntake';
 import { loadSprites } from './platform/assets';
 import { now as clockNow } from './platform/clock';
 import { tzOffsetMin } from './platform/env';
 import { makeRng } from './platform/rngProvider';
+import { addOffers, loadOffers } from './platform/presetOfferStore';
 import { openStorage } from './platform/storage';
 import { mountHost, type HostHandle } from './ui/host';
 import { assembleHost } from './ui/hostAdapters';
@@ -73,6 +79,16 @@ async function boot(): Promise<void> {
   // 所以已经玩起来的存档需要这一遍"只补缺"的回填（幂等、无改动时不写盘）。
   const backfilled = await backfillPresetChoices(coord, presetJson);
   if (backfilled.filled > 0) await coord.flush();
+  /**
+   * D66：**增量补装新增的预置领域**。预置内容只在空库首灌，所以"内容文件里加了新领域"
+   * 对已有存档不生效 —— 玩家会问"你说的 AI 卡组在哪"。这里补齐，并遵守两条纪律：
+   * 只补**从没送过**的（本机记录，见 `platform/presetOfferStore`）；玩家删过的不再塞回来。
+   */
+  const addedDecks = await installMissingPresetDecks(coord, presetJson, clockNow(), loadOffers());
+  if (addedDecks.installed.length > 0) {
+    addOffers(addedDecks.installed);
+    await coord.flush();
+  }
   const notice = wasFresh && !installed.installed ? installed.reason : null;
 
   const rawCtrl = await createGameController({

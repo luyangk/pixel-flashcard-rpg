@@ -3,7 +3,7 @@
  *
  * 这一组用例守的是**四步顺序**（`clear` → `reload` → `installPresetContent` → `flush`）。
  * 判别力（每条都写清"坏实现为何必红"）：
- * - RS#1 重置后真的是"新装状态"：预置 4 领域 30 张卡回来了，等级/战绩/序章记录/设置全部归零。
+ * - RS#1 重置后真的是"新装状态"：预置领域与卡数（从内容文件推导）回来了，等级/战绩/序章记录/设置全部归零。
  *   只清不灌（玩家看到空卡库）或只灌不清（自己的卡还在）都会红；
  * - RS#2 **先 reload 再灌**：RS#2 先当场演出"只清存储、不 reload 就灌"的后果（installPresetContent
  *   拒），再证明正路灌得进去 ⇒ 把 resetFlow 里的 reload 删掉必红；
@@ -24,6 +24,10 @@ import { createCoordinator, type Coordinator } from '../../src/app/persist';
 import { installPresetContent } from '../../src/app/presetContent';
 import { resetSave } from '../../src/app/resetFlow';
 import presetJson from '../../assets/content/preset.json';
+
+/** 预置内容的规模（D66：内容会长，断言不写死 —— 否则每加一批卡就要改一串测试）。 */
+const PRESET_DECKS = presetJson.decks.length;
+const PRESET_CARDS = presetJson.decks.reduce((n, d) => n + d.cards.length, 0);
 
 const NOW = Date.UTC(2026, 9, 28, 8, 0, 0);
 
@@ -94,13 +98,13 @@ describe('resetFlow（重置存档）', () => {
     const res = await resetSave({ coord: rig.coord, store: rig.store, content: presetJson, nowMs: NOW });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    // 预置内容：4 领域 / 30 张（数值对着内容文件写死：内容被改小/改空时这里也要红）
-    expect(res.decks).toBe(4);
-    expect(res.cards).toBe(30);
+    // 预置内容：领域数与卡数**取自内容文件**（D66：内容会长，写死会每加一批卡就红一片）
+    expect(res.decks).toBe(PRESET_DECKS);
+    expect(res.cards).toBe(PRESET_CARDS);
 
     const save = rig.coord.snapshot();
-    expect(save.cards.length).toBe(30);
-    expect(save.decks.length).toBe(4);
+    expect(save.cards.length).toBe(PRESET_CARDS);
+    expect(save.decks.length).toBe(PRESET_DECKS);
     expect(save.cards.some((c) => c.id === 'c1')).toBe(false); // 玩家自己加的卡没了
     expect(save.decks.some((d) => d.id === 'deck-mine')).toBe(false);
     expect(save.meta.plays).toBe(0);
@@ -125,7 +129,7 @@ describe('resetFlow（重置存档）', () => {
     const rig = await makeRig(playedSave());
     const res = await resetSave({ coord: rig.coord, store: rig.store, content: presetJson, nowMs: NOW });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.cards).toBe(30);
+    if (res.ok) expect(res.cards).toBe(PRESET_CARDS);
   });
 
   it('RS#6 重置后的档真的落盘（只改内存不 flush 的实现必红）', async () => {
@@ -133,7 +137,7 @@ describe('resetFlow（重置存档）', () => {
     await resetSave({ coord: rig.coord, store: rig.store, content: presetJson, nowMs: NOW });
     const disk = await rig.onDisk();
     expect(disk).not.toBeNull();
-    expect(disk?.cards.length).toBe(30);
+    expect(disk?.cards.length).toBe(PRESET_CARDS);
     expect(disk?.meta.plays).toBe(0);
     expect(disk?.settings.progress.exp).toBe(0);
     // 只读闩锁也要解掉：重置正是坏档玩家唯一的自救路径之一
@@ -219,12 +223,12 @@ describe('resetFlow（重置存档）', () => {
 
     const res = await resetSave({ coord, store, content: presetJson, nowMs: NOW });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.cards).toBe(30);
+    if (res.ok) expect(res.cards).toBe(PRESET_CARDS);
     expect(coord.readOnly()).toBe(false); // 闩锁解除（D32 的既定口径：reload 是唯一解闩面）
     // **换代**是关键：只读位被控制器/UI 缓存着，没有代次它们不会知道"世界变了"
     // （GC#14 就是这条的控制器侧对照：不重估 ⇒ 横幅挂着 + 写入静默早退）
     expect(coord.epoch()).toBeGreaterThan(epochBefore);
-    expect((await store.load())?.cards.length).toBe(30);
+    expect((await store.load())?.cards.length).toBe(PRESET_CARDS);
     // 重置后确实可写了（不再被闩锁拒）
     await coord.mutate((save) => {
       save.settings.progress.exp = 7;

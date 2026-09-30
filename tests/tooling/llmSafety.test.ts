@@ -97,11 +97,14 @@ describe('LLM 安全不变量', () => {
     // ③ sourceStore.ts = 采新卡的来源库（玩家自己加/删的源；D53 —— 同样是"本机工具配置"，
     //    不进存档、不进备份、不存 Key）；
     // ④ profileStore.ts = 玩家身份（昵称 + 短 ID；D57 —— 它不是游戏进度，且该活过"重置存档"，
-    //    与 AI Key 同款口径）。
+    //    与 AI Key 同款口径）；
+    // ⑤ presetOfferStore.ts = "这台设备送过哪些预置领域"（D66 —— 补装新预置领域时，
+    //    要靠它区分"还没收到过"与"收到过但玩家删了"，后者不该被塞回来）。
     const platformHits = hits(codeOf(['src/platform']), 'localStorage');
     expect(platformHits).toEqual([
       'src/platform/inboxStore.ts',
       'src/platform/llmConfig.ts',
+      'src/platform/presetOfferStore.ts',
       'src/platform/profileStore.ts',
       'src/platform/sourceStore.ts',
     ]);

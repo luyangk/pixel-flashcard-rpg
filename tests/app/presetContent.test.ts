@@ -17,6 +17,7 @@ import { validateSave } from '@core/saveMigrate';
 import { createCoordinator, type Coordinator } from '../../src/app/persist';
 import {
   backfillPresetChoices,
+  installMissingPresetDecks,
   buildPresetEntities,
   contentCardCount,
   installPresetContent,
@@ -141,9 +142,15 @@ describe('真实内容文件（assets/content/preset.json）', () => {
     const checked = validateContent(presetJson);
     expect(checked.ok, checked.ok ? '' : (checked as { reason: string }).reason).toBe(true);
     if (!checked.ok) return;
-    expect(checked.content.decks).toHaveLength(4);
-    expect(contentCardCount(checked.content)).toBe(30);
-    expect(checked.content.decks.map((d) => d.id)).toEqual(['preset-life', 'preset-tang', 'preset-root', 'preset-idiom']);
+    expect(checked.content.decks).toHaveLength(5);
+    expect(contentCardCount(checked.content)).toBe(57); // 30 + 27（D66）
+    expect(checked.content.decks.map((d) => d.id)).toEqual([
+      'preset-life',
+      'preset-tang',
+      'preset-root',
+      'preset-idiom',
+      'preset-ai-foundation', // D66：AI 基础（论文卡组）
+    ]);
     // 引导领域（阈值特调 15）必须有足够卡数才可能在 3 天内达标
     const guide = checked.content.decks.find((d) => d.id === 'preset-life');
     expect(guide?.cards.length).toBeGreaterThanOrEqual(8);
@@ -153,7 +160,7 @@ describe('真实内容文件（assets/content/preset.json）', () => {
     // 为什么这条是硬契约：预置卡没有自带 choices 时，战斗只能吃池子 ——
     // 多领域合练就会串味（现场："生活常识的题里出现 AI 的选项"）。这条守着"开局就有选项"。
     const cards = presetJson.decks.flatMap((d) => d.cards);
-    expect(cards).toHaveLength(30);
+    expect(cards).toHaveLength(57); // 30 张原有 + 27 张 AI 基础（D66）
     for (const c of cards) {
       const choices = c.choices ?? [];
       expect(choices.length, `${c.id} 的干扰项不是 3 条`).toBe(3);
@@ -193,8 +200,8 @@ describe('installPresetContent —— 只在空库灌', () => {
     expect(isFreshLibrary(coord.snapshot())).toBe(true);
 
     const first = await installPresetContent(coord, presetJson, NOW);
-    expect(first).toEqual({ installed: true, decks: 4, cards: 30 });
-    expect(coord.snapshot().cards).toHaveLength(30);
+    expect(first).toEqual({ installed: true, decks: 5, cards: 57 });
+    expect(coord.snapshot().cards).toHaveLength(57);
 
     expect(await coord.flush()).toBe(true);
     const persisted = await store.load();
@@ -359,4 +366,98 @@ describe('backfillPresetChoices —— 给已有存档补干扰项（D56）', ()
     expect(second.filled).toBe(0);
     expect(wrapped.writes()).toBe(writesAfterFirst);
   });
+});
+
+/* ------------------------------------------------------------------ D66：增量补装新领域 */
+
+/**
+ * 判别力（玩家现场会遇到的第一个问题：他**已经**有存档了）：
+ * - PC#9 老档（已有 4 个预置域）⇒ 启动时补上新增的 AI 基础域，且**一次批量写**；
+ * - PC#10 已经补过（或玩家删过）⇒ **不再塞回来**（靠设备本地的"已送过"记录，而不是靠每次扫描）；
+ * - PC#11 空库首灌走原路径，不会被补装逻辑重复执行；
+ * - PC#12 预置卡的 `url` 会写进 `source.url`（否则「看原文」永远不会出现）。
+ */
+describe('installMissingPresetDecks —— 增量补装（D66）', () => {
+  /** 一张最小的预置卡（本 describe 自己的夹具，避免依赖另一个 describe 里的局部 helper）。 */
+  const presetCard = (id: string): Card => ({
+    id,
+    deckId: 'preset-life',
+    front: `q-${id}`,
+    back: `a-${id}`,
+    tags: [],
+    source: { type: 'preset', createdAt: NOW },
+    srs: { stability: 'new', due: NOW, ease: 2.5, interval: 0, reps: 0, lapses: 0, effectiveReviewDays: [] },
+  });
+
+  it('PC#12 预置卡的 url 进 source.url（看原文的唯一判据）', () => {
+    const checked = validateContent(presetJson);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const { cards } = buildPresetEntities(checked.content, NOW);
+    const aiCard = cards.find((c) => c.id === 'ai-01');
+    expect(aiCard?.source?.url).toBe('https://arxiv.org/abs/1706.03762');
+    expect(aiCard?.source?.type).toBe('preset');
+    // 原有的生活常识卡没有 url ⇒ 不该凭空长出一个
+    expect(cards.find((c) => c.id === 'life-01')?.source?.url).toBeUndefined();
+  });
+
+  it('PC#9 老档（已有 4 个旧域）⇒ 只补 AI 基础，且卡带原文链接', async () => {
+    const checked = validateContent(presetJson);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+
+    // ① 空库 ⇒ 补装逻辑**什么都不做**（首灌是 installPresetContent 的事）
+    const fresh = await makeCoord(emptySave());
+    expect(await installMissingPresetDecks(fresh.coord, checked.content, NOW)).toEqual({
+      installed: [],
+      skipped: [],
+    });
+
+    // ② 老档（把上一版的 4 个域都摆上）⇒ 只补 AI 基础
+    const inner = createMemoryStorage();
+    await inner.save({
+      ...emptySave(),
+      decks: [
+        { id: 'preset-life', name: '生活常识', isPreset: true },
+        { id: 'preset-tang', name: '唐诗', isPreset: true },
+        { id: 'preset-root', name: '英语词根', isPreset: true },
+        { id: 'preset-idiom', name: '成语典故', isPreset: true },
+      ],
+      cards: [presetCard('life-01')],
+    });
+    const wrapped = wrapStore(inner);
+    const coord = await createCoordinator(wrapped.store, { now: () => NOW, debounceMs: 0 });
+    const first = await installMissingPresetDecks(coord, checked.content, NOW);
+    expect(first.installed).toEqual(['preset-ai-foundation']);
+    await coord.flush();
+    expect(coord.snapshot().cards.filter((c) => c.deckId === 'preset-ai-foundation')).toHaveLength(27);
+    // 补进来的卡**带原文链接**（否则「看原文」那条路在这批卡上是空的）
+    expect(
+      coord.snapshot().cards.find((c) => c.id === 'ai-01')?.source?.url,
+    ).toBe('https://arxiv.org/abs/1706.03762');
+    expect(wrapped.writes()).toBe(1); // 一次批量写，不是 27 次
+
+    // ③ 再跑一次（存档里已经有了）⇒ 不再补
+    const second = await installMissingPresetDecks(coord, checked.content, NOW);
+    expect(second.installed).toEqual([]);
+  });
+
+  it('PC#10 玩家删过（"已送过"记录里有）⇒ 不再塞回来', async () => {
+    const checked = validateContent(presetJson);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const inner = createMemoryStorage();
+    await inner.save({
+      ...emptySave(),
+      decks: [{ id: 'preset-life', name: '生活常识', isPreset: true }],
+      cards: [presetCard('life-01')],
+    });
+    const coord = await createCoordinator(inner, { now: () => NOW, debounceMs: 0 });
+    // offered 里已经记着"送过 AI 基础"（上一版就送过、玩家当时删了）
+    const res = await installMissingPresetDecks(coord, checked.content, NOW, ['preset-ai-foundation']);
+    expect(res.installed).not.toContain('preset-ai-foundation');
+    expect(res.skipped).toContain('preset-ai-foundation');
+    expect(coord.snapshot().decks.map((d) => d.id)).not.toContain('preset-ai-foundation');
+  });
+
 });

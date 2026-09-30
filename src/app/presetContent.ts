@@ -36,6 +36,11 @@ export interface PresetCardContent {
    * 出现 AI 的选项）。写进内容文件后，每张预置卡一开局就有**同领域、像常见误解**的选项。
    */
   readonly choices?: readonly string[];
+  /**
+   * **原文入口**（D66）：这篇卡对应的论文/文章地址（例：arXiv 摘要页）。
+   * 有了它，App 里那张卡就会多一个「看原文」（D60）—— 玩家能自己核对总结对不对。
+   */
+  readonly url?: string;
 }
 
 /** 内容文件里的一个领域。 */
@@ -103,6 +108,10 @@ export function validateContent(content: unknown): { ok: true; content: PresetCo
           return bad(`卡 ${card.id} 的 choices 有条目超过 ${CHOICE_TEXT_MAX} 字`);
         }
       }
+      const cardUrl = card.url;
+      if (cardUrl !== undefined && !/^https?:\/\//i.test(String(cardUrl))) {
+        return bad(`卡 ${card.id} 的 url 不是 http(s) 链接`);
+      }
       const tags = card.tags;
       if (tags !== undefined && (!Array.isArray(tags) || tags.some((t) => typeof t !== 'string'))) {
         return bad(`卡 ${card.id} 的 tags 不是字符串数组`); // validateSave: tags 逐项字符串
@@ -143,7 +152,8 @@ export function buildPresetEntities(
         deckId: d.id,
         front: c.front,
         back: c.back,
-        source: { type: 'preset', createdAt: nowMs },
+        // D66：预置卡也带原文入口（`source.url` 是「看原文」唯一认的字段）
+        source: { type: 'preset', createdAt: nowMs, ...(typeof c.url === 'string' && c.url.length > 0 ? { url: c.url } : {}) },
         srs: createInitialSRS(nowMs),
         tags: Array.isArray(c.tags) ? [...c.tags] : [],
         // 与生成卡同一套消毒：去空白、去掉与答案相同的、去重、按上限截断
@@ -154,6 +164,46 @@ export function buildPresetEntities(
     }
   }
   return { decks, cards };
+}
+
+/**
+ * 增量补装**新增的预置领域**（D66）。
+ *
+ * ## 为什么需要它
+ * 预置内容只在**空库首次启动**时灌入（`installPresetContent` 的唯一条件）。所以"往内容文件里加一个新领域"
+ * 对已有存档**完全不生效** —— 玩家会问"你说的 AI 卡组在哪"。这个函数补的就是这一步。
+ *
+ * ## 三条纪律
+ * 1. **只补没见过的领域**，且**只补一次**：靠设备本地的"已送过"记录（`offered` 由调用方传入/写回）。
+ *    不这样做，玩家删掉某个预置域之后每次启动又会长回来 —— 那比不补还烦人。
+ * 2. **只补不删**：不动玩家已有的领域与卡，也不覆盖任何字段。
+ * 3. **空库不插手**：库是空的时候交给 `installPresetContent`（它有"整份灌装"的语义）。
+ */
+export async function installMissingPresetDecks(
+  coord: Coordinator,
+  content: PresetContent,
+  nowMs: number,
+  offered: readonly string[] = [],
+): Promise<{ readonly installed: string[]; readonly skipped: string[] }> {
+  const decks = Array.isArray(coord.snapshot().decks) ? coord.snapshot().decks : [];
+  const cards = Array.isArray(coord.snapshot().cards) ? coord.snapshot().cards : [];
+  if (decks.length === 0 && cards.length === 0) return { installed: [], skipped: [] }; // 空库交给首灌
+  const have = new Set(decks.map((d) => d?.id));
+  const offeredSet = new Set(offered);
+  const missing = (content?.decks ?? []).filter(
+    (d) => typeof d?.id === 'string' && !have.has(d.id) && !offeredSet.has(d.id),
+  );
+  const skipped = (content?.decks ?? [])
+    .filter((d) => typeof d?.id === 'string' && !have.has(d.id) && offeredSet.has(d.id))
+    .map((d) => d.id);
+  if (missing.length === 0) return { installed: [], skipped };
+
+  const entities = buildPresetEntities({ decks: missing }, nowMs);
+  await coord.mutate((save) => {
+    save.decks = [...save.decks, ...entities.decks];
+    save.cards = [...save.cards, ...entities.cards];
+  });
+  return { installed: missing.map((d) => d.id), skipped };
 }
 
 /**

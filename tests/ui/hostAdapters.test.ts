@@ -26,6 +26,10 @@ import arcJson from '../../assets/narrative/arc.json';
 import beatsJson from '../../assets/narrative/beats.json';
 import eggsJson from '../../assets/narrative/eggs.json';
 import presetJson from '../../assets/content/preset.json';
+
+/** 预置内容规模（D66：不写死，内容会长）。 */
+const PRESET_DECKS = presetJson.decks.length;
+const PRESET_CARDS = presetJson.decks.reduce((n, d) => n + d.cards.length, 0);
 import prologueJson from '../../assets/narrative/prologue.json';
 import { localDayString } from '@core/reviewLedger';
 import { fetchPage } from '../../src/platform/pageFetch';
@@ -357,12 +361,12 @@ describe('assembleHost —— 重置存档（Plan 5 追加）', () => {
 
     expect(typeof rig.assembly.adapters.resetSave).toBe('function');
     const res = await rig.assembly.adapters.resetSave?.();
-    expect(res).toEqual({ ok: true, cards: 30, decks: 4 });
+    expect(res).toEqual({ ok: true, cards: PRESET_CARDS, decks: PRESET_DECKS });
     // 内存档与存储档都得是"新装状态"（resetFlow 的 flush 收口；ADR 见 app/resetFlow.ts）
     expect(rig.coord.snapshot().meta.plays).toBe(0);
     expect(rig.coord.snapshot().settings.progress.exp).toBe(0);
     const disk = await rig.store.load();
-    expect(disk?.cards.length).toBe(30);
+    expect(disk?.cards.length).toBe(PRESET_CARDS);
     expect(disk?.meta.plays).toBe(0);
 
     // 「先导出备份」：走 exportAndMark（信封 + 记时），文件名与卡组页导出同一家族

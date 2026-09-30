@@ -25,6 +25,7 @@ import { clearInbox, loadInbox, saveInbox } from '../platform/inboxStore';
 import { fetchSourceItems } from '../platform/feedFetch';
 import { loadSources, saveSources } from '../platform/sourceStore';
 import { ensureProfile, loadProfile, saveProfile } from '../platform/profileStore';
+import { clearOffers } from '../platform/presetOfferStore';
 import { checkForUpdate, pageBuild, reloadPage } from '../platform/pwaUpdate';
 import { fetchPage, type PageFetchResult } from '../platform/pageFetch';
 import { bossFightParams, setBossName } from '../app/bossFlow';
@@ -343,6 +344,8 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         : async () => {
             // 复查 #1：重置也清缓存（与导入同款理由）
             clearFeedCache();
+            // D66：重置 = 回到新装状态，连"送过哪些预置领域"的记录一起清（之后重新走首灌）
+            clearOffers();
             return resetSave({ coord, store, content: deps.presetContent, nowMs: now() });
           },
     exportBackupNow: async () => {

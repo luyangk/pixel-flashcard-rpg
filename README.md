@@ -275,7 +275,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **94 文件 / 1404 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **95 文件 / 1412 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -294,6 +294,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D66 AI 基础预置卡组（27 张论文卡 + 原文入口）+ 增量补装新预置领域（本机"已送过"记录，删过不再塞） | `tests/app/presetContent.test.ts` PC#9/PC#10/PC#12、`tests/platform/presetOfferStore.test.ts` PO#1–#5、`tests/tooling/llmSafety.test.ts`（localStorage 白名单第 5 个归属）、`tests/assets/narrative.contract.test.ts` EG#1；5 条变异全部会红 |
 | D65 网格卡行结构性契约（窄屏「一字一行」修复：补齐 grid-column + minmax(0,1fr) + 契约测试） | `tests/ui/cardGrid.test.ts` CG#1–CG#2（DOM 结构 × CSS 落列声明的交叉校验）；4 条变异全部会红 |
 | D64 状态标签的天数闸门（已掌握=间隔≥7天**且**跨≥3个复习日；复习=间隔≥1天且跨≥2天；统计口径同步） | `tests/core/stabilityDays.test.ts` SD#1–4、`tests/core/progressGuide.test.ts` PG#5/PG#5b、`tests/core/reviewFlow.test.ts`、`tests/app/growth.test.ts`、`tests/ui/practice.test.ts`；4 条变异全部会红 |
 | D63 进度说明（卡片"还差什么"+《状态怎么升》/ 等级"还差多少·约几场"/ 卷灵 X/Y 与"隔天练才算一次"/ 备战屏未达标也报进度） | `tests/core/progressGuide.test.ts` PG#1–4b、`tests/ui/practice.test.ts` PR#G1–G2 / PR#B1–B3、`tests/ui/menu.test.ts` MN#L1–L2、`tests/ui/prepare.test.ts` PR#P1、`tests/core/reviewLedger.test.ts`（脏天数不灌水）；8 条变异全部会红 |

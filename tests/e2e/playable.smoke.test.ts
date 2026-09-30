@@ -45,6 +45,10 @@ import beatsJson from '../../assets/narrative/beats.json';
 import eggsJson from '../../assets/narrative/eggs.json';
 import fakeWordsJson from '../../assets/narrative/fake-words.json';
 import presetJson from '../../assets/content/preset.json';
+
+/** 预置内容规模（D66：领域/卡数从内容文件推导，内容长了不必改测试）。 */
+const PRESET_DECKS = presetJson.decks.length;
+const PRESET_CARDS = presetJson.decks.reduce((n, d) => n + d.cards.length, 0);
 import prologueJson from '../../assets/narrative/prologue.json';
 
 const TZ = 480;
@@ -196,12 +200,13 @@ afterEach(() => {
 });
 
 describe('E2E#1 冷启动 → 预置内容 → 序章 → 菜单', () => {
-  it('新装玩家拿到 4 领域 30 张手写卡；序章逐屏演完才进菜单', async () => {
+  it('新装玩家拿到全部预置领域与手写卡；序章逐屏演完才进菜单', async () => {
     const h = await boot();
     // 预置内容真的进了存档（且过落盘自检）
     const save = h.coord.snapshot();
-    expect(save.decks.map((d) => d.id)).toEqual(['preset-life', 'preset-tang', 'preset-root', 'preset-idiom']);
-    expect(save.cards).toHaveLength(30);
+    // D66：领域集合与内容文件一致（加领域时不再手改断言）
+    expect(save.decks.map((d) => d.id)).toEqual(presetJson.decks.map((d) => d.id));
+    expect(save.cards).toHaveLength(PRESET_CARDS);
     await h.coord.flush();
     expect(validateSave(h.coord.snapshot()).ok).toBe(true);
 
@@ -323,12 +328,12 @@ describe('E2E#2 首战（引导域）→ 结算屏', () => {
 });
 
 describe('E2E#3 导入他机备份 → 卡组页', () => {
-  it('导入 30 张卡的档：校验通过、列表刷新、分页与计数跟着变', async () => {
+  it('导入一份完整预置档：校验通过、列表刷新、分页与计数跟着变', async () => {
     const h = await boot();
     clickThroughPrologue(h.root);
     await settle();
 
-    // 他机档：4 个预置领域共 30 张卡（生活常识已攒 15 次有效复习），等级很高（atk 够打卷灵）
+    // 他机档：全部预置领域与卡（生活常识已攒 15 次有效复习），等级很高（atk 够打卷灵）
     const decks: Deck[] = presetJson.decks.map((d) => ({ id: d.id, name: d.name, isPreset: true }));
     const cards: Card[] = [];
     for (const d of presetJson.decks) {
@@ -353,7 +358,7 @@ describe('E2E#3 导入他机备份 → 卡组页', () => {
       },
       meta: { savedAt: NOW - 1000, plays: 5 },
     };
-    expect(cards).toHaveLength(30);
+    expect(cards).toHaveLength(PRESET_CARDS);
     // 导入链路吃的是**备份信封**（format/version/exportedAt/save），不是裸存档：
     // 用真 exportBackup 造文本，顺带把"导出→导入"这一对函数钉在一起
     h.setPicked(exportBackup(incoming, NOW));
@@ -363,13 +368,17 @@ describe('E2E#3 导入他机备份 → 卡组页', () => {
     await waitFor('导入落库并重载（meta.plays=5）', () => h.coord.snapshot().meta.plays === 5);
 
     const save = h.coord.snapshot();
-    expect(save.cards).toHaveLength(30);
-    expect(save.decks).toHaveLength(4);
+    expect(save.cards).toHaveLength(PRESET_CARDS);
+    expect(save.decks).toHaveLength(PRESET_DECKS);
     expect(save.meta.plays).toBe(5);
     expect(validateSave(save).ok).toBe(true);
     // 卡组页按 content 指纹刷新（导入后屏上是新卡，不是旧卡）
-    expect((h.root.querySelector('[data-ui="card-count"]') as HTMLElement).textContent).toBe('共 30 张 · 已显示 30 张');
-    expect(h.root.querySelectorAll('[data-card-id]')).toHaveLength(30);
+    // 卡组页分页：每页 50 张，所以"已显示"取页大小与总数的较小值
+    expect((h.root.querySelector('[data-ui="card-count"]') as HTMLElement).textContent).toBe(
+      `共 ${PRESET_CARDS} 张 · 已显示 ${Math.min(50, PRESET_CARDS)} 张`,
+    );
+    // 分页：DOM 里只渲染第一页（每页 50 张）
+    expect(h.root.querySelectorAll('[data-card-id]')).toHaveLength(Math.min(50, PRESET_CARDS));
     h.host.unmount();
   });
 });
@@ -443,7 +452,7 @@ describe('E2E#5 备份导出与提醒闸门', () => {
     // 下载到的是**备份信封**（format/version/exportedAt/save），存档本体在 .save 里
     expect(JSON.parse(text).format).toBeTruthy();
     expect(JSON.parse(text).save.schemaVersion).toBe(1);
-    expect(JSON.parse(text).save.cards).toHaveLength(30);
+    expect(JSON.parse(text).save.cards).toHaveLength(PRESET_CARDS);
     expect(h.ctrl.snapshot().reminderDue).toBe(false); // markExported 落位
     h.host.unmount();
   });

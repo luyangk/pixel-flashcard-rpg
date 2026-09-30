@@ -27,6 +27,7 @@
  */
 const DIST_SMOKE_ON = process.env.DIST_SMOKE === '1';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import presetJson from '../../assets/content/preset.json';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -483,8 +484,10 @@ describe.skipIf(!runDistSmoke)('真实产物启动冒烟（dist/）', () => {
       if (text.includes('存档已重置')) break;
     }
     expect(text, '产物里重置没有成功（真实链路某一步失败）').toContain('存档已重置');
-    expect(text).toContain('4 个领域');
-    expect(text).toContain('30 张卡');
+    // D66：领域/卡数从**内容文件**推导（内容会长，写死会每加一批卡就红一片）
+    const presetTotal = presetJson.decks.reduce((n, d) => n + d.cards.length, 0);
+    expect(text).toContain(`${presetJson.decks.length} 个领域`);
+    expect(text).toContain(`${presetTotal} 张卡`);
   }, 30_000);
 
   it('DB#9 产物里卡组页的「采新卡」入口真的通：点进去直接落在采新卡分区（D49）', async () => {
