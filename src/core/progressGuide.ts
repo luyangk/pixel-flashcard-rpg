@@ -16,6 +16,7 @@
 import type { Card } from './types';
 import { expToNext } from './stats';
 import { bossReady, domainReviewCount } from './reviewLedger';
+import { MASTERED_MIN_DAYS, REVIEW_MIN_DAYS } from './sm2';
 
 /** 卷灵阈值档位（与 settings.bossThresholdTier 同域）。 */
 export type BossTier = 15 | 30 | 50;
@@ -23,7 +24,7 @@ export type BossTier = 15 | 30 | 50;
 /** 已掌握的真实门槛（`sm2.promoteStability`：interval ≥ 7 天）——**说明与规则共用这一个数**。 */
 export const MASTERED_INTERVAL_DAYS = 7;
 
-/** 升到"复习"档的真实门槛：reps ≥ 1 且 interval ≥ 1 天。 */
+/** 升到"复习"档的真实门槛：interval ≥ 1 天（且 reps ≥ 1）。 */
 export const REVIEW_INTERVAL_DAYS = 1;
 
 /**
@@ -86,20 +87,41 @@ export function cardStatusHint(card: Card | null | undefined): CardStatusHint {
   const stability = srs?.stability;
   const interval = typeof srs?.interval === 'number' && Number.isFinite(srs.interval) ? srs.interval : 0;
   const days = Math.max(0, Math.round(interval * 10) / 10);
+  const dayCount = Array.isArray(srs?.effectiveReviewDays) ? srs.effectiveReviewDays.length : 0;
 
+  /**
+   * D64：**间隔够了但天数不够**是最容易被误解的一种状态（玩家问过"为什么昨天刚建的卡今天就已掌握"）。
+   * 这种事必须直说差在天数上，不能只报"间隔 15 天"让人以为已经掌握了。
+   */
+  if (interval >= MASTERED_INTERVAL_DAYS && dayCount < MASTERED_MIN_DAYS) {
+    const need = MASTERED_MIN_DAYS - dayCount;
+    return {
+      label: '复习',
+      hint: `间隔 ${days} 天已够，但只跨过 ${dayCount} 天 —— 再隔天复习 ${need} 次才算「已掌握」`,
+    };
+  }
+  if (interval >= REVIEW_INTERVAL_DAYS && dayCount < REVIEW_MIN_DAYS) {
+    return {
+      label: '在学',
+      hint: `间隔 ${days} 天已够，但只跨过 ${dayCount} 天 —— 明天再复习一次才算「复习」`,
+    };
+  }
   if (stability === 'mastered') {
-    return { label: '已掌握', hint: `间隔 ${days} 天 —— 已经过 ${MASTERED_INTERVAL_DAYS} 天，稳住就好` };
+    return {
+      label: '已掌握',
+      hint: `间隔 ${days} 天、已跨过 ${dayCount} 天 —— 隔几天回来复习一次就能稳住`,
+    };
   }
   if (stability === 'review') {
     return {
       label: '复习',
-      hint: `间隔 ${days} 天 → 到 ${MASTERED_INTERVAL_DAYS} 天算「已掌握」`,
+      hint: `间隔 ${days} 天 → 到 ${MASTERED_INTERVAL_DAYS} 天、并跨过 ${MASTERED_MIN_DAYS} 天算「已掌握」`,
     };
   }
   if (stability === 'learning') {
     return {
       label: '在学',
-      hint: `间隔 ${days} 天 → 到 ${REVIEW_INTERVAL_DAYS} 天算「复习」，再到 ${MASTERED_INTERVAL_DAYS} 天算「已掌握」`,
+      hint: `间隔 ${days} 天 → 到 ${REVIEW_INTERVAL_DAYS} 天算「复习」，再到 ${MASTERED_INTERVAL_DAYS} 天（且跨 ${MASTERED_MIN_DAYS} 天）算「已掌握」`,
     };
   }
   return { label: '初识', hint: '还没答过 —— 答对一次就开始记间隔' };
@@ -110,7 +132,10 @@ export function stabilityExplainer(): readonly { readonly label: string; readonl
   return [
     { label: '初识', text: '刚入库，还没答过。答对一次就开始累积间隔。' },
     { label: '在学', text: `答过但间隔还不到 ${REVIEW_INTERVAL_DAYS} 天。连续答对，间隔会变长。` },
-    { label: '复习', text: `间隔到了 ${REVIEW_INTERVAL_DAYS} 天以上。继续答对，间隔接着变长。` },
-    { label: '已掌握', text: `间隔到 ${MASTERED_INTERVAL_DAYS} 天以上。这张卡算真的记住了（参战还能加更多经验）。` },
+    { label: '复习', text: `间隔到了 ${REVIEW_INTERVAL_DAYS} 天以上、且跨过 ${REVIEW_MIN_DAYS} 个复习日。继续答对，间隔接着变长。` },
+    {
+      label: '已掌握',
+      text: `间隔到 ${MASTERED_INTERVAL_DAYS} 天以上、且跨过 ${MASTERED_MIN_DAYS} 个复习日 —— 也就是"隔几天回来还记得"。同一天里练很多次会让间隔变长，但不算掌握（参战时已掌握的卡还能加更多经验）。`,
+    },
   ];
 }

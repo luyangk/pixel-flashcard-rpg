@@ -17,6 +17,7 @@
 import type { Card, SaveFile, Sm2Params, Stability } from '@core/types';
 import type { Grade } from '@core/sm2';
 import { applyReview } from '@core/reviewFlow';
+import { gateStabilityByDays } from '@core/sm2';
 import { deriveStats, applyExp, victoryExp, type PlayerStats } from '@core/stats';
 import type { BattleState } from '@core/battle';
 import type { FightView } from './battleFlow';
@@ -53,7 +54,8 @@ export function vitCount(cards: readonly Card[]): number {
   if (!Array.isArray(cards)) return 0;
   let n = 0;
   for (const c of cards) {
-    const stability = c?.srs?.stability;
+    // D64：按**闸门后的标签**数（"间隔够但只跨过 1 天"不算入脑，否则体力会虚高）
+    const stability = c?.srs == null ? undefined : gateStabilityByDays(c.srs).stability;
     if (rank(stability) >= rank('review')) n += 1;
   }
   return n;

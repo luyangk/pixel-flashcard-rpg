@@ -221,8 +221,8 @@ describe('mountMenu —— 个人纪录（D57）', () => {
     const root = makeRoot();
     const save = makeSave({
       cards: [
-        { ...makeCard('a'), srs: { ...makeCard('a').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-26', '2026-10-27'] } },
-        { ...makeCard('b'), srs: { ...makeCard('b').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-25'] } },
+        { ...makeCard('a'), srs: { ...makeCard('a').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-26', '2026-10-27', '2026-10-28'] } },
+        { ...makeCard('b'), srs: { ...makeCard('b').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-25', '2026-10-26', '2026-10-27'] } },
         { ...makeCard('c'), source: { type: 'llm', createdAt: NOW } },
       ],
     });

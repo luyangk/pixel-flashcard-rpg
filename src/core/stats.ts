@@ -22,6 +22,7 @@
  */
 
 import type { Card } from './types';
+import { gateStabilityByDays } from './sm2';
 
 /** 玩家六维（§6.5 属性映射的完整快照）。 */
 export interface PlayerStats {
@@ -148,7 +149,8 @@ export function victoryExp(poolCards: readonly Card[], difficulty: keyof typeof 
   const factor = difficultyOf(difficulty);
   let masteredCount = 0;
   for (const c of poolCards) {
-    if (c?.srs?.stability === 'mastered') masteredCount += 1;
+    // D64：按**闸门后的标签**数（间隔够但只跨过 1 天的卡不算掌握 —— 否则"同一天练三次"也能多拿经验）
+    if (c?.srs != null && gateStabilityByDays(c.srs).stability === 'mastered') masteredCount += 1;
   }
   return Math.round(30 * factor + 5 * masteredCount);
 }

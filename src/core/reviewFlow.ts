@@ -18,7 +18,7 @@
  */
 
 import type { Card, Sm2Params } from './types';
-import { review, type Grade } from './sm2';
+import { gateStabilityByDays, review, type Grade } from './sm2';
 import { recordEffectiveReview } from './reviewLedger';
 
 /** 一次复习的完整结果：新卡（新 SRS + 新账本）、所用评分、作答时刻。 */
@@ -49,8 +49,11 @@ export function applyReview(
 ): ReviewOutcome {
   const reviewedSrs = review(card.srs, grade, nowMs, params);
   const reviewedCard: Card = { ...card, srs: reviewedSrs };
+  const recorded =
+    opts.countEffectiveDay === false ? reviewedCard : recordEffectiveReview(reviewedCard, nowMs, tzOffsetMin);
   return {
-    card: opts.countEffectiveDay === false ? reviewedCard : recordEffectiveReview(reviewedCard, nowMs, tzOffsetMin),
+    // D64：状态标签过**天数闸门**（SM-2 阶梯照旧，标签不许虚高 —— 见 sm2.MASTERED_MIN_DAYS）
+    card: { ...recorded, srs: gateStabilityByDays(recorded.srs) },
     graded: grade,
     answeredAt: nowMs,
   };

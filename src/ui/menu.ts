@@ -16,6 +16,7 @@
 import { rankRuns, type RunRecord } from '@core/leaderboard';
 import { localDayString } from '@core/reviewLedger';
 import { computeRecords } from '../app/records';
+import { gateStabilityByDays } from '@core/sm2';
 import { expGapToNextLevel } from '@core/progressGuide';
 import { victoryExp } from '@core/stats';
 import type { SaveFile } from '@core/types';
@@ -95,7 +96,8 @@ function levelProgressText(level: number, exp: number, snap: ControllerSnapshot)
 function countMastered(save: SaveFile | undefined): number {
   const cards = Array.isArray(save?.cards) ? save.cards : [];
   let n = 0;
-  for (const c of cards) if (c?.srs?.stability === 'mastered') n += 1;
+  // D64：与卡片状态同一口径（闸门后的标签）
+  for (const c of cards) if (c?.srs != null && gateStabilityByDays(c.srs).stability === 'mastered') n += 1;
   return n;
 }
 

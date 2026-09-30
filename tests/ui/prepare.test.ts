@@ -290,7 +290,8 @@ describe('mountPrepare —— 卷灵现身与称号（T8）', () => {
   function cardWithDays(id: string, deckId: string, days = 15) {
     return makeCard(id, {
       deckId,
-      srs: makeSrs({ stability: 'review', effectiveReviewDays: DAYS.slice(0, days) }),
+      // D64：状态标签要跨够天数才作数（这里只关心卷灵计数，所以标签给 new 更诚实）
+      srs: makeSrs({ stability: 'new', interval: 0, reps: 0, effectiveReviewDays: DAYS.slice(0, days) }),
     });
   }
 

@@ -25,7 +25,8 @@ function makeCard(id: string, stability: Stability = 'review'): Card {
     lapses: 0,
     due: 0,
     stability,
-    effectiveReviewDays: [],
+    // D64：夹具自洽（mastered 需跨 3 天、review 需跨 2 天）
+    effectiveReviewDays: stability === 'mastered' ? ['2026-10-26', '2026-10-27', '2026-10-28'] : stability === 'review' ? ['2026-10-28', '2026-10-29'] : [],
   };
   return { id, deckId: 'deck-a', front: `q-${id}`, back: `a-${id}`, srs, tags: [] };
 }

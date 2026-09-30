@@ -52,7 +52,9 @@ function makeCard(id: string, over: CardOpts = {}): Card {
     lapses: over.lapses ?? 0,
     due: over.due ?? 0,
     stability: over.stability ?? 'review',
-    effectiveReviewDays: over.days ?? [],
+    // D64：**显式**声明 review/mastered 的夹具要自洽（跨够天数）；默认夹具保持空账本，
+    // 供那些专门在验"计数从 0 开始"的用例用（GS# 就被绊过一次）
+    effectiveReviewDays: over.days ?? (over.stability === 'mastered' ? ['2026-10-26', '2026-10-27', '2026-10-28'] : over.stability === 'review' ? ['2026-10-28', '2026-10-29'] : []),
   };
   return { id, deckId: over.deckId ?? 'deck-a', front: `q-${id}`, back: `a-${id}`, srs, tags: [], source: over.source };
 }
@@ -175,7 +177,14 @@ describe('vitCount / spiCount —— 全库口径（N-1 红线）', () => {
   });
 
   it('G#4 脏输入消毒：非数组 / null 项 / 缺 srs 一律忽略，不抛', () => {
-    const dirty = [null, undefined, { id: 'x' }, makeCard('ok', { source: manual() })] as unknown as Card[];
+    // D64：要让这张卡真的算"入脑"，就得跨够天数（review 需 2 天）
+    const dirty = [
+      null,
+      undefined,
+      { id: 'x' },
+      // 显式声明 stability='review' ⇒ 工厂给出自洽的 interval=10 与 2 天账本（D64）
+      makeCard('ok', { source: manual(), stability: 'review' }),
+    ] as unknown as Card[];
     // （接管修正：原期望 0 与下一行 spiCount===1 互斥——'ok' 卡默认 stability='review'，
     //   vit/spi 的稳定性判据同为 rank≥review，不可能 spi 计它而 vit 不计。）
     expect(vitCount(dirty)).toBe(1); // 仅 'ok' 卡（review）入账；null/undefined/{id:'x'} 忽略
@@ -403,7 +412,12 @@ describe('releaseSubset / settleFight —— 已消耗回合才落账（N-2）',
     expect(r.exp).not.toBe(51);
     const next = byId(r.cards);
     for (let i = 0; i < 3; i++) {
-      expect(next.get(`f${i}`)!.srs.effectiveReviewDays).toEqual(['2026-10-26']); // 已作答 ⇒ 落账
+      // D64：夹具自带 3 天（要真的算已掌握），今天 2026-10-26 已在其中 ⇒ 去重后仍是那 3 天
+      expect(next.get(`f${i}`)!.srs.effectiveReviewDays).toEqual([
+        '2026-10-26',
+        '2026-10-27',
+        '2026-10-28',
+      ]); // 已作答 ⇒ 落账（不重复计今天）
     }
     for (let i = 3; i < 6; i++) {
       expect(next.get(`f${i}`)).toEqual(before[i]); // 作废卡逐字段零推进

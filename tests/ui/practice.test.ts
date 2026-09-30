@@ -24,7 +24,27 @@ afterEach(() => {
 const NOW = Date.UTC(2026, 10, 1, 4, 0, 0);
 
 function srs(over: Partial<SRSState> = {}): SRSState {
-  return { ease: 2.5, interval: 10, reps: 3, lapses: 0, due: NOW + 86_400_000, stability: 'review', effectiveReviewDays: [], ...over };
+  const stability = over.stability ?? 'review';
+  // D64：显式声明 review/mastered 的夹具要自洽（跨够天数）；默认夹具保持空账本
+  const days =
+    over.stability === undefined
+      ? (over.effectiveReviewDays ?? [])
+      : over.effectiveReviewDays ??
+        (over.stability === 'mastered'
+          ? ['2026-10-26', '2026-10-27', '2026-10-28']
+          : over.stability === 'review'
+            ? ['2026-10-28', '2026-10-29']
+            : []);
+  return {
+    ease: 2.5,
+    interval: 10,
+    reps: 3,
+    lapses: 0,
+    due: NOW + 86_400_000,
+    ...over,
+    stability,
+    effectiveReviewDays: days,
+  };
 }
 function card(id: string, over: Partial<Card> = {}): Card {
   return { id, deckId: 'd1', front: `正面-${id}`, back: `背面-${id}`, tags: [], srs: srs(), ...over };
@@ -177,7 +197,8 @@ describe('mountPractice —— 看旧卡（Plan 7 · T6）', () => {
     const { root } = setup([
       card('c1', {
         source: { type: 'llm', createdAt: NOW },
-        srs: srs({ stability: 'new', due: 0 }),
+        // 夹具自洽：'new' 必然 interval 0 / reps 0（D64 起标签会按真实字段算，自相矛盾的夹具会露馅）
+        srs: srs({ stability: 'new', interval: 0, reps: 0, due: 0 }),
       }),
     ]);
     openFirstDeck(root);
@@ -624,8 +645,24 @@ describe('mountPractice —— 卡上的看原文（D60）', () => {
 describe('mountPractice —— 卡片状态说明（D63）', () => {
   it('PR#G1 状态行带"还差什么"，阈值来自 core', () => {
     const { root } = setup([
-      card('c1', { srs: { ...card('c1').srs, stability: 'review', reps: 2, interval: 3 } }),
-      card('c2', { srs: { ...card('c2').srs, stability: 'mastered', reps: 4, interval: 21 } }),
+      card('c1', {
+        srs: {
+          ...card('c1').srs,
+          stability: 'review',
+          reps: 2,
+          interval: 3,
+          effectiveReviewDays: ['2026-10-28', '2026-10-29'],
+        },
+      }),
+      card('c2', {
+        srs: {
+          ...card('c2').srs,
+          stability: 'mastered',
+          reps: 4,
+          interval: 21,
+          effectiveReviewDays: ['2026-10-26', '2026-10-27', '2026-10-28'],
+        },
+      }),
     ]);
     openFirstDeck(root);
     const hint1 = root.querySelector('[data-card-status-hint="c1"]')?.textContent ?? '';

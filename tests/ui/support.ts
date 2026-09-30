@@ -9,16 +9,31 @@
 import type { Card, Deck, SaveFile, SRSState } from '@core/types';
 import type { ControllerSnapshot, GameController, GameIntent } from '../../src/app/controllerTypes';
 
+/**
+ * D64：夹具要**自洽** —— `review` 至少跨过 2 天、`mastered` 至少 3 天，
+ * 否则状态闸门会把它降级（声称已掌握却没有任何账本日的卡在真实数据里不存在）。
+ * 调用方显式给了 `effectiveReviewDays` 就尊重它。
+ */
+function coherentDays(stability: SRSState['stability'], given: readonly string[] | undefined): string[] {
+  if (given !== undefined) return [...given];
+  if (stability === 'mastered') return ['2026-10-26', '2026-10-27', '2026-10-28'];
+  if (stability === 'review') return ['2026-10-28', '2026-10-29'];
+  return [];
+}
+
 export function makeSrs(over: Partial<SRSState> = {}): SRSState {
+  const stability = over.stability ?? 'review';
   return {
     ease: 2.5,
     interval: 10,
     reps: 3,
     lapses: 0,
     due: 0,
-    stability: 'review',
-    effectiveReviewDays: [],
     ...over,
+    stability,
+    // D64：只有**显式**声明 review/mastered 的夹具才自动补天数（默认夹具保持空账本）
+    effectiveReviewDays:
+      over.stability === undefined ? (over.effectiveReviewDays ?? []) : coherentDays(stability, over.effectiveReviewDays),
   };
 }
 

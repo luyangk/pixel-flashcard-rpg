@@ -28,7 +28,8 @@ function makeCard(id: string, stability: Stability = 'review'): Card {
     lapses: 0,
     due: 0,
     stability,
-    effectiveReviewDays: [],
+    // D64：夹具自洽（review/mastered 必须真有对应天数）
+    effectiveReviewDays: stability === 'mastered' ? ['2026-10-26', '2026-10-27', '2026-10-28'] : stability === 'review' ? ['2026-10-28', '2026-10-29'] : [],
   };
   return { id, deckId: 'deck-a', front: `q-${id}`, back: `a-${id}`, srs, tags: [] };
 }
@@ -467,6 +468,9 @@ describe('gameController —— 卷灵净化 / 经验切档 / 三幕里程碑（
         const c = makeCard(`card-${id}`, 'review');
         c.deckId = id;
         c.srs.effectiveReviewDays = [...days];
+        // D64：这 15 天是用来凑**卷灵门槛**的，标签要老实说是"复习"（interval<7），
+        // 否则"间隔 10 天 + 跨 15 天"按新口径就是已掌握，会多算 5 点经验（45 → 50）
+        c.srs.interval = 3;
         c.srs.due = 0;
         return c;
       });

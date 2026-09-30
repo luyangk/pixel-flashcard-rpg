@@ -17,6 +17,7 @@
 import { localDayString } from '@core/reviewLedger';
 import type { Card, SourceInfo } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import { gateStabilityByDays } from '@core/sm2';
 import { bossProgress, cardStatusHint, stabilityExplainer, type BossTier } from '@core/progressGuide';
 import { h, setHidden } from './dom';
 import { choicesLineOf, mountPracticeCollect, type CollectDeps } from './practiceCollect';
@@ -350,7 +351,7 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
     let mastered = 0;
     for (const c of cards) {
       if (c?.srs?.due !== undefined && Number.isFinite(c.srs.due) && c.srs.due <= nowMs) due += 1;
-      if (c?.srs?.stability === 'mastered') mastered += 1;
+      if (c?.srs != null && gateStabilityByDays(c.srs).stability === 'mastered') mastered += 1;
     }
     return { total: cards.length, due, mastered };
   }

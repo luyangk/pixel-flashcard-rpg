@@ -275,7 +275,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 |---|---|---|
 | 类型 | `npm run typecheck` | TypeScript strict（含 `@ts-expect-error` 的"类型层确实拦住了"断言） |
 | 纯净 | `npm run check:purity` | `src/core/**` 禁 DOM/Node API、禁 `Date.now(`、禁 `Math.random(`（`scripts/check-core-purity.mjs`） |
-| 测试 | `npm test` | Vitest 全量（当前 **92 文件 / 1396 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
+| 测试 | `npm test` | Vitest 全量（当前 **93 文件 / 1402 用例**；另有 11 条**真产物**冒烟只在这一段之后的 `smoke:dist` 里跑），含 headless 逻辑链冒烟与**有画面的可玩性冒烟** |
 | 构建 | `npm run build:only` | 真实打包（Vite build）——**dev server / 打包期的模块解析故障只有它能挡**（vitest 自带别名，曾让一条 `@core/*` 解析失败在 789 条全绿的情况下溜到真浏览器里） |
 | 产物 | `npm run smoke:dist` | 把 `dist/` 里的**真 bundle 当模块跑起来**（happy-dom 造浏览器环境）：启动到序章第一屏、旁白逐字、连点 8 屏进菜单。源码全绿 ≠ 产物能跑，这一步补的就是那道缝 |
 
@@ -294,6 +294,7 @@ npm run verify        # = typecheck && check:purity && test && build:only && smo
 | DoD5 导出→清环境→导入后进度完整 | `tests/app/fullSession.smoke.test.ts` · SM#1、`tests/e2e/playable.smoke.test.ts` · E2E#3/#5 |
 | D29 只读三件套（横幅 / 坏档原文导出 / 写路径全捕获可见） | `tests/e2e/playable.smoke.test.ts` · E2E#6、`tests/ui/readOnly.test.ts` |
 | D40 重置存档（清空 + 重装预置 + 落盘，两步确认，不碰 Key） | `tests/app/resetFlow.test.ts`（RS#1–#7）、`tests/ui/settings.reset.test.ts`（SR#1–#8）、`tests/e2e/dist.boot.test.ts` · DB#5（真产物里点完两步） |
+| D64 状态标签的天数闸门（已掌握=间隔≥7天**且**跨≥3个复习日；复习=间隔≥1天且跨≥2天；统计口径同步） | `tests/core/stabilityDays.test.ts` SD#1–4、`tests/core/progressGuide.test.ts` PG#5/PG#5b、`tests/core/reviewFlow.test.ts`、`tests/app/growth.test.ts`、`tests/ui/practice.test.ts`；4 条变异全部会红 |
 | D63 进度说明（卡片"还差什么"+《状态怎么升》/ 等级"还差多少·约几场"/ 卷灵 X/Y 与"隔天练才算一次"/ 备战屏未达标也报进度） | `tests/core/progressGuide.test.ts` PG#1–4b、`tests/ui/practice.test.ts` PR#G1–G2 / PR#B1–B3、`tests/ui/menu.test.ts` MN#L1–L2、`tests/ui/prepare.test.ts` PR#P1、`tests/core/reviewLedger.test.ts`（脏天数不灌水）；8 条变异全部会红 |
 | D62 源库读取体验（arXiv 官方小接口 13KB/20 条 · 解析前截断 512KB 且如实申报 · 读取服务 25s 预算 · `direct:false` 只走读取服务 · busy 可取消 · 会话内缓存 5 分钟 + 清缓存入口 · 境外与计费实话 · arXiv 条目也带全文地址） | `tests/platform/feedFetch.test.ts` FF#T1–T3 / FF#D1–D3 / FF#F1–F6、`tests/ui/practiceSources.test.ts` PS#T1 / PS#B1–B3、`tests/ui/hostAdapters.test.ts` AD#C1–C3、`tests/ui/settings.test.ts` SU#RD1 / SU#CC1；D62 相关变异 12 条全部会红 |
 | D61 取全文档（arXiv HTML 全文入口 + 提纲输入采样：头尾各 2000 + 中间等距） | `tests/platform/feedFetch.test.ts` FF#F1–F3、`tests/app/outlineInput.test.ts` OI#1–4、`tests/app/knowledgeFlow.test.ts` KF#O6、`tests/ui/practice.collect.test.ts` PC#19–21；6 条变异全部会红 |

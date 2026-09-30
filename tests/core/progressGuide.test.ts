@@ -15,6 +15,7 @@ import {
   cardStatusHint,
   expGapToNextLevel,
   expToLevelTotal,
+  stabilityExplainer,
 } from '@core/progressGuide';
 
 const NOW = Date.UTC(2026, 9, 30, 4, 0, 0);
@@ -108,17 +109,48 @@ describe('core/progressGuide —— 卡片状态的大白话（D63）', () => {
     expect(learning.label).toBe('在学');
     expect(learning.hint).toContain('7 天'); // 指向"已掌握"的真实阈值
 
-    const reviewing = cardStatusHint(card('c', { stability: 'review', reps: 2, interval: 3 }));
+    // D64：跨过 2 天才是真的"复习"（夹具补上账本日，否则只能算"在学"）
+    const reviewing = cardStatusHint(
+      card('c', { stability: 'review', reps: 2, interval: 3, effectiveReviewDays: ['2026-10-28', '2026-10-29'] }),
+    );
     expect(reviewing.label).toBe('复习');
     expect(reviewing.hint).toContain('7 天');
 
-    const mastered = cardStatusHint(card('d', { stability: 'mastered', reps: 4, interval: 21 }));
+    const mastered = cardStatusHint(
+      card('d', {
+        stability: 'mastered',
+        reps: 4,
+        interval: 21,
+        effectiveReviewDays: ['2026-10-26', '2026-10-27', '2026-10-28'],
+      }),
+    );
     expect(mastered.label).toBe('已掌握');
     expect(mastered.hint).toContain('稳住'); // 已掌握没有"下一档"，只说稳住
   });
 
   it('PG#4b 复习档的提示里带上**当前间隔**（玩家能看到进度在动）', () => {
-    const hint = cardStatusHint(card('c', { stability: 'review', reps: 2, interval: 3 })).hint;
+    const hint = cardStatusHint(
+      card('c', { stability: 'review', reps: 2, interval: 3, effectiveReviewDays: ['2026-10-28', '2026-10-29'] }),
+    ).hint;
     expect(hint).toContain('3 天');
+  });
+
+  it('PG#5 间隔够了但只跨过 1 天 ⇒ 标签不许说"已掌握"，且直说差在天数上', () => {
+    // 这正是玩家现场问的那件事："昨天刚建的卡今天就已掌握"——同一天练三次 interval 就到 15 天了
+    const hint = cardStatusHint(
+      card('e', { stability: 'review', reps: 3, interval: 15, effectiveReviewDays: ['2026-10-29'] }),
+    );
+    expect(hint.label).toBe('复习');
+    expect(hint.hint).toContain('15 天'); // 间隔确实够了
+    expect(hint.hint).toContain('只跨过 1 天');
+    expect(hint.hint).toContain('再隔天复习 2 次'); // 还差两次（差在**天**上）
+  });
+
+  it('PG#5b《状态怎么升》也把"跨过几天"写进去（不然玩家以为间隔够了就算掌握）', () => {
+    const text = stabilityExplainer()
+      .map((r) => `${r.label}：${r.text}`)
+      .join('\n');
+    expect(text).toContain('跨过 3 个复习日');
+    expect(text).toContain('不算掌握');
   });
 });

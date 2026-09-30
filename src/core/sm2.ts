@@ -104,11 +104,57 @@ export function createInitialSRS(nowMs: number, p?: Sm2Params): SRSState {
   };
 }
 
+/**
+ * 状态标签的**天数闸门**（D64）。
+ *
+ * ## 为什么需要它
+ * 现场问题（玩家原话）："为什么我很多昨天刚建的卡今天都是已掌握状态？"
+ * 实测：同一张新卡在**同一天**里练三次（全答对）就会被推到 interval 15 天 —— 而账本里只有 **1 天**。
+ * 可"掌握"对人来说意味着"隔了几天还记得"，不是"一天里点得快"。
+ * 更糟的是同一件事原本有两套口径：卷灵门槛按**天**算（同一天只算一次），状态标签按 reps 算。
+ *
+ * ## 口径（与卷灵账本同一种"天"的哲学）
+ * - `已掌握` = interval ≥ 7 天 **且** 跨过 ≥ `MASTERED_MIN_DAYS` 个复习日；
+ * - `复习`  = interval ≥ 1 天 **且** 跨过 ≥ `REVIEW_MIN_DAYS` 个复习日；
+ * - 只**降不升**：闸门永远不会给出比 interval 应得的更高的标签；调度字段（interval/reps/ease/due）一字不动。
+ *
+ * 于是"一天里练三次"照样让间隔涨（手感、到期时间都不变），但标签会老实说"再隔天复习两次才算掌握"。
+ */
+export const MASTERED_MIN_DAYS = 3;
+export const REVIEW_MIN_DAYS = 2;
+
 /** 由 interval/reps 推导稳定度阶段（晋升规则见 brief）。 */
 function promoteStability(interval: number, reps: number): Stability {
   if (interval >= 7) return 'mastered';
   if (reps >= 1 && interval >= 1) return 'review';
   return 'learning';
+}
+
+/** 把状态标签按**天数证据**收口（只降不升；见 MASTERED_MIN_DAYS 的说明）。 */
+export function gateStabilityByDays(srs: SRSState): SRSState {
+  const cur = srs;
+  if (cur == null || typeof cur !== 'object') return cur;
+  const interval = Number.isFinite(cur.interval) ? cur.interval : 0;
+  const days = Array.isArray(cur.effectiveReviewDays) ? cur.effectiveReviewDays.length : 0;
+  const allowed: Stability =
+    interval >= 7 && days >= MASTERED_MIN_DAYS
+      ? 'mastered'
+      : interval >= 1 && days >= REVIEW_MIN_DAYS
+        ? 'review'
+        : interval < (typeof cur.interval === 'number' ? cur.interval : 0)
+          ? 'learning'
+          : cur.stability === 'new'
+            ? 'new'
+            : 'learning';
+  // interval 应得的"上限"（不含天数要求）—— 闸门只降不升
+  const cap: Stability = interval >= 7 ? 'mastered' : cur.reps >= 1 && interval >= 1 ? 'review' : 'learning';
+  const rank: Record<Stability, number> = { new: 0, learning: 1, review: 2, mastered: 3 };
+  const final = rank[allowed] < rank[cap] ? allowed : cap;
+  // new 只在"从没复习过"时保留（reps=0 且没有账本日）
+  if (final === 'learning' && cur.reps === 0 && days === 0) {
+    return { ...cur, stability: 'new' };
+  }
+  return final === cur.stability ? cur : { ...cur, stability: final };
 }
 
 /**

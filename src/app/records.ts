@@ -16,6 +16,7 @@
  */
 import type { Card, SaveFile } from '@core/types';
 import { DAY_KEY_RE } from '@core/reviewLedger';
+import { gateStabilityByDays } from '@core/sm2';
 import { levelFromExp } from './growth';
 
 export interface PlayerRecords {
@@ -98,7 +99,8 @@ export function computeRecords(save: SaveFile, today: string): PlayerRecords {
   let selfMade = 0;
   for (const c of cards) {
     if (!c || typeof c !== 'object') continue;
-    if (c.srs?.stability === 'mastered') mastered += 1;
+    // D64：与卡片状态同一口径（闸门后的标签）
+    if (c.srs != null && gateStabilityByDays(c.srs).stability === 'mastered') mastered += 1;
     const type = c.source?.type;
     if (typeof type === 'string' && SELF_MADE.includes(type)) selfMade += 1;
   }

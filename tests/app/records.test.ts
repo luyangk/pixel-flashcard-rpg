@@ -64,8 +64,8 @@ describe('app/records —— 个人纪录（D57）', () => {
   it('RC#1 四个维度各自算对（复习天数取**并集**）', () => {
     const save = saveOf(
       [
-        card('a', { srs: { ...card('x').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-26', '2026-10-27'] } }),
-        card('b', { srs: { ...card('x').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-25'] } }),
+        card('a', { srs: { ...card('x').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-25', '2026-10-26', '2026-10-27'] } }),
+        card('b', { srs: { ...card('x').srs, stability: 'mastered', effectiveReviewDays: ['2026-10-25', '2026-10-26', '2026-10-27'] } }),
         card('c', { source: { type: 'llm', createdAt: NOW }, srs: { ...card('x').srs, effectiveReviewDays: [] } }),
         card('d', { source: { type: 'manual', createdAt: NOW } }),
         // 预置卡**不算**"我自己添的"（否则重置后每个人开局就有 30 张"自建卡"）
