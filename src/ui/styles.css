@@ -1004,7 +1004,9 @@ h1 {
 /* 卡行：勾选框 + 正面 + 背面 + 元信息（四列在窄屏上会被挤，故用两行布局） */
 .practice-card {
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* minmax(0, 1fr)：长文本 + 网格的老坑 —— 光写 1fr 在内容想撑宽时会把列顶开，
+     配合 min-width: 0 才是稳的（外屏那种宽高比下尤其明显）。 */
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 0.3rem 0.5rem;
   padding: 0.5rem;
   border: 1px solid var(--ink-600);
@@ -1019,13 +1021,18 @@ h1 {
 }
 
 .practice-front {
+  /* 显式落列，不靠自动排布：两列网格里，落在**奇数位**且没写 grid-column 的元素会掉进第 1 列，
+     把它撑成最宽的一项、第 2 列随即塌成一条缝（小米外屏竖屏那次"一字一行"就是这么来的）。 */
+  grid-column: 2;
   font-size: 0.95rem;
   line-height: 1.5;
   word-break: break-word;
+  min-width: 0;
 }
 
 .practice-back {
   grid-column: 2;
+  min-width: 0;
   font-size: 0.9rem;
   color: var(--paper-dim);
   word-break: break-word;
@@ -1033,6 +1040,7 @@ h1 {
 
 .practice-meta {
   grid-column: 2;
+  min-width: 0;
   font-size: 0.78rem;
   color: var(--wash);
 }
@@ -1148,7 +1156,8 @@ h1 {
 
 .candidate {
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* 与 .practice-card 同款防线：长文本 + 网格，光写 1fr 会被内容顶开 */
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 0.3rem 0.5rem;
 }
 
@@ -1160,6 +1169,13 @@ h1 {
   font-size: 1.05rem;
   padding: 0.85rem;
   border-color: var(--neon-cyan);
+}
+
+/* 卡行内的次级按钮（看原文 / 重出选项）：显式落列，跨到第 2 列起 */
+.practice-card [data-ui='card-source'],
+.practice-card [data-ui='card-rechoices'] {
+  grid-column: 2;
+  justify-self: start;
 }
 
 /* 练功屏卡行的「改」入口（Plan 8 · T7）：不抢戏的小按钮 */
@@ -1309,6 +1325,12 @@ h1 {
 
 /* D63 进度说明：卡片状态后面那句"还差什么" */
 .card-status-hint {
+  /* 必须显式落到第 2 列：`.practice-card` 是 `auto 1fr` 两栏网格，
+     漏了这一行它会掉进第 1 列（auto 列按内容撑宽），把那句长文案撑成最宽的一项，
+     第 2 列随即被压成一条缝 —— 窄屏（小米外屏竖屏）上表现为"正文一字一行"。
+     这个 bug 是 happy-dom 抓不到的（它不计算布局），所以另有结构性契约测试盯着：
+     tests/ui/cardGrid.test.ts。 */
+  grid-column: 2;
   font-size: 0.72rem;
   color: var(--wash);
   opacity: 0.9;
