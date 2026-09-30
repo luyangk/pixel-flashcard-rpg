@@ -38,7 +38,7 @@
 
 import type { RunRecord, RunInput } from '@core/leaderboard';
 import { rankRuns, scoreRun } from '@core/leaderboard';
-import { composeTitle, fallbackYahao, fightDomainNames, splitCombo } from './fightTitle';
+import { composeTitle, fallbackYahao, fightDomainNames, splitCombo, titleWithCombo } from './fightTitle';
 import { MAX_TIME_MS } from '@core/saveMigrate';
 import type { BattleState } from '@core/battle';
 import type { Coordinator } from './persist';
@@ -187,13 +187,17 @@ export async function recordRun(
  */
 export async function upgradeRunTitle(
   coord: Coordinator,
-  input: { readonly recordId: string; readonly yahao: string },
+  input: { readonly recordId: string; readonly yahao: string; readonly combo?: string },
 ): Promise<{ readonly updated: boolean; readonly title: string }> {
   const rows = coord.snapshot().settings?.leaderboard;
   const existing = Array.isArray(rows) ? rows.find((r) => r && r.id === input.recordId) : undefined;
   if (existing === undefined) return { updated: false, title: '' };
-  const combo = splitCombo(existing.title) || existing.domain;
-  const next = composeTitle(input.yahao, combo.split(/\s*[×/]\s*/));
+  // I3：组合**逐字照搬**（调用方给了就用它的；没给就从旧名字里取出来，也不重拼）
+  const combo =
+    typeof input.combo === 'string' && input.combo.trim().length > 0
+      ? input.combo.trim()
+      : splitCombo(existing.title) || existing.domain;
+  const next = titleWithCombo(input.yahao, combo);
   if (next === existing.title) return { updated: false, title: existing.title };
   await coord.mutate((save) => {
     const list = Array.isArray(save.settings.leaderboard) ? save.settings.leaderboard : [];

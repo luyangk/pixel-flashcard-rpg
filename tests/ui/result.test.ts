@@ -398,6 +398,63 @@ describe('mountResult —— 这一局的名字（D58）', () => {
     expect(reqs).toHaveLength(1);
   });
 
+  it('RS#N4 被挤出前 50 条（榜上查不到）⇒ 结算屏**仍要显示**本局名字（I2）', () => {
+    // 现场路径：已有 ≥50 条高分记录时，本局（败局 0 分）当场被挤出榜 ⇒ 按 recordId 查榜查不到。
+    // 名字是本地即时生成的兜底名，本来就在手里，不该在最需要它的那次结算丢掉。
+    const root = makeRoot();
+    mountResult(
+      root,
+      makeCtrl(
+        makeSnap({
+          screen: 'result',
+          save: makeSave(), // 榜是空的：模拟"本局被挤出榜"
+          lastResult: {
+            won: false,
+            mode: 'fight',
+            expGained: 0,
+            levelBefore: 1,
+            levelAfter: 1,
+            leveledUp: false,
+            misses: 3,
+            poolLen: 5,
+            recordId: 'r-gone',
+            fightTitle: '松间清露 · 唐诗 × 成语典故',
+          },
+        }),
+      ),
+      { flashMs: 0, holdMs: 0 },
+    );
+    expect(ui(root, 'fight-title').hidden).toBe(false);
+    expect(ui(root, 'fight-title').textContent).toBe('松间清露 · 唐诗 × 成语典故');
+  });
+
+  it('RS#N5 榜上有（且被升级）⇒ 用榜上的新名字（升级要能刷新结算屏）', () => {
+    const root = makeRoot();
+    mountResult(
+      root,
+      makeCtrl(
+        makeSnap({
+          screen: 'result',
+          save: {
+            ...makeSave(),
+            settings: {
+              ...makeSave().settings,
+              leaderboard: [
+                { id: 'r1', at: 1, result: 'won', kind: 'encounter', domain: '唐诗', cards: 3, misses: 0, level: 1, score: 80, title: '长安夜雨 · 唐诗 × 成语典故' },
+              ],
+            },
+          },
+          lastResult: {
+            won: true, mode: 'fight', expGained: 10, levelBefore: 1, levelAfter: 1, leveledUp: false,
+            misses: 0, poolLen: 3, recordId: 'r1', fightTitle: '孤灯残卷 · 唐诗 × 成语典故',
+          },
+        }),
+      ),
+      { flashMs: 0, holdMs: 0 },
+    );
+    expect(ui(root, 'fight-title').textContent).toBe('长安夜雨 · 唐诗 × 成语典故');
+  });
+
   it('RS#N3 缺命名口 ⇒ 只显示兜底名；木桩练功没有 recordId ⇒ 名字不显示也不请求', () => {
     const root = makeRoot();
     const snap = makeSnap({

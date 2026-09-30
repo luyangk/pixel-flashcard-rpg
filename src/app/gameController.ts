@@ -200,6 +200,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
     const kind = view.difficulty === 'boss' ? 'boss' : 'encounter';
     const domain = domainOfView(view, save);
     let recordId: string | undefined;
+    let fightTitle: string | undefined;
     await guardedWrite(async () => {
       const rec = await recordRun(coord, view, state, {
         nowMs: now(),
@@ -208,6 +209,7 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
         level: levelFromExp(coord.snapshot().settings.progress.exp),
       });
       recordId = rec.id;
+      fightTitle = rec.title; // I2：名字带进结算摘要，别只留在榜上
     });
 
     // T8：卷灵净化 + 暗线里程碑（只在 boss 档取胜时）。顺序与语义：
@@ -245,6 +247,8 @@ export async function createGameController(deps: GameControllerDeps): Promise<Ga
       poolLen: view.pool.length,
       // D58：本局记录 id（结果屏据此请宿主升级名字）；只读态下 recordId 为空 ⇒ 不带该字段
       ...(recordId === undefined ? {} : { recordId }),
+      // I2：名字随摘要一起带出去（榜挤掉本局时结算屏也显示得出）
+      ...(fightTitle === undefined ? {} : { fightTitle }),
     };
   }
 

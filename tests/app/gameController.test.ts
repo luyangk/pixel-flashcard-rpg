@@ -191,6 +191,11 @@ describe('gameController —— 一局的落库义务（R-T4-d 端到端第三�
     expect(snap.lastResult?.levelBefore).toBe(1);
     expect(snap.lastResult?.levelAfter).toBeGreaterThanOrEqual(1);
     expect(snap.lastResult?.leveledUp).toBe(snap.lastResult!.levelAfter > snap.lastResult!.levelBefore);
+    // I2（复查发现）：名字要随摘要一起出来 —— 结算屏的名字不能只靠"回榜上按 id 查"
+    // （榜只留前 50 条，本局被挤出时那一次结算就一个字都没有）。
+    expect(snap.lastResult?.recordId).toBeTruthy();
+    expect(snap.lastResult?.fightTitle).toContain(' · ');
+    expect(snap.lastResult?.fightTitle?.split(' · ')[0].length).toBeGreaterThan(0);
   });
 
   it('GC#7 打输（全 again）→ exp 恒 0、榜单仍记账（kind/lost）、摘要 won=false', async () => {

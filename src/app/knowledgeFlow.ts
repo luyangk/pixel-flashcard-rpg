@@ -72,6 +72,12 @@ export type CollectResult =
       readonly requests: number;
       /** 是否**没能按请求量拿满**（中途失败 / 额度不足）—— UI 据此别把话说过头。 */
       readonly truncated: boolean;
+      /**
+       * 这次走了**降级路**（I1，复查发现）：例如两段式的提纲没提炼出来，回落到分块生成。
+       * 与 `truncated` **必须分开** —— 降级不等于"资料没处理完"：分块路径可能把每一块都处理干净了。
+       * 屏上据此说的是"这次先按老办法出的卡"，而不是"没能全部处理完，再点一次"（后者会诱导玩家再花一轮钱）。
+       */
+      readonly degraded?: boolean;
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -122,6 +128,7 @@ export async function collectCards(
   let requests = 0;
   let failed = false;
   let truncated = false;
+  let degraded = false;
 
   /**
    * 两段式（D59）：长文**先提炼提纲**，再按提纲出卡。
@@ -160,12 +167,13 @@ export async function collectCards(
         }
         if (produced > 0) quota = planCharge(quota, produced, input.nowMs, input.tzOffsetMin).quota;
         if (res.truncated) truncated = true;
-        return { ok: true, candidates: out, quota, requests, truncated };
+        return { ok: true, candidates: out, quota, requests, truncated, ...(degraded ? { degraded: true } : {}) };
       }
       // 出卡那一步失败：继续往下走分块路（下面还会再试一次），并记一笔"没按请求拿满"
       truncated = true;
     } else {
-      truncated = true; // 提纲没成（如实记一笔），但不影响下面照常生成
+      // 提纲没成 ⇒ 这是**降级**，不是"资料没处理完"（分块路径照样能把每一块处理干净）
+      degraded = true;
     }
   }
 
@@ -205,5 +213,12 @@ export async function collectCards(
   if (out.length === 0) {
     return { ok: false, reason: failed ? '这次没能生成卡片，稍后再试。' : '模型没有给出可用的卡片。' };
   }
-  return { ok: true, candidates: out, quota, requests, truncated: truncated || failed };
+  return {
+    ok: true,
+    candidates: out,
+    quota,
+    requests,
+    truncated: truncated || failed,
+    ...(degraded ? { degraded: true } : {}),
+  };
 }

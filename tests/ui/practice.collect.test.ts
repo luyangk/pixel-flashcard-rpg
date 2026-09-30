@@ -649,3 +649,44 @@ describe('mountPracticeCollect —— 正文框的标题（D60 补）', () => {
     expect(title.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+/* ------------------------------------------------------------------ I1 复查修复：降级 ≠ 没处理完 */
+
+/**
+ * 判别力（复查发现 I1）：提纲没提炼出来、回落到分块并**全部处理成功**时，
+ * 屏上**不许**说"这部分资料没能全部处理完，可再点一次接着挖"——
+ * 那是假话，而且会诱导玩家再花一轮真钱。
+ * 真的截断（有块失败）时那句话仍然要说（两种情形必须分开）。
+ */
+describe('mountPracticeCollect —— 降级与截断的文案（I1）', () => {
+  const ok = (over: Partial<CollectResult & { ok: true }> = {}) =>
+    Promise.resolve({
+      ok: true as const,
+      candidates: [CANDIDATE],
+      quota: { day: '2026-10-27', cards: 1, judges: 0 },
+      requests: 2,
+      truncated: false,
+      ...over,
+    });
+
+  it('PC#D1 降级（degraded）⇒ 说"先按老办法"，不说"没处理完"、不诱导再点一次', async () => {
+    const rig = makeRig({ collect: () => ok({ degraded: true }) });
+    const ta = rig.root.querySelector('[data-ui="source-text"]') as HTMLTextAreaElement;
+    ta.value = '一段长资料';
+    click(rig.root.querySelector('[data-ui="source-paste-go"]') as HTMLElement);
+    await flushMicrotasks();
+    const text = ui(rig.root, 'ingest-status').textContent ?? '';
+    expect(text).toContain('老办法');
+    expect(text).not.toContain('没能全部处理完');
+    expect(text).not.toContain('再点一次');
+  });
+
+  it('PC#D2 真截断（truncated）⇒ 那句话仍然要说', async () => {
+    const rig = makeRig({ collect: () => ok({ truncated: true }) });
+    const ta = rig.root.querySelector('[data-ui="source-text"]') as HTMLTextAreaElement;
+    ta.value = '一段长资料';
+    click(rig.root.querySelector('[data-ui="source-paste-go"]') as HTMLElement);
+    await flushMicrotasks();
+    expect(ui(rig.root, 'ingest-status').textContent).toContain('没能全部处理完');
+  });
+});

@@ -445,7 +445,7 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
         void (async () => {
           const res = await suggestFightTitle({ chat: boundChat() }, { combo: input.combo, kind: input.kind });
           if (!res.ok) return;
-          await upgradeRunTitle(coord, { recordId: input.recordId, yahao: res.yahao });
+          await upgradeRunTitle(coord, { recordId: input.recordId, yahao: res.yahao, combo: input.combo });
         })().catch(() => undefined);
       }),
     /** 「关于」（D54）：版本显示 + 检查更新（只查不刷；`apply` 才 reload）。 */

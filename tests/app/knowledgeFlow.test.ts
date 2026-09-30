@@ -328,7 +328,11 @@ describe('collectCards —— 两段式（D59）', () => {
     expect(res.candidates.map((c) => c.front)).toEqual(['第一块', '第二块']);
     expect(res.requests).toBe(3); // 提纲 1 + 分块 2
     expect(f.calls).toHaveLength(3);
-    expect(res.truncated).toBe(true); // 提纲没成 ⇒ 如实记一笔"没按请求拿满"
+    // I1（复查发现）：提纲没成要记成**降级**（degraded），不能记成 truncated ——
+    // 分块那两块其实**都成功处理完**了，报 truncated 会让屏上说"资料没能全部处理完，可再点一次接着挖"，
+    // 那是一句假话，还会诱导玩家再花一轮真钱。
+    expect(res.degraded).toBe(true);
+    expect(res.truncated).toBe(false);
   });
 
   it('KF#O5 提纲提示词含四段骨架与"禁元信息"（prompt 契约）', async () => {

@@ -451,10 +451,19 @@ export function mountPracticeCollect(
       }
       candidates = [...res.candidates];
       candidateSource = source.url === undefined ? { via: source.via } : { via: source.via, url: source.url };
+      /**
+       * 三档如实申报（I1，复查发现）：
+       * - `truncated`：真的有块没成/额度不足 ⇒ 才说"没能全部处理完，可再点一次"（再点会花钱，这句话要慎说）；
+       * - `degraded`：走了降级路（例：提纲没提炼出来 ⇒ 回落分块）⇒ 只说"先按老办法出的卡"，
+       *   **不许**说成"没处理完"（分块可能把每一块都处理干净了），更不许诱导再花一轮钱；
+       * - 正常：说清发了几次请求。
+       */
       renderStatus(
         res.truncated
           ? `生成了 ${candidates.length} 张候选（这部分资料没能全部处理完，可再点一次接着挖）。`
-          : `生成了 ${candidates.length} 张候选（发了 ${res.requests} 次请求），勾选后存入卡库。`,
+          : res.degraded === true
+            ? `生成了 ${candidates.length} 张候选（这份资料是先按老办法出的卡：没提炼出提纲，但内容都处理过了）。`
+            : `生成了 ${candidates.length} 张候选（发了 ${res.requests} 次请求），勾选后存入卡库。`,
       );
       renderCandidates();
       deps.onQuotaChanged?.();

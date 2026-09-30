@@ -100,6 +100,22 @@ export function composeTitle(yahao: unknown, names: readonly unknown[]): string 
   return `${head}${TITLE_SEP}${clip(label, room)}`;
 }
 
+/**
+ * 用**原样的组合字符串**拼名字（I3，复查发现）。
+ *
+ * 为什么升级雅号时不能用 `composeTitle(yahao, comboLabel(...))`：那需要把组合**重新切回领域名**，
+ * 而领域名本身可能含分隔符（玩家自建「AI/ML」「C/C++」「TCP/IP」）—— 一拆一拼就把
+ * 「孤灯残卷 · AI/ML」静默改成「长安夜雨 · AI × ML」，凭空多出一个领域，玩家还看不出是谁改的。
+ *
+ * 所以升级只换**前缀**：组合逐字照搬，也不做码点裁剪（裁剪会把半个领域名切出来）。
+ */
+export function titleWithCombo(yahao: unknown, combo: string): string {
+  const clean = sanitizeYahao(yahao);
+  const tail = typeof combo === 'string' ? combo.trim() : '';
+  const head = clean.length > 0 ? clean : '孤灯残卷'; // 雅号不可用时的兜底（组合照旧）
+  return `${head}${TITLE_SEP}${tail}`;
+}
+
 /** 从整名里取回组合部分（升级雅号时要用：`雅号 · 组合` → `组合`）。 */
 export function splitCombo(title: unknown): string {
   const text = typeof title === 'string' ? title : '';

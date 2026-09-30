@@ -32,6 +32,7 @@ import type { BeatEntry } from './beats';
 import { nextBeat } from './beats';
 import type { FakeCard } from '../app/fakeMemory';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import { TITLE_SEP } from '../app/fightTitle';
 import { h, setHidden } from './dom';
 
 export interface ResultDeps {
@@ -240,11 +241,11 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
   function requestNameOnce(recordId: string, title: string, won: boolean): void {
     if (typeof deps.onNameRequest !== 'function' || namedRequests.has(recordId)) return;
     namedRequests.add(recordId);
-    const sep = ' · ';
-    const idx = title.indexOf(sep);
+    // 分隔符只认 fightTitle 里那一份（复查发现：这里原本自己又写了一遍 ' · '）
+    const idx = title.indexOf(TITLE_SEP);
     deps.onNameRequest({
       recordId,
-      combo: idx < 0 ? title : title.slice(idx + sep.length),
+      combo: idx < 0 ? title : title.slice(idx + TITLE_SEP.length),
       kind: won ? 'won' : 'lost',
     });
   }
@@ -275,7 +276,12 @@ export function mountResult(root: HTMLElement, ctrl: GameController, deps: Resul
         res.recordId === undefined
           ? undefined
           : (snap.save?.settings?.leaderboard ?? []).find((r) => r && r.id === res.recordId);
-      const title = typeof rec?.title === 'string' ? rec.title : '';
+      // I2：榜上查得到就用榜上的（升级过的名字会刷新过来），查不到（本局被挤出前 50）就用摘要里的兜底名
+      const title = typeof rec?.title === 'string' && rec.title.length > 0
+        ? rec.title
+        : typeof res.fightTitle === 'string'
+          ? res.fightTitle
+          : '';
       fightTitleEl.textContent = title;
       setHidden(fightTitleEl, title.length === 0);
       if (title.length > 0 && res.recordId !== undefined) requestNameOnce(res.recordId, title, res.won);

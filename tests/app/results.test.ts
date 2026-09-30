@@ -642,6 +642,26 @@ describe('app/results —— 遭遇战名字（D58）', () => {
     expect(rec.title?.split(' · ')[0]).toHaveLength(4); // 兜底雅号是四字
   });
 
+  it('RS#T3 领域名含 `/` 时，升级雅号**逐字保留**组合（I3）', async () => {
+    // 现场风险：玩家自建领域叫「AI/ML」「C/C++」「TCP/IP」时，升级路径若把组合按 × / 重拆再拼，
+    // 会凭空多出一个领域（AI/ML → AI × ML），而且看不出是谁改的。
+    const clock = useFakeClock(NOW);
+    const raw = createMemoryStorage();
+    const save = saveWithLeaderboard([]);
+    save.decks = [{ id: 'deck-a', name: 'AI/ML', isPreset: true }];
+    await raw.save(save);
+    const coord = await makeCoord(raw, clock);
+
+    const view = makeView({ pool: ['c1'], idx: 1, phase: 'won' });
+    const rec = await recordRun(coord, view, view.state, extras());
+    expect(rec.title).toContain('AI/ML'); // 兜底名里组合是原样的
+
+    const up = await upgradeRunTitle(coord, { recordId: rec.id, yahao: '长安夜雨', combo: 'AI/ML' });
+    expect(up.updated).toBe(true);
+    expect(up.title).toBe('长安夜雨 · AI/ML'); // **不许**变成「AI × ML」
+    expect(up.title).not.toContain('×');
+  });
+
   it('RS#T2 升级雅号：组合保留；同值与记录不在都不写', async () => {
     const clock = useFakeClock(NOW);
     const raw = createMemoryStorage();
