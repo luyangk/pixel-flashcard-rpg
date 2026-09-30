@@ -249,6 +249,12 @@ export function mountPracticeCollect(
     '看原文',
   ) as HTMLButtonElement;
   const sourceBodyEl = h('pre', { 'data-ui': 'cand-source-body', class: 'cand-source-body' });
+  /**
+   * 来源说明（D60 补）：直接回答"存下来的卡上会不会有「看原文」"——
+   * 有链接的（从网址/源库来的）会有；**直接粘正文的没有链接，所以不会有**
+   * （此前屏上什么都不说，玩家只看到"有的卡有按钮、有的没有"，自然会当成 Bug）。
+   */
+  const sourceNoteEl = h('p', { 'data-ui': 'cand-source-note', class: 'field-hint' });
   const sourcePanelEl = h('div', { 'data-ui': 'cand-source', class: 'cand-source', hidden: true }, [
     sourceBodyEl,
   ]);
@@ -264,13 +270,16 @@ export function mountPracticeCollect(
       { class: 'field-hint' },
       '默认一条都不勾：这些是从你还没读过的页面上改写的，请过一眼再决定留哪几条。',
     ),
+    // 「看原文」与来源说明**放在候选列表之前**（D60 补）：放在底部时，候选一多就滚出屏幕，
+    // 玩家反馈"新卡看不到看原文选项"——入口要在它有用的时候就在眼前。
+    h('div', { class: 'collect-row' }, [sourceToggleBtn, openBtn]),
+    sourceNoteEl,
+    sourcePanelEl,
     candListEl,
     h('div', { class: 'collect-row' }, [selectAllBtn]),
     h('label', { class: 'collect-row' }, [h('span', { class: 'collect-label' }, '存入'), deckSelect]),
     newDeckInput,
     h('div', { class: 'collect-row' }, [candSaveBtn]),
-    h('div', { class: 'collect-row' }, [sourceToggleBtn, openBtn]),
-    sourcePanelEl,
     candStatusEl,
   ]);
 
@@ -309,6 +318,10 @@ export function mountPracticeCollect(
     setHidden(openBtn, hasText ? true : sourceUrl.length === 0);
     sourceToggleBtn.textContent = sourceOpen ? '收起原文' : '看原文';
     sourceBodyEl.textContent = hasText ? sourceText : '';
+    sourceNoteEl.textContent =
+      sourceUrl.length > 0
+        ? `来源：${sourceUrl}（存下来的卡上会有「看原文」）`
+        : '这批候选没有来源链接（你是直接粘的正文）——存下来的卡上不会有「看原文」。';
   }
 
   function renderStatus(text: string): void {

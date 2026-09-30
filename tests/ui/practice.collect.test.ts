@@ -502,3 +502,49 @@ describe('mountPracticeCollect —— 候选审阅看原文（D60）', () => {
     expect(ui(rig.root, 'cand-source-body').textContent).toBe('正文2');
   });
 });
+
+/* ------------------------------------------------------------------ D60 补：入口位置与来源说明 */
+
+/**
+ * 判别力（这两条来自现场反馈"新卡看不到看原文选项 / 不是所有卡都有"）：
+ * - PC#17 「看原文」与来源说明要在**候选列表之前**（放在底部时，候选一多就滚出屏幕 —— 入口等于没有）；
+ * - PC#18 有链接 ⇒ 说明里带上链接并承诺"存下来的卡上有看原文"；
+ *          直接粘正文（无链接）⇒ **如实说"不会有"**，而不是让玩家以为是 Bug。
+ */
+describe('mountPracticeCollect —— 看原文入口的位置与来源说明（D60 补）', () => {
+  it('PC#17 入口在候选列表之前', async () => {
+    const rig = makeRig({
+      ingest: (url) => Promise.resolve({ kind: 'article', title: '一篇', text: '正文', url, via: 'direct' }),
+    });
+    (rig.root.querySelector('[data-ui="source-url"]') as HTMLInputElement).value = 'https://x.example/a';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+
+    const section = ui(rig.root, 'cand-section');
+    const toggle = section.querySelector('[data-ui="cand-source-toggle"]') as HTMLElement;
+    const list = section.querySelector('[data-ui="cand-list"]') as HTMLElement;
+    // compareDocumentPosition: FOLLOWING(4) ⇒ list 在 toggle 之后
+    expect(toggle.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('PC#18 有链接 → 说明带链接；粘正文（无链接）→ 如实说"不会有"', async () => {
+    const withUrl = makeRig({
+      ingest: (url) => Promise.resolve({ kind: 'article', title: '一篇', text: '正文', url, via: 'direct' }),
+    });
+    (withUrl.root.querySelector('[data-ui="source-url"]') as HTMLInputElement).value = 'https://x.example/a';
+    click(withUrl.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+    const note1 = ui(withUrl.root, 'cand-source-note').textContent ?? '';
+    expect(note1).toContain('https://x.example/a');
+    expect(note1).toContain('会有「看原文」');
+
+    const pasted = makeRig();
+    const ta = pasted.root.querySelector('[data-ui="source-text"]') as HTMLTextAreaElement;
+    ta.value = '我自己粘的正文';
+    click(pasted.root.querySelector('[data-ui="source-paste-go"]') as HTMLElement);
+    await flushMicrotasks();
+    const note2 = ui(pasted.root, 'cand-source-note').textContent ?? '';
+    expect(note2).toContain('没有来源链接');
+    expect(note2).toContain('不会有');
+  });
+});
