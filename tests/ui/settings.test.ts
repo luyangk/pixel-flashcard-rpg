@@ -316,3 +316,34 @@ describe('mountSettings —— 读取服务的实话（D62）', () => {
     expect(text).toContain('按次计费');
   });
 });
+
+/* ------------------------------------------------------------------ D62 补：清缓存入口 */
+
+/**
+ * 判别力：缺端口 ⇒ 整行收起（不显示点了没反应的入口）；有端口 ⇒ 点击真的调到它，
+ * 并如实说明"下次会重新读、也会重新计费"（清缓存是有代价的动作，别让玩家以为免费）。
+ */
+describe('mountSettings —— 清空源缓存（D62 补）', () => {
+  function rig(withPort: boolean) {
+    const root = makeRoot();
+    const calls: number[] = [];
+    mountSettings(root, makeCtrl(makeSnap({ screen: 'menu', save: makeSave() })), {
+      toastMs: 0,
+      ...(withPort ? { clearFeedCache: () => void calls.push(1) } : {}),
+    });
+    return { root, calls };
+  }
+
+  it('SU#CC1 有口 ⇒ 显示并可点；缺省 ⇒ 整行收起', () => {
+    const withPort = rig(true);
+    expect(ui(withPort.root, 'llm-clear-feed-cache-row').hidden).toBe(false);
+    expect(ui(withPort.root, 'llm-cache-hint').hidden).toBe(false);
+    click(ui(withPort.root, 'llm-clear-feed-cache'));
+    expect(withPort.calls).toHaveLength(1);
+    expect(ui(withPort.root, 'toast').textContent).toContain('重新计费');
+
+    const bare = rig(false);
+    expect(ui(bare.root, 'llm-clear-feed-cache-row').hidden).toBe(true);
+    expect(ui(bare.root, 'llm-cache-hint').hidden).toBe(true);
+  });
+});

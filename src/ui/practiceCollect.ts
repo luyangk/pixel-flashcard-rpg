@@ -303,6 +303,9 @@ export function mountPracticeCollect(
     h('div', { class: 'collect-row' }, [pasteGoBtn]),
     statusEl,
     openBtn,
+    // D60 补：这块正文框以前**没有标题**，看着像块无主的文字（玩家截图里问过一次）。
+    // 说清两件事：它是"这次要用的正文"，而且可以**直接编辑**再生成。
+    h('p', { 'data-ui': 'source-text-title', class: 'field-title' }, '本次正文（可直接编辑）'),
     textInput,
     linksEl,
     inboxEl,

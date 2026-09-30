@@ -631,3 +631,21 @@ describe('mountPracticeCollect —— 取全文再出卡（D61）', () => {
     expect(rig.collectCalls).toHaveLength(0); // 没有假装生成
   });
 });
+
+/* ------------------------------------------------------------------ D60 补：正文框标题 */
+
+/**
+ * 判别力：正文框上面要有标题，且**紧挨着它**（放在别处等于没有）；
+ * 标题要说明"可直接编辑" —— 玩家会以为那块只是回显。
+ */
+describe('mountPracticeCollect —— 正文框的标题（D60 补）', () => {
+  it('PC#22 标题就在正文框上方，且说明可编辑', () => {
+    const rig = makeRig();
+    const title = ui(rig.root, 'source-text-title');
+    expect(title.textContent).toContain('本次正文');
+    expect(title.textContent).toContain('编辑');
+    const input = ui(rig.root, 'source-text');
+    // 标题在正文框之前（compareDocumentPosition: FOLLOWING）
+    expect(title.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

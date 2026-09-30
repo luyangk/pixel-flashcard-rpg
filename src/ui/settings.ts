@@ -108,6 +108,10 @@ export interface SettingsDeps {
     readonly load: () => PlayerProfile;
     readonly save: (profile: PlayerProfile) => boolean;
   };
+  /**
+   * 清空源库的**会话内缓存**（D62 补）。缺省 ⇒ 不显示按钮（不显示点了没反应的入口）。
+   */
+  readonly clearFeedCache?: () => void;
   /** toast 存活毫秒（测试给 0 免定时器）。 */
   readonly toastMs?: number;
 }
@@ -453,6 +457,17 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     placeholder: 'https://r.jina.ai/（留空 = 不启用）',
     autocomplete: 'off',
   }) as HTMLInputElement;
+  const clearCacheBtn = h(
+    'button',
+    { 'data-ui': 'llm-clear-feed-cache', class: 'collect-btn', type: 'button' },
+    '清空源缓存',
+  ) as HTMLButtonElement;
+  clearCacheBtn.addEventListener('click', () => {
+    if (destroyed || deps.clearFeedCache === undefined) return;
+    deps.clearFeedCache();
+    toast('源库缓存清空了：下次「看最新」会重新去读，也会重新计费。');
+  });
+  const clearCacheRow = h('div', { 'data-ui': 'llm-clear-feed-cache-row', class: 'llm-actions' }, [clearCacheBtn]);
   const readerKeyInput = h('input', {
     'data-ui': 'llm-reader-key',
     class: 'llm-input',
@@ -477,6 +492,10 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '服务地址'), readerUrlInput]),
     h('p', { class: 'field-hint' }, READER_KEY_HINT),
     h('p', { 'data-ui': 'llm-reader-reality', class: 'field-hint' }, READER_REALITY_HINT),
+    h('p', { 'data-ui': 'llm-cache-hint', class: 'field-hint' },
+      '「看最新」读过的清单会在这次会话里留着（5 分钟内再点不会重复花钱）。' +
+      '要强制重读，清掉缓存即可 —— 它只影响这次读过的清单，不碰你的卡、领域与存档。'),
+    clearCacheRow,
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '服务 Key'), readerKeyInput]),
     h('div', { class: 'llm-actions' }, [llmSaveBtn, llmTestBtn, llmClearBtn]),
   ]);
@@ -805,6 +824,12 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     } else {
       setHidden(llmQuotaTextEl, true);
     }
+
+    // 清缓存（D62 补）：有口才显示整行 + 说明
+    const canClearCache = typeof deps.clearFeedCache === 'function';
+    setHidden(clearCacheRow, !canClearCache);
+    const cacheHintEl = llmEl.querySelector('[data-ui="llm-cache-hint"]');
+    if (cacheHintEl instanceof HTMLElement) setHidden(cacheHintEl, !canClearCache);
 
     // 玩家组（D57）：有口才显示；昵称输入框在非编辑时回填当前值（避免把玩家正在敲的字擦掉）
     const profileReady = deps.profile !== undefined && typeof deps.profile.save === 'function';

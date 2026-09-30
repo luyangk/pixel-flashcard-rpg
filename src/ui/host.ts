@@ -291,6 +291,8 @@ export function mountHost(root: HTMLElement, ctrl: GameController, deps: HostDep
               llm: deps.llm,
               pwa: deps.pwa,
               profile: deps.profile,
+              // D62 补：源库会话缓存的清空入口
+              clearFeedCache: deps.clearFeedCache,
               setAnswerMode: deps.setAnswerMode,
               llmQuotaText: quotaText,
               setTier: deps.setTier,

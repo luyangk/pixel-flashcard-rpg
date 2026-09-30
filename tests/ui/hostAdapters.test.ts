@@ -98,6 +98,15 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+/**
+ * 源库的会话缓存是**模块级**的（生命周期=一次页面会话）⇒ 每条用例都要从干净状态起。
+ * 放在文件级而不是某个 describe 里：任何一条用到 `sources.fetchItems` 的用例都受影响
+ * （AD#C3 一开始就是因为这个漏网，单跑绿、全跑红）。
+ */
+beforeEach(() => {
+  clearFeedCache();
+});
+
 describe('assembleHost —— 导入链（R-T11-p4-b / R-T11-p4-c）', () => {
   it('AD#1 导入前先 flush（顺序契约）：在途改动先落净，导入才写 store（删掉 flush 必红）', async () => {
     const incoming = makeSave({ decks: [makeDeck('deck-a', '甲')] });
@@ -893,5 +902,53 @@ describe('assembleHost —— 源库的会话内缓存（D62）', () => {
     await hosts.adapters.sources?.fetchItems(source);
     await hosts.adapters.sources?.fetchItems(source, { refresh: true });
     expect(calls()).toBe(2);
+  });
+});
+
+/* ------------------------------------------------------------------ D62 补：清缓存的真实效果 */
+
+/**
+ * 判别力（AD#C3）：`clearFeedCache()` 之后**必须真的重读** ——
+ * 一个"只清了个寂寞"的实现（清错了 map、或清了别的东西）会当场红。
+ */
+describe('assembleHost —— 清缓存的真实效果（D62 补）', () => {
+  it('AD#C3 清空后同一个源会重新发请求', async () => {
+    let n = 0;
+    const fakeFetch = (async () => {
+      n += 1;
+      return new Response(JSON.stringify([{ title: 'A Paper', summary: '摘要', paper: { id: '2609.32704' } }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const base = await makeRig();
+    const hosts = assembleHost({
+      ctrl: base.assembly.ctrl,
+      coord: base.coord,
+      store: base.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      feedFetchImpl: fakeFetch,
+    });
+    const source = { id: 'hf-papers', name: 'HF', url: 'https://huggingface.co/api/daily_papers', kind: 'hf-papers' as const, direct: true };
+
+    await hosts.adapters.sources?.fetchItems(source);
+    await hosts.adapters.sources?.fetchItems(source);
+    expect(n).toBe(1); // 第二次吃缓存
+
+    hosts.adapters.clearFeedCache?.();
+    await hosts.adapters.sources?.fetchItems(source);
+    expect(n).toBe(2); // 清完必须真的重读
   });
 });

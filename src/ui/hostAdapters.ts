@@ -135,6 +135,8 @@ export interface AssembleDeps {
   readonly feedFetchImpl?: FetchLike;
   /** 来源库口径（测试用；生产接 platform/feedFetch + platform/sourceStore）。 */
   readonly sourcesOverride?: HostAdapters['sources'];
+  /** 清缓存口径（测试用；生产就是模块级那份会话缓存）。 */
+  readonly clearFeedCacheOverride?: HostAdapters['clearFeedCache'];
   /** 遭遇战名字升级口径（测试用；生产接 llmFlow.suggestFightTitle + results.upgradeRunTitle）。 */
   readonly onNameRequestOverride?: HostAdapters['onNameRequest'];
   /** 玩家身份口径（测试用；生产接 platform/profileStore）。 */
@@ -452,6 +454,8 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       check: () => checkForUpdate(),
       apply: reloadPage,
     },
+    /** 清空源库的会话内缓存（D62 补；按钮在设置页的读取服务旁边）。 */
+    clearFeedCache: deps.clearFeedCacheOverride ?? clearFeedCache,
     sources: deps.sourcesOverride ?? {
       /**
        * 读一个订阅源。**读取服务同样只在这玩家配了它时才带**（缺省 = 不启用）：

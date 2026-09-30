@@ -154,6 +154,11 @@ export interface HostAdapters {
     readonly kind: string;
   }) => void;
   /**
+   * 清空**源库的会话内缓存**（D62 补：给玩家一个手动入口）。
+   * 它只影响"这次会话里读过的订阅源清单"，不碰卡、领域与存档。
+   */
+  readonly clearFeedCache?: () => void;
+  /**
    * 打开一个外链（D60）：练功·看旧卡里卡上的「看原文」、采新卡的「打开原文去复制」共用。
    * 缺省 `window.open`（宿主不传时各屏自己回落）。
    */
