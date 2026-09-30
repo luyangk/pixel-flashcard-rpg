@@ -232,6 +232,14 @@ describe('collectCards —— 分块、去重与如实申报', () => {
  * - KF#O4 **提纲失败 ⇒ 回落分块生成**（新路不许成为新的失败点），且如实记一笔 requests；
  * - KF#O5 提纲那次调用带上了【主线】等四段骨架要求与"禁元信息"（prompt 契约）。
  */
+/** KF#O6 用的"够长的提纲"（≥60 码点，否则会被判成没提炼出来）。 */
+const outlineText_forKF6 = [
+  '【主线】',
+  '- 超长资料的第一条主线结论',
+  '【步骤】',
+  '- 第一步先做什么，第二步再做什么',
+].join('\n');
+
 describe('collectCards —— 两段式（D59）', () => {
   const longText = '甲'.repeat(2000); // ≥1500 ⇒ 走两段式
   // 提纲要**过 60 码点**这条闸（太短会被判成"没提炼出来"⇒ 回落分块，见 KF#O4）
@@ -287,6 +295,18 @@ describe('collectCards —— 两段式（D59）', () => {
     if (!res.ok) return;
     expect(f.calls).toHaveLength(1);
     expect(res.requests).toBe(1);
+  });
+
+  it('KF#O6 超长文：提纲那一步拿到的是**采样后的全篇**（含结尾，且长度受控）', async () => {
+    // 30k 字：超过提纲输入预算（20k）⇒ 必须采样；结尾留一个独有标记，验证"尾部真的带上了"
+    const text = `${'甲'.repeat(15_000)}${'乙'.repeat(14_000)}结尾标记甲乙丙`;
+    const f = fakeChat([{ ok: true, text: outlineText_forKF6 }, cardsJson(['x'])]);
+    await collectCards({ chat: f.chat }, {
+      text, deckName: 'AI', quota: quota(), nowMs: NOW, tzOffsetMin: TZ,
+    });
+    const userMsg = f.calls[0].find((m) => m.role === 'user')?.content ?? '';
+    expect(userMsg).toContain('结尾标记甲乙丙'); // 尾部带上了（"只看开头"的实现必红）
+    expect(Array.from(userMsg).length).toBeLessThan(Array.from(text).length); // 确实采样过
   });
 
   it('KF#O4 提纲失败（或太短）⇒ 回落分块生成，且如实记 requests', async () => {

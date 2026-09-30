@@ -33,6 +33,8 @@ function makeRig(
     ingest?: (url: string) => Promise<IngestResult>;
     collect?: (input: { text: string; deckName: string; want?: number }) => Promise<CollectResult>;
     inboxInitial?: InboxItem[];
+    /** 来源库口（D61：给「取全文再出卡」用）。 */
+    sources?: CollectDeps['sources'];
     addCardOk?: boolean;
     addDeckOk?: boolean;
   } = {},
@@ -77,6 +79,7 @@ function makeRig(
         inbox = [];
       },
     },
+    ...(over.sources === undefined ? {} : { sources: over.sources }),
     addCard: (input) => {
       addCardCalls.push(input as unknown as Record<string, unknown>);
       return Promise.resolve(
@@ -546,5 +549,85 @@ describe('mountPracticeCollect —— 看原文入口的位置与来源说明（
     const note2 = ui(pasted.root, 'cand-source-note').textContent ?? '';
     expect(note2).toContain('没有来源链接');
     expect(note2).toContain('不会有');
+  });
+});
+
+/* ------------------------------------------------------------------ D61：取全文再出卡 */
+
+/**
+ * 判别力：
+ * - PC#19 有全文地址的条目才显示「取全文再出卡」；没有就不显示（不假装能取）；
+ * - PC#20 点了 ⇒ 抓**全文地址**（不是摘要页），生成时依据标成「全文」；
+ * - PC#21 全文取不到 ⇒ **如实说明并回落摘要**（不假装成功）；屏上依据仍标「摘要」。
+ */
+describe('mountPracticeCollect —— 取全文再出卡（D61）', () => {
+  const ITEM = {
+    id: 'i1',
+    sourceId: 'hf',
+    sourceName: 'HF',
+    title: 'A Paper',
+    url: 'https://huggingface.co/papers/2609.32704',
+    dateMs: Date.UTC(2026, 9, 25),
+    text: '摘要正文',
+    extra: '摘要',
+    fullTextUrl: 'https://arxiv.org/html/2609.32704',
+  };
+  const sources = (items: unknown[]): CollectDeps['sources'] => ({
+    // 不带 library ⇒ 屏上就用内置域（mergeLibrary(空库)），HF 在列
+    fetchItems: () =>
+      Promise.resolve({ ok: true as const, items: items as never, via: 'direct' as const, readerTried: false }),
+  });
+
+  /** 点一下来源的「看最新」把条目读出来（列表不会自己联网）。 */
+  async function loadItems(root: HTMLElement): Promise<void> {
+    // eslint-disable-next-line no-console
+    click(root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
+    await flushMicrotasks();
+  }
+
+  it('PC#19 有全文地址才显示按钮', async () => {
+    const withFull = makeRig({ sources: sources([ITEM]) });
+    await loadItems(withFull.root);
+    // 条目 id 由 core 按 url 生成（不是夹具里那个）⇒ 按属性选
+    expect(withFull.root.querySelector('[data-src-full]')).not.toBeNull();
+
+    const { fullTextUrl: _drop, ...noFull } = ITEM;
+    const withoutFull = makeRig({ sources: sources([noFull]) });
+    await loadItems(withoutFull.root);
+    expect(withoutFull.root.querySelector('[data-src-full]')).toBeNull();
+    expect(withoutFull.root.querySelector('[data-src-use]')).not.toBeNull(); // 「用这篇」仍在
+  });
+
+  it('PC#20 点了取全文：抓全文地址，生成时依据是"全文"', async () => {
+    // 注：夹具给了 ingest 时，rig 自带的那本 ingestCalls 不记账 ⇒ 这里自己收
+    const fetched: string[] = [];
+    const rig = makeRig({
+      sources: sources([ITEM]),
+      ingest: (url) => {
+        fetched.push(url);
+        return Promise.resolve({ kind: 'article', title: 'A Paper', text: '整篇正文', url, via: 'reader' });
+      },
+    });
+    await loadItems(rig.root);
+    click(rig.root.querySelector('[data-src-full]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect(fetched).toEqual(['https://arxiv.org/html/2609.32704']); // 抓的是全文，不是摘要页
+    expect(rig.collectCalls[0]?.text).toBe('整篇正文');
+    expect(ui(rig.root, 'cand-source-note').textContent).toContain('依据：全文');
+  });
+
+  it('PC#21 全文取不到 ⇒ 如实说明并回落摘要', async () => {
+    const rig = makeRig({
+      sources: sources([ITEM]),
+      ingest: (url) =>
+        Promise.resolve({ kind: 'blocked', url, reason: '跨域限制。', blocked: true }),
+    });
+    await loadItems(rig.root);
+    click(rig.root.querySelector('[data-src-full]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect(ui(rig.root, 'ingest-status').textContent).toContain('全文');
+    expect(rig.collectCalls).toHaveLength(0); // 没有假装生成
   });
 });

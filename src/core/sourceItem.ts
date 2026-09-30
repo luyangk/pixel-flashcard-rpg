@@ -64,6 +64,11 @@ export interface SourceItemDraft {
   readonly text: string;
   /** 一行补充信息（分数、下载量、★ 等），屏上显示在标题后。 */
   readonly extra?: string;
+  /**
+   * **全文地址**（D61，可选）：能拿到全文时填（例：论文的 arXiv HTML 版）。
+   * 有了它，屏上就多一个「取全文再出卡」——摘要装不下主线与步骤，全文才装得下。
+   */
+  readonly fullTextUrl?: string;
 }
 
 /** 消毒后的一条（屏上用这个）。 */
@@ -76,6 +81,8 @@ export interface SourceItem {
   readonly dateMs: number;
   readonly text: string;
   readonly extra: string;
+  /** **全文地址**（D61）：有它才显示「取全文再出卡」；没有就不显示（不假装能取）。 */
+  readonly fullTextUrl?: string;
 }
 
 /** 标题上限（码点）。 */
@@ -146,6 +153,7 @@ export function normalizeItem(draft: SourceItemDraft): SourceItem | null {
     dateMs,
     text: clip(String(draft.text ?? '').trim(), ITEM_TEXT_MAX),
     extra: clip(squeeze(draft.extra ?? ''), 60),
+    ...(usableUrl(draft.fullTextUrl) === null ? {} : { fullTextUrl: usableUrl(draft.fullTextUrl) as string }),
   };
 }
 

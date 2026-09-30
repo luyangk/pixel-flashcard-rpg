@@ -89,6 +89,19 @@ export function plainText(raw: unknown): string {
 /** 一个解析器的产物：只有标题与链接是必需的，其余给空。 */
 type ParsedItem = Omit<SourceItemDraft, 'sourceId' | 'sourceName'>;
 
+/**
+ * 由 HF 论文 id 推出 arXiv 的 **HTML 全文**地址（D61）。
+ *
+ * 为什么能这么推：HF Daily Papers 的 `paper.id` 就是 arXiv 编号（如 `2609.32704`）。
+ * 为什么优先 HTML：arXiv 从 2023 年底起为多数论文提供 HTML 版（`/html/<id>`），
+ * 比 PDF 好解析得多；取不到时调用方会如实回落到摘要。
+ */
+function arxivHtmlUrl(paperId: string): string | undefined {
+  const id = paperId.trim();
+  if (!/^\d{4}\.\d{4,5}(v\d+)?$/.test(id)) return undefined;
+  return `https://arxiv.org/html/${id}`;
+}
+
 /* ------------------------------------------------------------------ XML（RSS / Atom） */
 
 /**
@@ -210,6 +223,7 @@ export function parseJsonItems(kind: SourceDef['kind'], payload: unknown): Parse
       // 论文页地址由 id 拼出来（实测响应里没有 url 字段）
       const url = usableUrl(id ? `https://huggingface.co/papers/${id}` : '');
       if (!title || !url) continue;
+      const fullTextUrl = arxivHtmlUrl(id);
       // 摘要随响应一起回来 —— 这就是"不用再抓页面"的底气（HF 的网页本身没有 ACAO）
       const text = plainText(p.summary) || plainText(paper.summary);
       const upvotes = Number(paper.upvotes ?? 0);
@@ -219,6 +233,7 @@ export function parseJsonItems(kind: SourceDef['kind'], payload: unknown): Parse
         dateMs: parseDateMs(p.publishedAt) || parseDateMs(paper.publishedAt),
         text,
         extra: Number.isFinite(upvotes) && upvotes > 0 ? `${upvotes} 票` : '论文摘要',
+        ...(fullTextUrl === undefined ? {} : { fullTextUrl }),
       });
     }
     return out;

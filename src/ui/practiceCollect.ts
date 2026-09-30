@@ -139,6 +139,11 @@ export function mountPracticeCollect(
    */
   let sourceText = '';
   let sourceUrl = '';
+  /**
+   * 这批卡的**依据级别**（D61）：摘要还是全文。
+   * 摘要能出概念卡，但出不了"步骤/因果"——屏上必须说清，玩家才知道要不要再取一次全文。
+   */
+  let sourceBasis: 'abstract' | 'full' = 'abstract';
   let sourceOpen = false;
   let busy = false;
 
@@ -318,10 +323,12 @@ export function mountPracticeCollect(
     setHidden(openBtn, hasText ? true : sourceUrl.length === 0);
     sourceToggleBtn.textContent = sourceOpen ? '收起原文' : '看原文';
     sourceBodyEl.textContent = hasText ? sourceText : '';
+    const basisText = sourceBasis === 'full' ? '依据：全文' : '依据：摘要';
     sourceNoteEl.textContent =
-      sourceUrl.length > 0
+      (sourceUrl.length > 0
         ? `来源：${sourceUrl}（存下来的卡上会有「看原文」）`
-        : '这批候选没有来源链接（你是直接粘的正文）——存下来的卡上不会有「看原文」。';
+        : '这批候选没有来源链接（你是直接粘的正文）——存下来的卡上不会有「看原文」。') +
+      ` · ${basisText}`;
   }
 
   function renderStatus(text: string): void {
@@ -412,7 +419,7 @@ export function mountPracticeCollect(
 
   async function onGenerate(
     text: string,
-    source: { via: 'direct' | 'reader' | 'paste'; url?: string },
+    source: { via: 'direct' | 'reader' | 'paste'; url?: string; basis?: 'abstract' | 'full' },
   ): Promise<void> {
     if (destroyed || busy || typeof deps.collectCards !== 'function') return;
     const body = String(text ?? '').trim();
@@ -424,6 +431,7 @@ export function mountPracticeCollect(
     // 记下这一批候选的依据（D60）：候选审阅时要点开对照
     sourceText = body;
     sourceUrl = source.url ?? '';
+    sourceBasis = source.basis === 'full' ? 'full' : 'abstract';
     sourceOpen = false;
     try {
       const res = await deps.collectCards({
@@ -721,6 +729,36 @@ export function mountPracticeCollect(
       onUseUrl: (url) => {
         urlInput.value = url;
         void onFetchUrl(url);
+      },
+      /**
+       * 「取全文再出卡」（D61）：摘要装不下主线与步骤，所以论文这类**有全文地址**的条目
+       * 多给一条路。取不到全文时**如实回落**摘要（并说清原因），不假装成功。
+       */
+      onUseFullText: (input) => {
+        void (async () => {
+          if (typeof deps.ingestUrl !== 'function') {
+            renderStatus('这个版本还不能取全文。');
+            return;
+          }
+          renderStatus(`正在取《${input.title}》的全文…（多半要几秒）`);
+          const res = await deps.ingestUrl(input.fullTextUrl);
+          if (destroyed) return;
+          if (res.kind !== 'article' || res.text.trim().length === 0) {
+            renderStatus(
+              res.kind === 'blocked'
+                ? '这篇的全文取不到（多半在境外或需要读取服务）。可以用摘要出卡，或点「打开原文去复制」。'
+                : '这篇的全文没取到，先用摘要出卡。',
+            );
+            return;
+          }
+          textInput.value = res.text;
+          renderStatus(`《${input.title}》全文 ${res.text.length} 字，正在生成候选卡…`);
+          await onGenerate(res.text, {
+            via: res.via,
+            url: input.url,
+            basis: 'full', // D61：依据级别标成"全文"
+          });
+        })();
       },
       openUrl: deps.openUrl,
       now: deps.now,

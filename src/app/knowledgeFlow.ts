@@ -15,6 +15,7 @@ import type { CardCandidate } from '@core/llmParse';
 import type { LlmQuota } from '@core/types';
 import { PER_REQUEST_CARD_CAP, normalizeQuota, planCharge, remainingCards } from './quota';
 import { suggestCards, suggestOutline, type ChatFn } from './llmFlow';
+import { outlineInputFor } from './outlineInput';
 
 /** 每块的最大码点数（与 llmFlow.PASTE_MAX 同值：那块提示词就是按这个预算写的）。 */
 export const CHUNK_CHARS = 4000;
@@ -135,7 +136,12 @@ export async function collectCards(
   if (longEnoughForOutline) {
     input.onStage?.('outline');
     requests += 1;
-    const outlineRes = await suggestOutline({ chat: deps.chat }, { text, deckName: input.deckName });
+    // 长文的提纲输入**采样后**再给（D61）：头 + 尾 + 中间等距取样 ⇒ 覆盖全篇、长度可控。
+    // 直接给前 20k 字等于"只看开头"，而主线/结论常在后面。
+    const outlineRes = await suggestOutline(
+      { chat: deps.chat },
+      { text: outlineInputFor(text), deckName: input.deckName },
+    );
     if (outlineRes.ok) {
       input.onStage?.('cards');
       requests += 1;

@@ -42,6 +42,16 @@ export interface SourcesDeps {
   readonly onUseText?: (input: { readonly title: string; readonly text: string; readonly url: string; readonly sourceName: string }) => void;
   /** 「用这篇」但只有链接 ⇒ 走既有的抓取管线。 */
   readonly onUseUrl?: (url: string) => void;
+  /**
+   * 「取全文再出卡」（D61）：摘要装不下主线与步骤，能拿全文的条目（论文）给一条更好的路。
+   * 缺省 ⇒ 不显示按钮（不假装能取）；取不到全文时调用方会如实回落摘要。
+   */
+  readonly onUseFullText?: (input: {
+    readonly title: string;
+    readonly url: string;
+    readonly fullTextUrl: string;
+    readonly sourceName: string;
+  }) => void;
   /** 「打开原文」（不给读取服务时的下一步）。 */
   readonly openUrl?: (url: string) => void;
   readonly now?: () => number;
@@ -335,10 +345,32 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
         '用这篇',
       ) as HTMLButtonElement;
       useBtn.addEventListener('click', () => useItem(item));
+      /**
+       * 「取全文再出卡」（D61）：只在**这条内容真的有全文地址**、且宿主接了那个口时显示。
+       * 摘要能出概念卡，但出不了"步骤/因果"——那正是玩家说"缺了最有价值的部分"的地方。
+       */
+      const fullBtn =
+        typeof item.fullTextUrl === 'string' && typeof deps.onUseFullText === 'function'
+          ? (h(
+              'button',
+              { 'data-src-full': item.id, class: 'collect-btn', type: 'button' },
+              '取全文再出卡',
+            ) as HTMLButtonElement)
+          : null;
+      fullBtn?.addEventListener('click', () => {
+        if (destroyed || busy) return;
+        setStatus(`正在取《${item.title}》的全文…`);
+        deps.onUseFullText?.({
+          title: item.title,
+          url: item.url,
+          fullTextUrl: item.fullTextUrl as string,
+          sourceName: item.sourceName,
+        });
+      });
       const row = h('div', { 'data-src-item': item.id, class: 'src-item' }, [
         h('span', { class: 'src-item-title' }, item.title),
         h('span', { class: 'src-item-meta' }, `${dateLabel(item)}${item.extra ? ` · ${item.extra}` : ''}`),
-        useBtn,
+        ...(fullBtn === null ? [useBtn] : [useBtn, fullBtn]),
       ]);
       itemsEl.appendChild(row);
     }

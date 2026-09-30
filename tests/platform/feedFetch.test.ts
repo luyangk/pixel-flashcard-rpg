@@ -326,3 +326,30 @@ describe('platform/feedFetch —— 经读取服务读源（D55）', () => {
     expect(calls).toEqual([rssSource.url]);
   });
 });
+
+/* ------------------------------------------------------------------ D61：全文地址 */
+
+/**
+ * 判别力：
+ * - FF#F1 HF 论文条目带上 **arXiv HTML 全文地址**（`/html/<id>`）—— 有它屏上才显示「取全文再出卡」；
+ * - FF#F2 id 形状不像 arXiv 编号 ⇒ **不瞎猜**（宁可不给入口，也不要给一个必然 404 的地址）；
+ * - FF#F3 别家来源（HN / GitHub）没有这个概念 ⇒ 不带这个字段。
+ */
+describe('feedFetch —— 全文地址（D61）', () => {
+  it('FF#F1/F2 有 arXiv 编号才给全文地址', () => {
+    const papers = parseJsonItems('hf-papers', [
+      { title: 'A Paper', summary: '摘要', paper: { id: '2609.32704' } },
+      { title: 'Strange Id', summary: '摘要', paper: { id: 'not-an-id' } },
+    ]);
+    expect(papers[0].fullTextUrl).toBe('https://arxiv.org/html/2609.32704');
+    expect(papers[1].fullTextUrl).toBeUndefined();
+  });
+
+  it('FF#F3 其它来源不带这个字段', () => {
+    const hn = parseJsonItems('hn', {
+      hits: [{ title: 'Post', url: 'https://a.com/x', created_at: '2026-09-28T17:58:11Z', points: 5, objectID: '1' }],
+    });
+    expect(hn).toHaveLength(1);
+    expect(hn[0].fullTextUrl).toBeUndefined();
+  });
+});
