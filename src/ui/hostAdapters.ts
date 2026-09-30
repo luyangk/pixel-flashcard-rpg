@@ -59,6 +59,7 @@ import { exportAndMark, importBackupAndSave } from '../app/transfer';
 import type { StageSprites } from '../stage/renderer';
 import type { FetchLike, LlmConfig } from '../platform/llmTypes';
 import { backupFileName } from './decks';
+import type { FetchSourceResult } from '../platform/feedFetch';
 import type { HostAdapters } from './hostTypes';
 import type { SharedInput } from './practiceCollect';
 
@@ -177,6 +178,20 @@ function newId(): string {
  *    （评审判 m-6）——"备份已导入" + 只读横幅同时出现会让人以为游戏坏了。
  * 3. **练习关走 `bossFightParams`**：单领域 + `size = min(卡数, 25)` 的口径只有一处。
  */
+/**
+ * 会话内缓存（D62）：同一个源在一次会话里只真读一次。
+ *
+ * 为什么放在**装配层**而不是 platform：它的生命周期就该是"这一次页面会话" ——
+ * 刷新即失效，不必落盘、也不该跨会话（订阅源天天在变）。
+ */
+const feedCache = new Map<string, { readonly at: number; readonly result: FetchSourceResult }>();
+/** 缓存有效期：5 分钟。够挡住"连着点几次"，又不至于让「看最新」看到过期内容。 */
+export const FEED_CACHE_TTL_MS = 5 * 60_000;
+/** 清掉会话内的源缓存（重置存档 / 导入备份之后该清 —— 测试也用它隔离用例）。 */
+export function clearFeedCache(): void {
+  feedCache.clear();
+}
+
 export function assembleHost(deps: AssembleDeps): HostAssembly {
   const { ctrl, coord, store, now, tzOffsetMin } = deps;
 
@@ -443,15 +458,31 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
        * 对"没开跨域"的源（arXiv / OpenAI / DeepMind…）它是唯一的读法，但那意味着
        * **把这个源的地址发给那台服务** —— 与采集文章那条路的账是同一笔（D55）。
        */
-      fetchItems: (source) => {
+      fetchItems: async (source, opts) => {
         const cfg = llmIo.load();
         const readerUrl = typeof cfg.readerUrl === 'string' ? cfg.readerUrl.trim() : '';
-        return fetchSourceItems(source, {
+        /**
+         * **会话内缓存**（D62）：同一个源在这次会话里读过的结果直接用 —— 每一次读都是真花钱
+         * （读取服务按内容量计费）。`refresh:true`（屏上「重新读」）绕过缓存。
+         */
+        // 键里带上读取服务地址：换了服务/关了服务之后，同一个源的读法就变了，
+        // 拿旧缓存等于给玩家看"另一条路"的结果（AD#13 就是被这一点绊到的）
+        const key = `${source.id}@${source.url}@${readerUrl}`;
+        const at = now();
+        const hit = feedCache.get(key);
+        if (opts?.refresh !== true && hit !== undefined && at - hit.at < FEED_CACHE_TTL_MS) {
+          if (hit.result.ok) return { ...hit.result, cached: true };
+          // 失败不进缓存（网络抖一下不该让玩家半小时都读不到）
+        }
+        const res = await fetchSourceItems(source, {
           ...(deps.feedFetchImpl === undefined ? {} : { fetchImpl: deps.feedFetchImpl }),
+          ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
           ...(readerUrl.length === 0
             ? {}
             : { reader: { url: readerUrl, key: typeof cfg.readerKey === 'string' ? cfg.readerKey : '' } }),
         });
+        if (res.ok) feedCache.set(key, { at, result: res });
+        return res;
       },
       library: { load: loadSources, save: saveSources },
     },

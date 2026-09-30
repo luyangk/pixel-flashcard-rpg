@@ -116,7 +116,10 @@ export interface HostAdapters {
    * 两个口都缺 ⇒ 整块收起（不显示点了没反应的入口）；只缺 `library` ⇒ 能看不能改。
    */
   readonly sources?: {
-    readonly fetchItems: (source: SourceDef) => Promise<FetchSourceResult>;
+    readonly fetchItems: (
+      source: SourceDef,
+      opts?: { readonly refresh?: boolean; readonly signal?: AbortSignal },
+    ) => Promise<FetchSourceResult>;
     readonly library?: {
       readonly load: () => UserLibrary;
       readonly save: (lib: UserLibrary) => boolean;

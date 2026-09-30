@@ -16,6 +16,8 @@ import { BUILTIN_DOMAINS } from '../../src/app/sourceLibrary';
 import {
   FEED_MAX_BYTES,
   FEED_PARSE_MAX_BYTES,
+  FEED_TIMEOUT_MS,
+  READER_TIMEOUT_MS,
   fetchSourceItems,
   parseFeedXml,
   parseJsonItems,
@@ -409,5 +411,63 @@ describe('platform/feedFetch —— 小端点优先与解析前截断（D62）',
   it('FF#T3 JSON 端点不受文本截断影响', () => {
     const items = parseJsonItems('hn', { hits: [{ title: 'Post', url: 'https://a.com/x', objectID: '1' }] });
     expect(items).toHaveLength(1);
+  });
+});
+
+/* ------------------------------------------------------------------ D62 后半：路数、预算、取消 */
+
+/**
+ * 判别力：
+ * - FF#D1 `direct:false` 的源**只走读取服务**（原来读取服务失败后再白等 15 秒直连 ——
+ *   那些源的实测结论就是"没有 ACAO"，直连必然失败）；
+ * - FF#D2 读取服务有自己的 25 秒预算（整页渲染回传本来就慢，15 秒不够就全是超时）；
+ * - FF#D3 屏上点「取消」⇒ 在途请求真的被掐断，结果如实回「已取消」，不冒充超时。
+ */
+describe('platform/feedFetch —— 路数、预算与取消（D62）', () => {
+  it('FF#D1 direct:false 只试读取服务（不再白跑直连）', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn((target: string) => {
+      calls.push(String(target));
+      // 读取服务回来的是**渲染后的 HTML**（不是 XML）⇒ 用 parseReaderList 认得的那种形状
+      return Promise.resolve(res('<h3><a href="https://x/a">一条论文</a></h3><p>摘要文字</p>'));
+    }) as unknown as typeof fetch;
+
+    const r = await fetchSourceItems(
+      { id: 'x', name: 'X', url: 'https://x.example/feed.xml', kind: 'rss', direct: false },
+      { fetchImpl, reader: { url: 'https://reader.example', key: '' } },
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.via).toBe('reader');
+    expect(calls).toHaveLength(1); // 只发了**一次**请求
+    expect(calls[0]).toContain('reader.example');
+  });
+
+  it('FF#D2 读取服务预算 25 秒（比直读宽）', () => {
+    expect(READER_TIMEOUT_MS).toBe(25_000);
+    expect(READER_TIMEOUT_MS).toBeGreaterThan(FEED_TIMEOUT_MS);
+  });
+
+  it('FF#D3 外部取消 ⇒ 掐断在途请求，如实回"已取消"', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(
+      (_t: string, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }),
+    ) as unknown as typeof fetch;
+
+    const pending = fetchSourceItems(rssSource, { fetchImpl, signal: controller.signal });
+    controller.abort();
+    const r = await pending;
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('已取消');
+      expect(r.reason).not.toContain('超时'); // 取消不是超时，别混为一谈
+    }
   });
 });

@@ -24,6 +24,11 @@ import type { FetchLike } from './llmTypes';
 /** 订阅源的超时（比文章短：它就是个 XML/JSON）。 */
 export const FEED_TIMEOUT_MS = 15_000;
 /**
+ * 走**读取服务**时的超时预算（D62）：比直读宽 —— 那一头要先渲染整页再回传，
+ * 比直接抓 API 慢得多；给它 25 秒，别让玩家以为卡死了。
+ */
+export const READER_TIMEOUT_MS = 25_000;
+/**
  * 订阅源体积上限 3MB：实测 arXiv 每日 700KB、Latent.space 1.4MB、OpenAI 750KB，
  * 留一倍余量；再大就不是"清单"而是数据转储了。
  */
@@ -48,6 +53,11 @@ export type FetchSourceResult =
        * 如实告诉玩家"只解析了前 512 KB" —— 否则"怎么只有这几条"看起来像 Bug。
        */
       readonly truncatedForParse?: boolean;
+      /**
+       * 这份结果是**会话内缓存**（D62）：没有真的再读一次，也就没有再花钱。
+       * 屏上要如实说明 —— 玩家以为"刚读过一次怎么这么快"，会怀疑是不是坏了。
+       */
+      readonly cached?: boolean;
     }
   | {
       readonly ok: false;
@@ -61,6 +71,13 @@ export interface FetchSourceDeps {
   /** 注入位（测试用假 fetch；生产不传）。 */
   readonly fetchImpl?: FetchLike;
   readonly timeoutMs?: number;
+  /** 读取服务的超时预算（缺省 `READER_TIMEOUT_MS`；两条路各算各的）。 */
+  readonly readerTimeoutMs?: number;
+  /**
+   * 外部取消信号（D62：屏上的「取消」按钮）。传进来后，这个请求会随它一起被掐断，
+   * 结果如实回 `已取消`（不是"失败"，也不是假装读到了）。
+   */
+  readonly signal?: AbortSignal;
   /**
    * 玩家可选的**读取服务**（缺省 = 不启用）。
    *
@@ -383,9 +400,16 @@ async function requestText(
   doFetch: FetchLike,
   timeoutMs: number,
   headers: Record<string, string>,
+  external?: AbortSignal,
 ): Promise<{ readonly ok: true; readonly body: string } | { readonly ok: false; readonly reason: string; readonly blocked: boolean }> {
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   const timer = controller !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  // 外部取消（D62）：玩家的「取消」要能真的掐断在途请求，而不是只把界面变回去
+  const onExternalAbort = (): void => controller?.abort();
+  if (controller !== null && external !== undefined) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     const res = await doFetch(target, {
       method: 'GET',
@@ -408,10 +432,14 @@ async function requestText(
   } catch (e) {
     // `fetch` 在 CORS 被拦、断网、DNS 失败时抛的都是 TypeError —— 浏览器不告诉你是哪一种
     if (e instanceof Error && e.name === 'AbortError') {
-      return { ok: false, reason: '响应太慢（超时），稍后再试。', blocked: false };
+      // 分清"玩家点的取消"与"自己超时"：前者不该说成"太慢，稍后再试"
+      return external?.aborted === true
+        ? { ok: false, reason: '已取消。', blocked: false }
+        : { ok: false, reason: '响应太慢（超时），稍后再试。', blocked: false };
     }
     return { ok: false, reason: '读不到这个源（跨域被拒或网络不通）。', blocked: true };
   } finally {
+    external?.removeEventListener('abort', onExternalAbort);
     if (timer !== null) clearTimeout(timer);
   }
 }
@@ -422,12 +450,14 @@ async function attemptDirect(
   url: string,
   doFetch: FetchLike,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Attempt> {
   const got = await requestText(
     url,
     doFetch,
     timeoutMs,
     { Accept: 'application/json, application/rss+xml, application/atom+xml, text/xml, */*' },
+    signal,
   );
   if (!got.ok) return got;
   const body = got.body;
@@ -469,6 +499,7 @@ async function attemptReader(
   source: SourceDef,
   doFetch: FetchLike,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Attempt> {
   const base = reader.url.endsWith('/') ? reader.url : `${reader.url}/`;
   const target = `${base}${encodeURIComponent(source.url)}`;
@@ -479,7 +510,7 @@ async function attemptReader(
   const key = typeof reader.key === 'string' ? reader.key.trim() : '';
   if (key.length > 0) headers.Authorization = `Bearer ${key}`;
 
-  const got = await requestText(target, doFetch, timeoutMs, headers);
+  const got = await requestText(target, doFetch, timeoutMs, headers, signal);
   if (!got.ok) {
     return {
       ok: false,
@@ -519,19 +550,34 @@ export async function fetchSourceItems(
     return { ok: false, reason: '这个环境没有网络能力。', blocked: false, readerTried: false };
   }
   const timeoutMs = typeof deps.timeoutMs === 'number' && deps.timeoutMs > 0 ? deps.timeoutMs : FEED_TIMEOUT_MS;
+  const readerTimeoutMs =
+    typeof deps.readerTimeoutMs === 'number' && deps.readerTimeoutMs > 0 ? deps.readerTimeoutMs : READER_TIMEOUT_MS;
   const readerUrl = typeof deps.reader?.url === 'string' ? deps.reader.url.trim() : '';
   const reader = readerUrl.length > 0 ? { url: readerUrl, key: typeof deps.reader?.key === 'string' ? deps.reader.key : '' } : null;
   const readerTried = reader !== null;
 
+  /**
+   * 试哪几条路、什么顺序（D62 修正）：
+   * - `direct:false` 的源**只走读取服务** —— 它们的 note 就是"实测无 ACAO"，
+   *   直连必然白等 15 秒（原来"读取服务失败→再直连"最长要卡 40 秒，玩家以为崩了）；
+   * - 其余源先直读（快、免费），失败再走读取服务。
+   * - 没配读取服务时永远只直读（不假装有）。
+   */
   const order: ReadonlyArray<'direct' | 'reader'> =
-    reader !== null && source.direct === false ? ['reader', 'direct'] : reader !== null ? ['direct', 'reader'] : ['direct'];
+    source.direct === false
+      ? reader !== null
+        ? ['reader']
+        : ['direct']
+      : reader !== null
+        ? ['direct', 'reader']
+        : ['direct'];
 
   const failures: Array<{ who: 'direct' | 'reader'; reason: string; blocked: boolean }> = [];
   for (const which of order) {
     const attempt =
       which === 'direct'
-        ? await attemptDirect(source, url, doFetch, timeoutMs)
-        : await attemptReader(reader as { url: string; key: string }, source, doFetch, timeoutMs);
+        ? await attemptDirect(source, url, doFetch, timeoutMs, deps.signal)
+        : await attemptReader(reader as { url: string; key: string }, source, doFetch, readerTimeoutMs, deps.signal);
     if (attempt.ok) {
       return {
         ok: true,

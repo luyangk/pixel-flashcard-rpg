@@ -32,7 +32,10 @@ import { showToast } from './toast';
 
 export interface SourcesDeps {
   /** 读一个来源的最新条目（宿主接 `platform/feedFetch.fetchSourceItems`）。 */
-  readonly fetchItems?: (source: SourceDef) => Promise<FetchSourceResult>;
+  readonly fetchItems?: (
+    source: SourceDef,
+    opts?: { readonly refresh?: boolean; readonly signal?: AbortSignal },
+  ) => Promise<FetchSourceResult>;
   /** 玩家那份库（宿主接 `platform/sourceStore`）。缺省 ⇒ 只能看内置库、不能维护。 */
   readonly library?: {
     readonly load: () => UserLibrary;
@@ -75,6 +78,10 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
   const tzOffsetMin = typeof deps.tzOffsetMin === 'number' && Number.isFinite(deps.tzOffsetMin) ? deps.tzOffsetMin : 0;
 
   let library: UserLibrary = deps.library ? deps.library.load() : { added: [], removed: [] };
+  /** 正在读哪个源（D62：busy 时要**看得出来**，而不是静默吞掉点击）。 */
+  let busySourceName = '';
+  /** 在途请求的取消柄（D62「取消」按钮用它真的掐断请求）。 */
+  let inflight: AbortController | null = null;
   let domains: SourceDomain[] = mergeLibrary(library);
   let activeDomainId = domains[0]?.id ?? '';
   let activeSourceId = '';
@@ -87,6 +94,16 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
   /* ------------------------------------------------------------ DOM */
   const domainRowEl = h('div', { 'data-ui': 'src-domains', class: 'src-domains' });
   const sourceRowEl = h('div', { 'data-ui': 'src-sources', class: 'src-sources' });
+  const cancelBtn = h(
+    'button',
+    { 'data-ui': 'src-cancel', class: 'collect-btn', type: 'button', hidden: true },
+    '取消',
+  ) as HTMLButtonElement;
+  cancelBtn.addEventListener('click', () => {
+    if (destroyed) return;
+    inflight?.abort();
+    setStatus('已取消这次读取。');
+  });
   const statusEl = h('p', { 'data-ui': 'src-status', class: 'field-hint' });
   const itemsEl = h('div', { 'data-ui': 'src-items', class: 'src-items' });
   const openBtn = h(
@@ -175,7 +192,7 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
     ),
     domainRowEl,
     sourceRowEl,
-    statusEl,
+    h('div', { class: 'collect-row' }, [statusEl, cancelBtn]),
     openBtn,
     itemsEl,
     manageBtn,
@@ -227,16 +244,25 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
     return localDayString(item.dateMs, tzOffsetMin);
   }
 
-  async function loadSource(source: SourceDef): Promise<void> {
-    if (destroyed || busy || typeof deps.fetchItems !== 'function') return;
+  async function loadSource(source: SourceDef, opts: { refresh?: boolean } = {}): Promise<void> {
+    if (typeof deps.fetchItems !== 'function') return;
+    // D62：busy 时**不再静默吞点击** —— 说清"上一个源还在读"，并告诉玩家可以取消
+    if (destroyed || busy) {
+      setStatus(`上一个源（${busySourceName || '正在读'}）还在读，读完或点「取消」再试。`);
+      return;
+    }
     busy = true;
-    activeSourceId = source.id;
+    busySourceName = source.name;
+    activeSourceId = source.id; // 按钮据此变成「重读」
+    inflight = typeof AbortController === 'function' ? new AbortController() : null;
+    setHidden(cancelBtn, inflight === null);
+    render();
     items = [];
     blockedUrl = '';
     setStatus(`正在读「${source.name}」…`);
     render();
     try {
-      const res = await deps.fetchItems(source);
+      const res = await deps.fetchItems(source, inflight === null ? opts : { ...opts, signal: inflight.signal });
       if (destroyed) return;
       if (res.ok) {
         // 消毒/去重/排序都在 core 里做（这里只负责显示）
@@ -246,7 +272,9 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
             ? `「${source.name}」这次没解析出可用条目。`
             : `${source.name}：${items.length} 条最新内容${res.via === 'reader' ? '（经读取服务取回）' : ''}。` +
               // D62：清单太长时如实说明只解析了前一段（不说的话"怎么只有这几条"像 Bug）
-              (res.truncatedForParse === true ? '（清单很长，只解析了前一段，最新的排在最前面）' : ''),
+              (res.truncatedForParse === true ? '（清单很长，只解析了前一段，最新的排在最前面）' : '') +
+              // D62：用缓存要说清楚 —— "怎么这么快"会让玩家怀疑是不是坏了；也顺便让他知道没花钱
+              (res.cached === true ? '（用的是这次会话里刚读过的结果，没再花一次钱；要重读点「重新读」）' : ''),
         );
       } else {
         items = [];
@@ -265,7 +293,12 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
       }
     } finally {
       busy = false;
-      if (!destroyed) render();
+      busySourceName = '';
+      inflight = null;
+      if (!destroyed) {
+        setHidden(cancelBtn, true);
+        render();
+      }
     }
   }
 
@@ -332,7 +365,9 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
         s.id === activeSourceId ? '重读' : '看最新',
       ) as HTMLButtonElement;
       go.disabled = typeof deps.fetchItems !== 'function';
-      go.addEventListener('click', () => void loadSource(s));
+      // D62：「重读」= 真的再读一次（绕过会话内缓存）；首次「看最新」走缓存即可
+      const alreadyRead = s.id === activeSourceId && items.length > 0;
+      go.addEventListener('click', () => void loadSource(s, alreadyRead ? { refresh: true } : {}));
       row.appendChild(go);
       sourceRowEl.appendChild(row);
     }

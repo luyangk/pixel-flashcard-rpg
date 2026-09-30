@@ -13,14 +13,14 @@
  *   （原实现照样回 ok:true，玩家会看到"备份已导入"与只读横幅同时出现）；
  * - AD#4 「再来一场」必须复用上一局的 startFight 参数（含 boss 档），否则重开会偷偷换成随机遭遇战。
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import type { SaveFile } from '@core/types';
 import { createMemoryStorage } from '@platform/memoryStore';
 import { exportBackup } from '../../src/app/backup';
 import { createCoordinator } from '../../src/app/persist';
 import { createGameController } from '../../src/app/gameController';
 import type { GameController, GameIntent } from '../../src/app/controllerTypes';
-import { assembleHost } from '../../src/ui/hostAdapters';
+import { assembleHost, clearFeedCache } from '../../src/ui/hostAdapters';
 import type { LlmConfig } from '../../src/platform/llmTypes';
 import arcJson from '../../assets/narrative/arc.json';
 import beatsJson from '../../assets/narrative/beats.json';
@@ -821,5 +821,77 @@ describe('assembleHost —— 重出选项（D56）', () => {
     expect(res?.ok).toBe(false);
     expect(res?.reason ?? '').toContain('额度');
     expect(calls).toEqual([]); // 一分钱都不该花
+  });
+});
+
+/* ------------------------------------------------------------------ D62：会话内缓存 */
+
+/**
+ * 判别力（省钱的那一条）：
+ * - AD#C1 同一个源在**同一次会话**里读第二次 ⇒ 不再发请求（读取服务按内容量计费，重复读就是重复烧钱），
+ *   且结果标 `cached:true`（屏上要如实说明"没再花一次钱"）；
+ * - AD#C2 `refresh:true`（屏上「重读」）⇒ 绕过缓存真读一次。
+ */
+describe('assembleHost —— 源库的会话内缓存（D62）', () => {
+  // 缓存是**模块级**的（生命周期=一次会话）⇒ 用例之间要清，否则上一条的缓存会漏进来
+  beforeEach(() => clearFeedCache());
+
+  const source = {
+    id: 'hf-papers',
+    name: 'HF',
+    url: 'https://huggingface.co/api/daily_papers',
+    kind: 'hf-papers' as const,
+    direct: true,
+  };
+
+  async function rig(): Promise<{ hosts: ReturnType<typeof assembleHost>; calls: () => number }> {
+    let n = 0;
+    const fakeFetch = (async () => {
+      n += 1;
+      return new Response(JSON.stringify([{ title: 'A Paper', summary: '摘要正文', paper: { id: '2609.32704' } }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const base = await makeRig();
+    const hosts = assembleHost({
+      ctrl: base.assembly.ctrl,
+      coord: base.coord,
+      store: base.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      feedFetchImpl: fakeFetch,
+    });
+    return { hosts, calls: () => n };
+  }
+
+  it('AD#C1 第二次读同一源不再发请求，并标 cached', async () => {
+    const { hosts, calls } = await rig();
+    const first = await hosts.adapters.sources?.fetchItems(source);
+    expect(first?.ok).toBe(true);
+    expect(calls()).toBe(1);
+
+    const second = await hosts.adapters.sources?.fetchItems(source);
+    expect(calls()).toBe(1); // 没再发请求
+    expect(second?.ok).toBe(true);
+    if (second?.ok) expect(second.cached).toBe(true);
+  });
+
+  it('AD#C2 refresh:true 绕过缓存', async () => {
+    const { hosts, calls } = await rig();
+    await hosts.adapters.sources?.fetchItems(source);
+    await hosts.adapters.sources?.fetchItems(source, { refresh: true });
+    expect(calls()).toBe(2);
   });
 });

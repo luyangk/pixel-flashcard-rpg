@@ -290,3 +290,88 @@ describe('mountPracticeSources —— 截断如实申报（D62）', () => {
     expect(ui(root, 'src-status').textContent).toContain('只解析了前一段');
   });
 });
+
+/* ------------------------------------------------------------------ D62：busy 可取消与缓存 */
+
+/**
+ * 判别力（现场症状："第一个源读完了，其余都没完成，是有什么限时吗"）：
+ * - PS#B1 busy 时点别的源**不再静默吞掉** —— 状态说清"上一个还在读"，并给「取消」；
+ * - PS#B2 「取消」真的把在途请求掐断（把 signal 传给 fetchItems），且状态如实说"已取消"；
+ * - PS#B3 用会话内缓存的结果时，屏上说明"没再花一次钱"，并提示可以「重读」。
+ */
+describe('mountPracticeSources —— busy 可取消与缓存（D62）', () => {
+  it('PS#B1 busy 时点别的源：说清上一个还在读，并给出取消入口', async () => {
+    const gate: { release?: () => void } = {};
+    const root = makeRoot();
+    mountPracticeSources(root, {
+      toastMs: 0,
+      fetchItems: () =>
+        new Promise((resolve) => {
+          gate.release = () => resolve({ ok: true as const, via: 'direct' as const, items: [] });
+        }),
+    });
+    click(root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
+    await flushMicrotasks();
+    expect((root.querySelector('[data-ui="src-cancel"]') as HTMLElement).hidden).toBe(false);
+
+    click(root.querySelector('[data-src-load="arxiv-cs-ai"]') as HTMLElement);
+    await flushMicrotasks();
+    expect(ui(root, 'src-status').textContent).toContain('还在读');
+
+    gate.release?.();
+    await flushMicrotasks();
+  });
+
+  it('PS#B2 取消：把 signal 交给 fetchItems，状态如实说"已取消"', async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const root = makeRoot();
+    mountPracticeSources(root, {
+      toastMs: 0,
+      fetchItems: (_s, opts) => {
+        signals.push(opts?.signal);
+        return new Promise((resolve) => {
+          opts?.signal?.addEventListener('abort', () =>
+            resolve({ ok: false as const, reason: '已取消。', blocked: false, readerTried: false }),
+          );
+        });
+      },
+    });
+    click(root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
+    await flushMicrotasks();
+    click(root.querySelector('[data-ui="src-cancel"]') as HTMLElement);
+    await flushMicrotasks();
+
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(ui(root, 'src-status').textContent).toContain('已取消');
+    expect((root.querySelector('[data-ui="src-cancel"]') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('PS#B3 缓存结果如实说明，且「重读」会绕过缓存', async () => {
+    const calls: Array<{ refresh?: boolean } | undefined> = [];
+    const root = makeRoot();
+    mountPracticeSources(root, {
+      toastMs: 0,
+      fetchItems: (_s, opts) => {
+        calls.push(opts);
+        return Promise.resolve({
+          ok: true as const,
+          via: 'reader' as const,
+          items: [draft({ title: '一条', url: 'https://x/a' })],
+          cached: opts?.refresh !== true,
+        });
+      },
+    });
+    click(root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
+    await flushMicrotasks();
+    expect(ui(root, 'src-status').textContent).toContain('没再花一次钱');
+
+    // 同一个源再点（按钮已变成「重读」）⇒ 带 refresh 绕过缓存
+    const again = root.querySelector('[data-src-load="hf-papers"]') as HTMLElement;
+    expect(again.textContent).toBe('重读');
+    click(again);
+    await flushMicrotasks();
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.refresh).toBe(true);
+  });
+});
