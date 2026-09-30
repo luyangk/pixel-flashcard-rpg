@@ -5,7 +5,7 @@
  * - RC#1 四个维度各自算对：等级取自 exp、已掌握看 srs.stability、自建卡看 source.type、
  *   复习天数取**所有卡账本的并集**（只看一张卡的实现必红）；
  * - RC#2 连续天数的边界：今天/昨天都算"还在连着"，断一天就归零；空账本 = 0；
- * - RC#3 最长连续：记进 `progress.bestStreak`，只在**更大**时才写（幂等、无写放大）；
+ * - RC#3 最长连续：**从账本现算**（不落 `progress.bestStreak` 字段 —— 那是复查后的裁定）；
  * - RC#4 脏数据不崩：非数组 cards / 脏 source / 脏天数一律消毒。
  */
 import { afterEach, describe, expect, it } from 'vitest';

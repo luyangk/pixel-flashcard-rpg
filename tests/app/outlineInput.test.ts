@@ -53,3 +53,20 @@ describe('app/outlineInput —— 提纲输入采样（D61）', () => {
     expect(outlineInputFor('字'.repeat(10), 0 as never).length).toBeGreaterThan(0);
   });
 });
+
+/* ------------------------------------------------------------------ 复查 M-S：早退分支也要守预算 */
+
+/**
+ * 判别力（复查发现测试容差问题）：原用例用 `+20` 容差绕过了自己的不变量，
+ * 而"预算小于头+尾"的早退分支**真的会超预算** 5 码点（`\n...\n`）。
+ * 这条不留容差：预算就是预算（超出会被调用方再裁一刀，正好削掉结尾）。
+ */
+describe('app/outlineInput —— 早退分支的预算（复查）', () => {
+  it('OI#2c 预算小于头+尾时，总长也**绝不超预算**（不留容差）', () => {
+    const text = Array.from({ length: 40 }, (_, i) => `第${i}段：${'字'.repeat(500)}`).join('\n');
+    for (const cap of [300, 800, 1_000, 2_000, 3_000]) {
+      const out = outlineInputFor(text, cap);
+      expect(Array.from(out).length, `预算 ${cap} 被突破`).toBeLessThanOrEqual(cap);
+    }
+  });
+});

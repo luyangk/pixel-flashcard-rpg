@@ -94,3 +94,31 @@ describe('platform/profileStore —— 玩家身份（D57）', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ 复查 M4：写不进去要如实回报 */
+
+/**
+ * 判别力：存储写不进去（隐私模式/配额满）时，`ensureProfile` **不许**返回一个"看起来能用"的随机 ID ——
+ * 那个 ID 每次重渲染都会换，而屏上把它当"将来交换战绩的稳定标识"展示（复查发现 M4）。
+ * 如实回报空 ID，屏上才能说"这次没能存住"。
+ */
+describe('profileStore —— 写失败如实回报（复查 M4）', () => {
+  it('PF#6 写不进去 ⇒ 回空 ID，不假装有身份', () => {
+    const spy = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    try {
+      const p = ensureProfile(() => 'u-12345678');
+      expect(p.userId).toBe(''); // 不返回那个"没存住"的 ID
+      expect(p.nickname).toBe('');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('PF#7 写得进去 ⇒ 正常生成并落盘', () => {
+    const p = ensureProfile(() => 'u-12345678');
+    expect(p.userId).toBe('u-12345678');
+    expect(loadProfile().userId).toBe('u-12345678');
+  });
+});

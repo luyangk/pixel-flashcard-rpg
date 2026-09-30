@@ -69,7 +69,7 @@ export function streakEndingAt(days: ReadonlySet<string>, today: string): number
   return n;
 }
 
-/** 账本里最长的一段连续（用于历史纪录兜底：`bestStreak` 缺失或小于它时取它）。 */
+/** 账本里最长的一段连续（`bestStreak` 就是它 —— 本项目**没有**这个存档字段，是现算的）。 */
 export function longestStreak(days: ReadonlySet<string>): number {
   const sorted = [...days].sort();
   let best = 0;

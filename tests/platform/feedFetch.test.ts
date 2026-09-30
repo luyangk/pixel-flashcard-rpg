@@ -471,3 +471,33 @@ describe('platform/feedFetch —— 路数、预算与取消（D62）', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ 复查 M9：arXiv 条目也要有全文入口 */
+
+/**
+ * 判别力（复查发现 M9）：内置的 arXiv 两个源走 API（Atom）出来的条目**也**该带全文地址 ——
+ * 它们本来就直接带着 arXiv 编号，推 HTML 版是现成的；否则玩家在这两个源上只有「用这篇」，
+ * 而它们恰恰是当初"只有摘要"的那一批。
+ * 同时不许乱认：非 arXiv 的条目、形状不对的编号一律不给（宁可不给入口，也不给必然 404 的地址）。
+ */
+describe('feedFetch —— arXiv 条目的全文地址（复查 M9）', () => {
+  const atom = (id: string, href: string): string =>
+    `<feed><entry><title>某篇论文</title><id>${id}</id><link href="${href}" rel="alternate"/><summary>摘要正文</summary><published>2026-09-28T00:00:00Z</published></entry></feed>`;
+
+  it('FF#F4 arXiv 的 Atom 条目带全文地址', () => {
+    const items = parseFeedXml(atom('http://arxiv.org/abs/2609.36966v1', 'https://arxiv.org/abs/2609.36966v1'));
+    expect(items).toHaveLength(1);
+    expect(items[0].fullTextUrl).toBe('https://arxiv.org/html/2609.36966v1');
+  });
+
+  it('FF#F5 RSS 里的 arXiv 条目也顺手填上', () => {
+    const rss = '<rss><channel><item><title>X</title><link>https://arxiv.org/abs/2609.36966</link><description>摘要</description></item></channel></rss>';
+    const items = parseFeedXml(rss);
+    expect(items[0].fullTextUrl).toBe('https://arxiv.org/html/2609.36966');
+  });
+
+  it('FF#F6 非 arXiv 条目不乱给', () => {
+    const items = parseFeedXml(atom('https://example.com/x', 'https://example.com/x'));
+    expect(items[0].fullTextUrl).toBeUndefined();
+  });
+});

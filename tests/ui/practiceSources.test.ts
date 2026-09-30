@@ -365,6 +365,9 @@ describe('mountPracticeSources —— busy 可取消与缓存（D62）', () => {
     click(root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
     await flushMicrotasks();
     expect(ui(root, 'src-status').textContent).toContain('没再花一次钱');
+    // 复查 M3：文案里点名的按钮必须**真的存在**（此前文案写「重新读」而按钮是「重读」）
+    expect(ui(root, 'src-status').textContent).toContain('「重读」');
+    expect(root.querySelector('[data-src-load="hf-papers"]')?.textContent).toBe('重读');
 
     // 同一个源再点（按钮已变成「重读」）⇒ 带 refresh 绕过缓存
     const again = root.querySelector('[data-src-load="hf-papers"]') as HTMLElement;

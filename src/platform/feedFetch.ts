@@ -177,6 +177,22 @@ function atomHref(block: string): string {
  *    测不到真实形状，要么只能喂简化过的假数据。正则实现两边行为一致（与 `htmlDigest`
  *    同款取舍：宁可自己写一段可测的解析，也不依赖环境差异）。
  */
+/**
+ * 由条目的链接/编号推 arXiv **HTML 全文**地址（复查 M9）。
+ *
+ * 内置的 arXiv 两个源现在走官方 API（Atom），出来的条目**直接带着 arXiv 编号** ——
+ * 顺手推 HTML 版是现成的，否则玩家在这两个源上只有「用这篇」，而它们正是当初"只有摘要"的那一批。
+ */
+function fullTextUrlFrom(link: string, id: string): string | undefined {
+  for (const candidate of [link, id]) {
+    const m = /arxiv\.org\/abs\/([^\s/?#]+)/.exec(String(candidate ?? ''));
+    if (m === null) continue;
+    const built = `https://arxiv.org/html/${m[1]}`;
+    if (/^https:\/\/arxiv\.org\/html\/\d{4}\.\d{4,5}(v\d+)?$/.test(built)) return built;
+  }
+  return undefined;
+}
+
 export function parseFeedXml(xml: string): ParsedItem[] {
   const body = String(xml ?? '');
   if (body.length === 0) return [];
@@ -199,7 +215,16 @@ export function parseFeedXml(xml: string): ParsedItem[] {
       m = blocks.exec(body);
       continue;
     }
-    out.push({ title, url, dateMs: parseDateMs(plainText(date)), text, extra: '' });
+    // 复查 M9：arXiv 条目（Atom 或 RSS）顺手带上 HTML 全文地址
+    const fullTextUrl = fullTextUrlFrom(url, plainText(tagText(block, ['guid', 'id'])));
+    out.push({
+      title,
+      url,
+      dateMs: parseDateMs(plainText(date)),
+      text,
+      extra: '',
+      ...(fullTextUrl === undefined ? {} : { fullTextUrl }),
+    });
     m = blocks.exec(body);
   }
   return out;

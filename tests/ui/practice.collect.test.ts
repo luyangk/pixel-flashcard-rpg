@@ -690,3 +690,79 @@ describe('mountPracticeCollect —— 降级与截断的文案（I1）', () => {
     expect(ui(rig.root, 'ingest-status').textContent).toContain('没能全部处理完');
   });
 });
+
+/* ------------------------------------------------------------------ 复查 M2/M6：按钮位置与露脸 */
+
+/**
+ * 判别力（复查发现 M2/M6）：
+ * - PC#23「打开原文去复制」**只能在一个地方**（此前它先被放进候选区、又被移进顶层 ——
+ *   appendChild 是移动，候选行里那个引用是死的），且必须挂在顶层屏里；
+ * - PC#24「取全文」失败时文案让玩家点它 ⇒ **就必须把它露出来**（否则玩家去找一个屏上没有的按钮）。
+ */
+describe('mountPracticeCollect —— 「打开原文去复制」的位置与露脸（复查 M2/M6）', () => {
+  it('PC#23 全屏只有一个「打开原文去复制」，且不在候选区里', async () => {
+    const rig = makeRig({
+      ingest: (url) => Promise.resolve({ kind: 'article', title: '一篇', text: '正文', url, via: 'direct' }),
+    });
+    (rig.root.querySelector('[data-ui="source-url"]') as HTMLInputElement).value = 'https://x.example/a';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+
+    const btns = rig.root.querySelectorAll('[data-ui="ingest-open"]');
+    expect(btns).toHaveLength(1);
+    const candSection = ui(rig.root, 'cand-section');
+    expect(candSection.contains(btns[0])).toBe(false); // 不是候选区的子节点
+  });
+
+  it('PC#24 取全文失败 ⇒ 文案提到的按钮真的在屏上', async () => {
+    const rig = makeRig({
+      sources: {
+        fetchItems: () =>
+          Promise.resolve({
+            ok: true as const,
+            via: 'direct' as const,
+            items: [
+              {
+                id: 'i1', sourceId: 'hf-papers', sourceName: 'HF', title: 'A Paper',
+                url: 'https://huggingface.co/papers/2609.32704', dateMs: 0, text: '摘要', extra: '摘要',
+                fullTextUrl: 'https://arxiv.org/html/2609.32704',
+              },
+            ],
+          }),
+      },
+      ingest: (url) => Promise.resolve({ kind: 'blocked', url, reason: '跨域限制。', blocked: true }),
+    });
+    click(rig.root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
+    await flushMicrotasks();
+    click(rig.root.querySelector('[data-src-full]') as HTMLElement);
+    await flushMicrotasks();
+
+    const status = ui(rig.root, 'ingest-status').textContent ?? '';
+    expect(status).toContain('打开原文去复制');
+    expect(ui(rig.root, 'ingest-open').hidden).toBe(false); // 说到就要做到
+  });
+});
+
+/* ------------------------------------------------------------------ 复查 M2b：死引用要能自查 */
+
+/**
+ * 判别力（复查 M2 的补强）：`openBtn` 被塞进两个父容器时，`appendChild` 是"移动" ——
+ * **最终 DOM 看不出问题**，所以那种写法是"等价变异"（改回去测试不会红）。
+ * 既然测试抓不住，就用一条**结构自查**把它钉住：候选区那行里不该出现 `ingest-open`。
+ * （`querySelectorAll` 的长度在两种写法下都是 1，所以这里查的是"候选区行内有没有它"。）
+ */
+describe('mountPracticeCollect —— 候选区里不许有原文按钮（复查 M2b）', () => {
+  it('PC#25 候选区的行里只有「看原文」开关，没有 `ingest-open`', async () => {
+    const rig = makeRig({
+      ingest: (url) => Promise.resolve({ kind: 'article', title: '一篇', text: '正文', url, via: 'direct' }),
+    });
+    (rig.root.querySelector('[data-ui="source-url"]') as HTMLInputElement).value = 'https://x.example/a';
+    click(rig.root.querySelector('[data-ui="source-go"]') as HTMLElement);
+    await flushMicrotasks();
+
+    const rows = [...ui(rig.root, 'cand-section').querySelectorAll('.collect-row')];
+    for (const row of rows) {
+      expect(row.querySelector('[data-ui="ingest-open"]')).toBeNull();
+    }
+  });
+});

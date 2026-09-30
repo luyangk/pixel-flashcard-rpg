@@ -57,3 +57,30 @@ describe('app/fightTitle —— 组合与雅号（D58）', () => {
     expect(splitCombo('没有分隔符')).toBe('');
   });
 });
+
+/* ------------------------------------------------------------------ 复查 M5：不切出半个领域名 */
+
+/**
+ * 判别力（复查发现 M5）：超上限时按**分隔符**裁——能放几个完整领域名就放几个，
+ * 放不下丢掉并补「…」。计划自己给的三域样张就超上限，按码点硬切会得到「… / AI-」这种半个名字。
+ */
+describe('app/fightTitle —— 组合超长的裁法（复查 M5）', () => {
+  it('FT#7 三域超长 ⇒ 只出现**完整**的领域名，且以 … 说明被截', () => {
+    const title = composeTitle('三域合参', ['生活常识', '唐诗', 'AI-Agent']);
+    expect(Array.from(title).length).toBeLessThanOrEqual(24);
+    expect(title).toContain('…'); // 截短了就说出来
+    // 不许出现被切一半的名字
+    expect(title).not.toContain('AI-');
+    expect(title).not.toContain('AI-Ag');
+    const combo = title.split(' · ')[1];
+    for (const piece of combo.replace('…', '').split(/\s*[×/]\s*/).filter((x) => x.length > 0)) {
+      expect(['生活常识', '唐诗', 'AI-Agent']).toContain(piece);
+    }
+  });
+
+  it('FT#8 放得下时一个都不丢（不无故加省略号）', () => {
+    const title = composeTitle('长安夜雨', ['唐诗', '成语典故']);
+    expect(title).toBe('长安夜雨 · 唐诗 × 成语典故');
+    expect(title).not.toContain('…');
+  });
+});

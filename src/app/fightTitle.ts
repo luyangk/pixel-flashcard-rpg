@@ -93,11 +93,41 @@ export function sanitizeYahao(raw: unknown): string {
  */
 export function composeTitle(yahao: unknown, names: readonly unknown[]): string {
   const clean = sanitizeYahao(yahao);
-  const label = comboLabel(names);
+  const list = cleanNames(names);
   const head = clean.length > 0 ? clean : fallbackYahao(names);
-  // 先给组合留足位置：雅号最多 6，剩下的都给组合，拼起来就不会被截成"… · 唐诗 ×"
   const room = Math.max(2, TITLE_MAX - Array.from(head).length - Array.from(TITLE_SEP).length);
-  return `${head}${TITLE_SEP}${clip(label, room)}`;
+  return `${head}${TITLE_SEP}${clipCombo(list, room)}`;
+}
+
+/**
+ * 把组合裁到 `room` 码点以内 —— **按分隔符裁，不切出半个领域名**（复查 M5）。
+ *
+ * 计划自己给的三域样张「三域合参 · 生活常识 / 唐诗 / AI-Agent」就超上限：按码点硬切会得到
+ * 「… / AI-」这种半个名字。这里改成"能放几个完整领域名就放几个，放不下的丢掉并补省略号"——
+ * 玩家看到的是"组合被截短了"，而不是"某个领域叫 AI-"。
+ */
+function clipCombo(list: readonly string[], room: number): string {
+  if (list.length === 0) return '';
+  // 分隔符按**组合总个数**定（与 comboLabel 同口径）：双域 ×、三域以上 /
+  const sepOf = (total: number): string => (total === 2 ? ' × ' : ' / ');
+  let out = '';
+  let shown = 0;
+  for (const name of list) {
+    const sep = shown === 0 ? '' : sepOf(list.length);
+    const candidate = `${out}${sep}${name}`;
+    const budget = room - (shown + 1 < list.length ? 1 : 0); // 给省略号留一位
+    if (Array.from(candidate).length <= budget) {
+      out = candidate;
+      shown += 1;
+      continue;
+    }
+    break;
+  }
+  if (shown === 0) {
+    // 连第一个领域名都放不下：那就只能切它（但至少是**一个**名字，且带省略号说明被截）
+    return `${clip(list[0], Math.max(1, room - 1))}…`;
+  }
+  return shown < list.length ? `${out}…` : out;
 }
 
 /**

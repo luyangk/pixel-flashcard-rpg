@@ -37,7 +37,9 @@ export function outlineInputFor(text: string, budget: number = DEFAULT_OUTLINE_B
 
   // 头尾各留多少：预算够就各 2000，预算紧就各让一半（**总长永不超过预算** ——
   // 首版把预算只用来限制"中间"，头尾各 2000 直接顶穿（OI#2 当场抓到）
-  const reserve = Math.min(HEAD_TAIL_CHARS, Math.floor(cap / 2));
+  // 早退分支会拼 `head + "\n...\n" + tail`：那 5 个字符也要算进预算，
+  // 否则小预算下**真的会超**（复查发现的测试容差就是这么来的）
+  const reserve = Math.min(HEAD_TAIL_CHARS, Math.floor((cap - 5) / 2));
   const head = slicePoints(raw, 0, reserve);
   const tail = slicePoints(raw, Math.max(0, points.length - reserve), points.length);
   // 分隔符也要占位置：不把它算进去，拼出来就会**略超预算**，而调用方（suggestOutline）

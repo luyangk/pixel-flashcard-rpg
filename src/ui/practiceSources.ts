@@ -274,7 +274,7 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
               // D62：清单太长时如实说明只解析了前一段（不说的话"怎么只有这几条"像 Bug）
               (res.truncatedForParse === true ? '（清单很长，只解析了前一段，最新的排在最前面）' : '') +
               // D62：用缓存要说清楚 —— "怎么这么快"会让玩家怀疑是不是坏了；也顺便让他知道没花钱
-              (res.cached === true ? '（用的是这次会话里刚读过的结果，没再花一次钱；要重读点「重新读」）' : ''),
+              (res.cached === true ? '（用的是这次会话里刚读过的结果，没再花一次钱；要重读点「重读」）' : ''),
         );
       } else {
         items = [];

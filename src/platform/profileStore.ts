@@ -98,10 +98,9 @@ export function ensureProfile(newId: () => string): PlayerProfile {
   const current = loadProfile();
   if (current.userId.length > 0) return current;
   const candidate = sanitizeProfile({ nickname: current.nickname, userId: newId() });
-  const next: PlayerProfile = {
-    nickname: current.nickname,
-    userId: candidate.userId.length > 0 ? candidate.userId : `u-${'0'.repeat(8)}`,
-  };
-  saveProfile(next);
-  return next;
+  const next: PlayerProfile = { nickname: current.nickname, userId: candidate.userId };
+  if (next.userId.length === 0) return next; // 生成器没给出可用的 ID ⇒ 如实回空
+  // **写不进去就如实回空 ID**（复查 M4）：返回一个"没存住的随机 ID"更坏 ——
+  // 它每次重渲染都会换，而屏上把它当"将来交换战绩的稳定标识"展示。
+  return saveProfile(next) ? next : { nickname: next.nickname, userId: '' };
 }

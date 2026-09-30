@@ -277,7 +277,9 @@ export function mountPracticeCollect(
     ),
     // 「看原文」与来源说明**放在候选列表之前**（D60 补）：放在底部时，候选一多就滚出屏幕，
     // 玩家反馈"新卡看不到看原文选项"——入口要在它有用的时候就在眼前。
-    h('div', { class: 'collect-row' }, [sourceToggleBtn, openBtn]),
+    // 只放开关；`openBtn` **只挂在顶层屏**（复查 M2：一个元素塞两个父容器，
+    // appendChild 是"移动"，候选行里那个引用是死的 —— 留在这里只会误导后来的人）
+    h('div', { class: 'collect-row' }, [sourceToggleBtn]),
     sourceNoteEl,
     sourcePanelEl,
     candListEl,
@@ -756,6 +758,8 @@ export function mountPracticeCollect(
           const res = await deps.ingestUrl(input.fullTextUrl);
           if (destroyed) return;
           if (res.kind !== 'article' || res.text.trim().length === 0) {
+            // 说到就要做到（复查 M6）：文案提到「打开原文去复制」，就把它露出来
+            if (res.kind === 'blocked') setHidden(openBtn, false);
             renderStatus(
               res.kind === 'blocked'
                 ? '这篇的全文取不到（多半在境外或需要读取服务）。可以用摘要出卡，或点「打开原文去复制」。'

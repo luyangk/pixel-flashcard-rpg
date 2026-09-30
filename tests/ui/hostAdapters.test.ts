@@ -952,3 +952,90 @@ describe('assembleHost —— 清缓存的真实效果（D62 补）', () => {
     expect(n).toBe(2); // 清完必须真的重读
   });
 });
+
+/* ------------------------------------------------------------------ 复查 M4b：ID 用注入的随机源 */
+
+/**
+ * 判别力（复查 M4b）：ID 生成必须走**注入的随机源**（与战斗/掉落同一条纪律）——
+ * 用 `Math.random()` 的话这条用例无法确定性复现（同一个种子会得到不同的 ID）。
+ */
+describe('assembleHost —— 玩家 ID 的随机源（复查 M4b）', () => {
+  it('AD#P1 rng=0.5 ⇒ ID 是确定性的 u-80000000，且落盘', async () => {
+    localStorage.removeItem('zx-xia.profile.v1');
+    const base = await makeRig();
+    const hosts = assembleHost({
+      ctrl: base.assembly.ctrl,
+      coord: base.coord,
+      store: base.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+    });
+    expect(hosts.adapters.profile?.load().userId).toBe('u-80000000');
+    expect(hosts.adapters.profile?.load().userId).toBe('u-80000000'); // 已落盘 ⇒ 第二次不再生成
+    localStorage.removeItem('zx-xia.profile.v1');
+  });
+});
+
+/* ------------------------------------------------------------------ 复查 #1：重置/导入后清缓存 */
+
+/**
+ * 判别力（复查 #1）：PRD 与代码注释都写着"重置存档 / 导入备份之后清缓存"，
+ * 而此前只有设置页那个按钮一个调用点 —— 说了就要做。
+ */
+describe('assembleHost —— 重置/导入后清缓存（复查 #1）', () => {
+  const source = { id: 'hf-papers', name: 'HF', url: 'https://huggingface.co/api/daily_papers', kind: 'hf-papers' as const, direct: true };
+
+  async function rigWith(over: { preset?: unknown }): Promise<{ hosts: ReturnType<typeof assembleHost>; calls: () => number }> {
+    let n = 0;
+    const fakeFetch = (async () => {
+      n += 1;
+      return new Response(JSON.stringify([{ title: 'A Paper', summary: '摘要', paper: { id: '2609.32704' } }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const base = await makeRig();
+    const hosts = assembleHost({
+      ctrl: base.assembly.ctrl,
+      coord: base.coord,
+      store: base.store,
+      now: () => NOW,
+      tzOffsetMin: 480,
+      rng: () => 0.5,
+      sprites: { hero: img(), mob: img(), boss: img(), bg: img() },
+      prologueScenes: prologueJson.scenes as never,
+      beats: beatsJson.beats as never,
+      acts: arcJson.acts as never,
+      eggs: eggsJson.eggs as never,
+      wordTable: new Map(),
+      toastMs: 0,
+      pickBackupText: () => Promise.resolve(null),
+      saveTextFile: () => undefined,
+      feedFetchImpl: fakeFetch,
+      ...(over.preset === undefined ? {} : { presetContent: over.preset as never }),
+    });
+    return { hosts, calls: () => n };
+  }
+
+  it('AD#C4 导入备份成功 ⇒ 清掉缓存（下次重读）', async () => {
+    const { hosts, calls } = await rigWith({});
+    await hosts.adapters.sources?.fetchItems(source);
+    await hosts.adapters.sources?.fetchItems(source);
+    expect(calls()).toBe(1); // 吃缓存
+
+    const res = await hosts.adapters.importBackup?.(exportBackup(makeSave(), NOW));
+    expect(res?.ok).toBe(true);
+    await hosts.adapters.sources?.fetchItems(source);
+    expect(calls()).toBe(2); // 导入后必须重读
+  });
+});

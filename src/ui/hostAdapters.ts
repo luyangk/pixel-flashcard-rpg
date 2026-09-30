@@ -189,7 +189,7 @@ function newId(): string {
 const feedCache = new Map<string, { readonly at: number; readonly result: FetchSourceResult }>();
 /** 缓存有效期：5 分钟。够挡住"连着点几次"，又不至于让「看最新」看到过期内容。 */
 export const FEED_CACHE_TTL_MS = 5 * 60_000;
-/** 清掉会话内的源缓存（重置存档 / 导入备份之后该清 —— 测试也用它隔离用例）。 */
+/** 清掉会话内的源缓存。调用点：设置页的按钮、**导入备份**、**重置存档**（复查 #1 补上后两者）。 */
 export function clearFeedCache(): void {
   feedCache.clear();
 }
@@ -313,6 +313,9 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
       await coord.flush(); // ① 先落净在途改动，免得导入被一次陈旧的窗写覆盖
       const res = await importBackupAndSave(text, store);
       if (!res.ok) return res;
+      // 复查 #1：声明过"重置/导入后清缓存"，就真的清 —— 缓存里是外部源清单（与存档无关），
+      // 但换了存档就该重新读一次，别让玩家对着上一份存档读来的清单做判断。
+      clearFeedCache();
       const reloaded = await coord.reload(); // ② 让内存档跟上存储
       if (!reloaded.ok) {
         // ③ 导入写进去了、但载入读不出来：如实说清，别让玩家以为只是"导入成功"
@@ -337,7 +340,11 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
     resetSave:
       deps.presetContent === undefined
         ? undefined
-        : () => resetSave({ coord, store, content: deps.presetContent, nowMs: now() }),
+        : async () => {
+            // 复查 #1：重置也清缓存（与导入同款理由）
+            clearFeedCache();
+            return resetSave({ coord, store, content: deps.presetContent, nowMs: now() });
+          },
     exportBackupNow: async () => {
       const res = await exportAndMark(coord, now());
       // 只要有文本就先交到用户手里——哪怕 ok:false（与卡组页导出同口径：
@@ -430,7 +437,15 @@ export function assembleHost(deps: AssembleDeps): HostAssembly {
      * 首次取用时补一个短 ID（只生成一次并落盘）。
      */
     profile: deps.profileOverride ?? {
-      load: () => ensureProfile(() => `u-${Math.floor(Math.random() * 0x1_0000_0000).toString(16).padStart(8, '0')}`),
+      load: () =>
+        ensureProfile(() => {
+          // 用注入的随机源（复查 M4b：与战斗/掉落同一条注入纪律，测试才能确定性复现）
+          const roll = typeof deps.rng === 'function' ? deps.rng() : Math.random();
+          const hex = Math.floor(Math.max(0, Math.min(0.999999, roll)) * 0x1_0000_0000)
+            .toString(16)
+            .padStart(8, '0');
+          return `u-${hex}`;
+        }),
       save: (profile) => saveProfile(profile),
     },
     /**
