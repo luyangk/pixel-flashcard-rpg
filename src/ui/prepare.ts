@@ -249,7 +249,25 @@ export function mountPrepare(root: HTMLElement, ctrl: GameController, deps: Prep
     if (bossRowEl.getAttribute('data-boss-row') === fingerprint) return;
     bossRowEl.setAttribute('data-boss-row', fingerprint);
     bossRowEl.replaceChildren();
-    if (ready.length === 0) return;
+    if (ready.length === 0) {
+      /**
+       * D63：**未达标时也要说清还差多少** —— 此前这里直接 return，玩家在备战屏看不到任何卷灵信息，
+       * 于是"什么时候能打卷灵"成了一个只能靠猜的问题。口径与卡组行同一个（`bossGates`）。
+       */
+      const pending = bossGates(save).filter((g) => !g.ready).slice(0, 3);
+      if (pending.length === 0) return;
+      bossRowEl.appendChild(h('h3', { class: 'field-title' }, '卷灵（还没现身）'));
+      for (const gate of pending) {
+        bossRowEl.appendChild(
+          h(
+            'span',
+            { 'data-boss-pending': gate.deckId, class: 'boss-progress' },
+            `${gate.deckName}：${gate.count}/${gate.threshold}，还差 ${Math.max(0, gate.threshold - gate.count)} 次有效复习（隔天练才算一次）`,
+          ),
+        );
+      }
+      return;
+    }
     bossRowEl.appendChild(h('h3', { class: 'field-title' }, '卷灵现身'));
     for (const gate of ready) {
       const deck = save.decks.find((d) => d.id === gate.deckId);

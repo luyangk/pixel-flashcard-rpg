@@ -613,3 +613,83 @@ describe('mountPractice —— 卡上的看原文（D60）', () => {
     expect(root.querySelector('[data-ui="card-source"]')).toBeNull();
   });
 });
+
+/* ------------------------------------------------------------------ D63：状态说明 */
+
+/**
+ * 判别力（玩家原话："我光看 app 无法理解这些状态"）：
+ * - PR#G1 每张卡的状态后面**紧跟着**"还差什么"，且与 core 口径一致（编一套阈值的实现必红）；
+ * - PR#G2 屏上有一段《状态怎么升》（四档一次讲清），可折叠、默认收起（不挡住卡列表）。
+ */
+describe('mountPractice —— 卡片状态说明（D63）', () => {
+  it('PR#G1 状态行带"还差什么"，阈值来自 core', () => {
+    const { root } = setup([
+      card('c1', { srs: { ...card('c1').srs, stability: 'review', reps: 2, interval: 3 } }),
+      card('c2', { srs: { ...card('c2').srs, stability: 'mastered', reps: 4, interval: 21 } }),
+    ]);
+    openFirstDeck(root);
+    const hint1 = root.querySelector('[data-card-status-hint="c1"]')?.textContent ?? '';
+    expect(hint1).toContain('7 天'); // 已掌握的真实阈值
+    expect(hint1).toContain('3 天'); // 当前间隔（看得到进度在动）
+    const hint2 = root.querySelector('[data-card-status-hint="c2"]')?.textContent ?? '';
+    expect(hint2).toContain('稳住'); // 已掌握没有"下一档"
+  });
+
+  it('PR#G2 有《状态怎么升》说明，默认收起、展开后四档都在', () => {
+    const { root } = setup([card('c1')]);
+    openFirstDeck(root);
+    const panel = ui(root, 'stability-help');
+    expect(panel.hidden).toBe(true);
+    click(ui(root, 'stability-help-toggle'));
+    expect(ui(root, 'stability-help').hidden).toBe(false);
+    const text = ui(root, 'stability-help').textContent ?? '';
+    for (const piece of ['初识', '在学', '复习', '已掌握', '7 天']) {
+      expect(text, `说明缺：${piece}`).toContain(piece);
+    }
+    click(ui(root, 'stability-help-toggle'));
+    expect(ui(root, 'stability-help').hidden).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ D63：卷灵进度 */
+
+/**
+ * 判别力（玩家原话："什么时候能打卷灵"）：
+ * - PR#B1 卡组行报出 X / Y 与"还差几次"，数字与 core 的阈值口径一致；
+ * - PR#B2 达标时说"已就绪"（而不是继续报"还差 0 次"这种别扭说法）；
+ * - PR#B3 带上"隔天练才算一次"这条最容易误解的规则（不带的话玩家会以为多刷几次就行）。
+ */
+describe('mountPractice —— 卷灵进度（D63）', () => {
+  function withReviews(count: number) {
+    const cards: Card[] = [];
+    for (let i = 0; i < count; i += 1) {
+      cards.push(card(`r${i}`, { srs: { ...card(`r${i}`).srs, effectiveReviewDays: ['2026-10-29'] } }));
+    }
+    const save = makeSave({ decks: [makeDeck('d1', '唐诗')], cards });
+    // 阈值显式取 15 档（缺省 30），便于构造"就差几次"的场景
+    const withTier = { ...save, settings: { ...save.settings, bossThresholdTier: 15 as const } };
+    const root = makeRoot();
+    // **自己挂一次**就够了：setup() 会再挂一个，两个屏共用 root 时查询会命中先挂的那个
+    mountPractice(root, makeCtrl(makeSnap({ screen: 'menu', save: withTier })), {
+      now: () => NOW,
+      tzOffsetMin: 480,
+    });
+    return root;
+  }
+
+  it('PR#B1/B3 报 X/Y、还差几次，并说清"隔天练才算一次"', () => {
+    const root = withReviews(4);
+    const text = root.querySelector('[data-deck-boss="d1"]')?.textContent ?? '';
+    expect(text).toContain('4 / 15');
+    expect(text).toContain('还差 11 次');
+    expect(text).toContain('隔天练才算一次');
+    expect(root.querySelector('[data-deck-boss="d1"]')?.getAttribute('data-ready')).toBe('false');
+  });
+
+  it('PR#B2 达标 ⇒ 说"已就绪"', () => {
+    const root = withReviews(15);
+    const el = root.querySelector('[data-deck-boss="d1"]');
+    expect(el?.textContent).toContain('已就绪');
+    expect(el?.getAttribute('data-ready')).toBe('true');
+  });
+});

@@ -16,6 +16,9 @@
 import { rankRuns, type RunRecord } from '@core/leaderboard';
 import { localDayString } from '@core/reviewLedger';
 import { computeRecords } from '../app/records';
+import { expGapToNextLevel } from '@core/progressGuide';
+import { victoryExp } from '@core/stats';
+import type { SaveFile } from '@core/types';
 import type { PlayerProfile } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
 import { levelFromExp, playerStatsFor } from '../app/growth';
@@ -73,6 +76,29 @@ const ENTRIES: ReadonlyArray<{ readonly target: MenuTarget; readonly label: stri
 ];
 
 /** 一行榜单文本：`3. 生活常识 · 128 分 · 胜`（lost 恒 0 分，但仍在榜上——那是战绩）。 */
+/**
+ * 等级进度的一句话（D63）：现在多少、**还差多少**、**大概几场**。
+ *
+ * "大概几场"用的是**遭遇战**的经验公式（`victoryExp`），池子取"当前默认池大小"那几张已掌握卡 ——
+ * 玩家看到的是"照现在这么打，差不多还要几场"，不是一个看着很精确、实际不会发生的数字。
+ */
+function levelProgressText(level: number, exp: number, snap: ControllerSnapshot): string {
+  const gap = expGapToNextLevel(level, exp);
+  const poolSize = snap.save?.settings?.battle?.defaultPoolSize;
+  const masteredInPool = Math.min(typeof poolSize === 'number' && poolSize > 0 ? poolSize : 15, countMastered(snap.save));
+  const perFight = Math.max(1, victoryExp([], 'encounter') + 5 * masteredInPool);
+  const fights = Math.max(1, Math.ceil(gap / perFight));
+  return `L${level} · ${exp} 经验 · 距 L${level + 1} 还差 ${gap}（打一场约 ${perFight}，约 ${fights} 场）`;
+}
+
+/** 全库已掌握张数（菜单的"约几场"要用；口径与 records.playerRecords 一致）。 */
+function countMastered(save: SaveFile | undefined): number {
+  const cards = Array.isArray(save?.cards) ? save.cards : [];
+  let n = 0;
+  for (const c of cards) if (c?.srs?.stability === 'mastered') n += 1;
+  return n;
+}
+
 function rankRowText(rank: number, r: RunRecord): string {
   const outcome = r.result === 'won' ? '胜' : '败';
   const kind = r.kind === 'boss' ? ' · 卷灵' : '';
@@ -237,7 +263,8 @@ export function mountMenu(root: HTMLElement, ctrl: GameController, deps: MenuDep
     const rec = computeRecords(snap.save, today);
     const nickname = typeof deps.profile?.load === 'function' ? deps.profile.load().nickname : '';
     const rows: ReadonlyArray<{ key: string; label: string; value: string }> = [
-      { key: 'level', label: '等级 / 经验', value: `L${rec.level} · ${rec.exp} 经验` },
+      // D63：等级行不只报"现在多少"，还要报"还差多少、大概几场"（玩家原话："无法理解当前进度"）
+      { key: 'level', label: '等级 / 经验', value: levelProgressText(rec.level, rec.exp, snap) },
       { key: 'mastered', label: '已掌握的卡', value: `${rec.mastered} 张` },
       { key: 'selfMade', label: '自己添的卡', value: `${rec.selfMade} 张` },
       {

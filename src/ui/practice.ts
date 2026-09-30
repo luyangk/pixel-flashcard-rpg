@@ -17,6 +17,7 @@
 import { localDayString } from '@core/reviewLedger';
 import type { Card, SourceInfo } from '@core/types';
 import type { ControllerSnapshot, GameController } from '../app/controllerTypes';
+import { bossProgress, cardStatusHint, stabilityExplainer, type BossTier } from '@core/progressGuide';
 import { h, setHidden } from './dom';
 import { choicesLineOf, mountPracticeCollect, type CollectDeps } from './practiceCollect';
 import { showToast } from './toast';
@@ -271,9 +272,46 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
   tabBrowseBtn.addEventListener('click', () => setTab('browse'));
   tabCollectBtn.addEventListener('click', () => setTab('collect'));
 
+  /**
+   * 《状态怎么升》（D63）：玩家原话"我光看 app 无法理解这些状态"。
+   * 四档文案全部来自 `core/progressGuide.stabilityExplainer()` —— **说明与规则同一处口径**，
+   * 不许在 UI 里再写一份（那样迟早出现"屏上说 7 天、代码里 10 天"）。
+   * 默认**收起**：它是"想弄明白时才看"的东西，不该挡住卡列表。
+   */
+  const helpToggleBtn = h(
+    'button',
+    { 'data-ui': 'stability-help-toggle', class: 'collect-btn', type: 'button' },
+    '状态怎么升？',
+  ) as HTMLButtonElement;
+  const helpBodyEl = h('dl', { class: 'stability-help-body' });
+  for (const row of stabilityExplainer()) {
+    helpBodyEl.appendChild(
+      h('div', { class: 'stat' }, [
+        h('dt', { class: 'stat-label' }, row.label),
+        h('dd', { class: 'stat-help', 'data-stability-help': row.label }, row.text),
+      ]),
+    );
+  }
+  const helpPanelEl = h(
+    'div',
+    { 'data-ui': 'stability-help', class: 'stability-help', hidden: true },
+    [helpBodyEl],
+  );
+  const helpRowEl = h('div', { 'data-ui': 'stability-help-row', class: 'collect-row' }, [helpToggleBtn]);
+  let helpOpen = false;
+  helpToggleBtn.addEventListener('click', () => {
+    if (destroyed) return;
+    helpOpen = !helpOpen;
+    setHidden(helpPanelEl, !helpOpen);
+    helpToggleBtn.textContent = helpOpen ? '收起说明' : '状态怎么升？';
+  });
+
   const screen = h('div', { 'data-ui': 'practice-screen', class: 'practice-screen' }, [
     headerEl,
     quotaEl,
+    // D63：说明放在卡组列表上方（想弄明白时一眼找得到），默认收起
+    helpRowEl,
+    helpPanelEl,
     tabsEl,
     emptyEl,
     deckListEl,
@@ -413,7 +451,24 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
       const label =
         `${deck.name} · ${stats.total} 张 · 待复习 ${stats.due} · 已掌握 ${stats.mastered}` +
         (joined ? ` · 本次已选 ${mine} 张` : '');
-      const row = h('button', { 'data-deck': deck.id, class: 'practice-deck', type: 'button' }, label) as HTMLButtonElement;
+      // D63：卷灵进度就写在卡组行上（X / Y，还差几次；达标显示"已就绪"）——
+      // 玩家原话："什么时候能打卷灵"是看不懂的重灾区，而"隔天练才算一次"这条最容易误解，所以带上。
+      const tier = (typeof snap.save?.settings?.bossThresholdTier === 'number'
+        ? snap.save.settings.bossThresholdTier
+        : 15) as BossTier;
+      const boss = bossProgress(deckCards(snap, deck.id), tier);
+      const bossText = boss.ready
+        ? `卷灵已就绪（有效复习 ${boss.count} / ${boss.threshold}）`
+        : `卷灵：有效复习 ${boss.count} / ${boss.threshold}，还差 ${boss.remaining} 次（隔天练才算一次）`;
+      const bossEl = h(
+        'span',
+        { 'data-deck-boss': deck.id, class: 'boss-progress', 'data-ready': String(boss.ready) },
+        bossText,
+      );
+      const row = h('button', { 'data-deck': deck.id, class: 'practice-deck', type: 'button' }, [
+        h('span', { class: 'deck-line' }, label),
+        bossEl,
+      ]) as HTMLButtonElement;
       row.addEventListener('click', () => {
         openDeck(deck.id);
         render(ctrl.snapshot());
@@ -470,7 +525,14 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
         }
         render(ctrl.snapshot());
       });
-      const meta = `${stabilityLabel(card)} · ${sourceLabel(card.source)} · ${dueLabel(card, tzOffsetMin)}`;
+      const status = cardStatusHint(card);
+      const meta = `${status.label} · ${sourceLabel(card.source)} · ${dueLabel(card, tzOffsetMin)}`;
+      // D63：状态后面**紧跟着**"这张卡还差什么"（例：「复习 · 间隔 3 天 → 到 7 天算「已掌握」」）
+      const statusHintEl = h(
+        'span',
+        { 'data-card-status-hint': card.id, class: 'card-status-hint' },
+        status.hint,
+      );
       const children: HTMLElement[] = [check];
       if (editingId === card.id) {
         // 就地编辑：正/背两个输入框 + 保存/取消。值取自**草稿**（不是存档），
@@ -532,6 +594,8 @@ export function mountPractice(root: HTMLElement, ctrl: GameController, deps: Pra
             choicesLine(card),
           ),
           h('span', { class: 'practice-meta' }, meta),
+          // D63：状态后面紧跟"还差什么"
+          statusHintEl,
         );
         if (typeof deps.updateCard === 'function') {
           const editBtn = h(

@@ -108,7 +108,13 @@ export function domainReviewCount(deckCards: Card[]): number {
   let total = 0;
   for (const c of deckCards) {
     const days = c?.srs?.effectiveReviewDays;
-    if (Array.isArray(days)) total += days.length;
+    if (!Array.isArray(days)) continue;
+    // **只数合法的日历日键**（D63 复查）：此前直接 `days.length`，
+    // 于是手改/导入来的脏档（`['假的', 42]`）会凭空把计数抬高 —— 卷灵被"脏数据唤醒"。
+    // 写入侧（`recordEffectiveReview`）本来就只写合法键，这里堵的是外部输入。
+    for (const d of days) {
+      if (typeof d === 'string' && DAY_KEY_RE.test(d)) total += 1;
+    }
   }
   return total;
 }

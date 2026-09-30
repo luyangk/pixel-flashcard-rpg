@@ -399,3 +399,27 @@ describe('mountPrepare —— 卷灵现身与称号（T8）', () => {
     expect(ui(root, 'boss-name-dialog').hidden).toBe(true);
   });
 });
+
+/* ------------------------------------------------------------------ D63：卷灵还差多少 */
+
+/**
+ * 判别力（玩家原话："什么时候能打卷灵"）：**未达标时**备战屏也要说清还差几次 ——
+ * 此前那条路直接 return，屏上关于卷灵一个字都没有，玩家只能猜。
+ */
+describe('mountPrepare —— 卷灵未达标时的进度（D63）', () => {
+  it('PR#P1 未达标 ⇒ 列出领域与"还差 N 次"，并说明"隔天练才算一次"', () => {
+    const root = makeRoot();
+    const base = saveWithDecks();
+    const save = {
+      ...base,
+      settings: { ...base.settings, bossThresholdTier: 15 as const },
+    };
+    mountPrepare(root, makeCtrl(makeSnap({ screen: 'prepare', save })), {});
+
+    const text = root.querySelector('[data-boss-pending="deck-a"]')?.textContent ?? '';
+    expect(text).toContain('唐诗'); // 领域名
+    expect(text).toContain('0/15');
+    expect(text).toContain('还差 15 次');
+    expect(text).toContain('隔天练才算一次');
+  });
+});

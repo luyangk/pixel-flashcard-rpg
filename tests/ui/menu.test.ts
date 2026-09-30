@@ -293,3 +293,26 @@ describe('mountMenu —— 战绩行的名字（D58）', () => {
     expect(row(1)).toContain('生活常识'); // 老记录回流领域名
   });
 });
+
+/* ------------------------------------------------------------------ D63：等级进度 */
+
+/**
+ * 判别力（玩家原话："无法理解当前进度，后续差多少…升级经验"）：
+ * - MN#L1 等级行要说"距 L{n+1} 还差 X 经验"，且 X 与 core 的升级点一致；
+ * - MN#L2 还要给"约几场"的换算（只说"还差 300 经验"仍然没有目标感）。
+ */
+describe('mountMenu —— 等级进度（D63）', () => {
+  it('MN#L1/L2 报出"还差多少 + 约几场"，数字与 core 同口径', () => {
+    const root = makeRoot();
+    const save = makeSave();
+    save.settings.progress = { exp: 0 };
+    save.settings.battle = { defaultPoolSize: 15 };
+    mountMenu(root, makeCtrl(makeSnap({ screen: 'menu', save })), { onNav: () => undefined });
+
+    const text = root.querySelector('[data-record="level"]')?.textContent ?? '';
+    // L1 → L2 的真实需求是 expToNext(1) = 100
+    expect(text).toContain('距 L2 还差 100');
+    expect(text).toContain('约');
+    expect(text).toContain('场');
+  });
+});

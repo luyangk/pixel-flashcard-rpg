@@ -159,7 +159,9 @@ describe('recordEffectiveReview —— 同日幂等（Review Focus #5）', () =>
     // 存档里混入三条非法条目 + 一条合法且正是今天。同日 record 命中「已记过」分支，
     // 若该分支只比内容不查消毒痕迹，垃圾会被原样留在账本上、把 Boss 计数灌水。
     const dirty = card('c1', ['garbage', '', 'junk', '2025-11-01']);
-    expect(domainReviewCount([dirty])).toBe(4); // 污染态：length 虚高为 4
+    // D63 起：计数**只认合法日历日键**（此前是 `length`，脏档能把 Boss 计数灌水 ——
+    // 只要那一份脏数据没经过 recordEffectiveReview 的写回，卷灵就会被"脏数据唤醒"）
+    expect(domainReviewCount([dirty])).toBe(1);
     const out = recordEffectiveReview(dirty, atTZ(2025, 11, 1, 9, 0), TZ);
     expect(out.srs.effectiveReviewDays).toEqual(['2025-11-01']); // 垃圾被洗掉
     expect(domainReviewCount([out])).toBe(1); // 计数回到正确值

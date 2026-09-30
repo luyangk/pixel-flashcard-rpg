@@ -1306,3 +1306,34 @@ h1 {
   line-height: 1.5;
   color: var(--paper-dim);
 }
+
+/* D63 进度说明：卡片状态后面那句"还差什么" */
+.card-status-hint {
+  font-size: 0.72rem;
+  color: var(--wash);
+  opacity: 0.9;
+}
+
+.stability-help-body {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+}
+
+.stat-help {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--paper-dim);
+  line-height: 1.45;
+}
+
+/* D63：卷灵进度那行（还差几次 / 已就绪） */
+.boss-progress {
+  font-size: 0.78rem;
+  color: var(--paper-dim);
+}
+
+.boss-progress[data-ready="true"] {
+  color: var(--gold, #e8c46a);
+  font-weight: 600;
+}
