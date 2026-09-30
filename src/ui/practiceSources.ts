@@ -244,7 +244,9 @@ export function mountPracticeSources(root: HTMLElement, deps: SourcesDeps = {}):
         setStatus(
           items.length === 0
             ? `「${source.name}」这次没解析出可用条目。`
-            : `${source.name}：${items.length} 条最新内容${res.via === 'reader' ? '（经读取服务取回）' : ''}。`,
+            : `${source.name}：${items.length} 条最新内容${res.via === 'reader' ? '（经读取服务取回）' : ''}。` +
+              // D62：清单太长时如实说明只解析了前一段（不说的话"怎么只有这几条"像 Bug）
+              (res.truncatedForParse === true ? '（清单很长，只解析了前一段，最新的排在最前面）' : ''),
         );
       } else {
         items = [];

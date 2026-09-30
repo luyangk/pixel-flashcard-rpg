@@ -28,6 +28,14 @@ export const FEED_TIMEOUT_MS = 15_000;
  * 留一倍余量；再大就不是"清单"而是数据转储了。
  */
 export const FEED_MAX_BYTES = 3_000_000;
+/**
+ * 文本清单（RSS / HTML）**解析前**的截断上限（D62）。
+ *
+ * 为什么不是直接拒绝：清单动辄几百 KB（arXiv 的每日列表就是），而我们要的只是**最新的那几条** ——
+ * 全篇解析既慢又占内存，还可能因为一条畸形条目解析失败。截断到前 512 KB 足够覆盖排在
+ * 前面的最新条目（列表本来就是新的在前），出问题的尾部本来就轮不到。
+ */
+export const FEED_PARSE_MAX_BYTES = 512_000;
 
 export type FetchSourceResult =
   | {
@@ -35,6 +43,11 @@ export type FetchSourceResult =
       readonly items: readonly SourceItemDraft[];
       /** `'direct'` = 直读；`'reader'` = 经玩家配置的读取服务兜底（D55）。 */
       readonly via: 'direct' | 'reader';
+      /**
+       * 清单太长、解析前截断了（D62）。
+       * 如实告诉玩家"只解析了前 512 KB" —— 否则"怎么只有这几条"看起来像 Bug。
+       */
+      readonly truncatedForParse?: boolean;
     }
   | {
       readonly ok: false;
@@ -361,7 +374,7 @@ export function parseReaderList(body: string): ParsedItem[] {
 /* ------------------------------------------------------------------ 出口 */
 
 type Attempt =
-  | { readonly ok: true; readonly items: ParsedItem[] }
+  | { readonly ok: true; readonly items: ParsedItem[]; readonly truncatedForParse?: boolean }
   | { readonly ok: false; readonly reason: string; readonly blocked: boolean };
 
 /** 一个请求的公共外壳：超时 + 状态码 → 人话 + 体积上限。 */
@@ -420,11 +433,13 @@ async function attemptDirect(
   const body = got.body;
 
   if (source.kind === 'rss') {
-    const items = parseFeedXml(body);
+    // D62：文本清单解析前截断（JSON 不截：结构一旦截断就整个解析不了，见下）
+    const longList = body.length > FEED_PARSE_MAX_BYTES;
+    const items = parseFeedXml(body.slice(0, FEED_PARSE_MAX_BYTES));
     if (items.length === 0) {
       return { ok: false, reason: '这个地址不是可解析的 RSS/Atom（里面没有条目）。', blocked: false };
     }
-    return { ok: true, items };
+    return { ok: true, items, ...(longList ? { truncatedForParse: true } : {}) };
   }
   let payload: unknown;
   try {
@@ -472,7 +487,9 @@ async function attemptReader(
       blocked: false,
     };
   }
-  const items = parseReaderList(got.body);
+  // D62：读取服务回来的是**渲染后的整页 HTML**（arXiv 那种能到 2.6 MB）——
+  // 解析前同样截断：最新的条目排在最前面，尾部解析不到不影响这一趟。
+  const items = parseReaderList(got.body.slice(0, FEED_PARSE_MAX_BYTES));
   if (items.length === 0) {
     return { ok: false, reason: '读取服务把它转成了别的格式，里面没有可识别的条目列表。', blocked: false };
   }
@@ -520,6 +537,8 @@ export async function fetchSourceItems(
         ok: true,
         items: attempt.items.map((i) => ({ ...i, sourceId: source.id, sourceName: source.name })),
         via: which,
+        // D62：把"清单太长、只解析了前 512 KB"如实带到上层（UI 会说明，别让玩家以为条目少了）
+        ...(attempt.truncatedForParse === true ? { truncatedForParse: true } : {}),
       };
     }
     failures.push({ who: which, reason: attempt.reason.replace(/。$/, ''), blocked: attempt.blocked });

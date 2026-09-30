@@ -171,6 +171,14 @@ const READER_HINT =
   '若你愿意把链接交给一个第三方读取服务（例如自建网关、r.jina.ai），在这里填它的地址：' +
   '填了之后抓不到会自动经它转一手（**链接会外发给这台服务**，请自行判断是否接受）。留空 = 不启用。';
 const READER_KEY_HINT = '读取服务自己的 Key（该服务不需要鉴权就留空）；与上面的 AI Key 各存各的。';
+/**
+ * 两条实话（D62 现场反馈补的）：
+ * 1. **读取服务多半在境外** —— 连不上是这个功能的常态，不是玩家配错了；
+ * 2. 它按次计费（域名服务商的价目表），所以"读一个源"是真的花钱，别拿来刷。
+ */
+const READER_REALITY_HINT =
+  '两句实话：① 这类服务**大多部署在境外**，网络不通是常态（同一次会话里可能第一个源读得到、' +
+  '后面几个就超时）——这不是你配错了；② 它一般**按次计费**，读一次算一次，别反复刷。';
 
 /** 存档分组的一句话说明（与「重看序章」的区别是玩家最容易搞混的点）。 */
 const SAVE_HINT =
@@ -468,6 +476,7 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
     h('p', { 'data-ui': 'llm-reader-hint', class: 'field-hint' }, READER_HINT),
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '服务地址'), readerUrlInput]),
     h('p', { class: 'field-hint' }, READER_KEY_HINT),
+    h('p', { 'data-ui': 'llm-reader-reality', class: 'field-hint' }, READER_REALITY_HINT),
     h('label', { class: 'llm-row' }, [h('span', { class: 'llm-label' }, '服务 Key'), readerKeyInput]),
     h('div', { class: 'llm-actions' }, [llmSaveBtn, llmTestBtn, llmClearBtn]),
   ]);

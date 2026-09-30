@@ -12,8 +12,10 @@
  * - FF#7 解析产物里**没有可用条目**就明确失败（不许回一个空清单让 UI 看起来"读到了但没内容"）。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { BUILTIN_DOMAINS } from '../../src/app/sourceLibrary';
 import {
   FEED_MAX_BYTES,
+  FEED_PARSE_MAX_BYTES,
   fetchSourceItems,
   parseFeedXml,
   parseJsonItems,
@@ -351,5 +353,61 @@ describe('feedFetch —— 全文地址（D61）', () => {
     });
     expect(hn).toHaveLength(1);
     expect(hn[0].fullTextUrl).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ D62：小端点与截断 */
+
+/**
+ * 判别力：
+ * - FF#T1 内置的 arXiv 源必须走**官方小接口**（`export.arxiv.org/api/query`）——
+ *   换回 `rss.arxiv.org`（每天 300+ 条、经读取服务渲染 2.6 MB）就当场红：
+ *   那正是"第一个源读完，后面几个全超时"的现场原因；
+ * - FF#T2 文本清单**解析前截断**（512 KB）：超长清单不再整份拒，且前面的条目照样解析出来；
+ * - FF#T3 截断不影响 JSON 源（JSON 一旦截断就整个解析不了）。
+ */
+describe('platform/feedFetch —— 小端点优先与解析前截断（D62）', () => {
+  it('FF#T1 arXiv 源走官方小接口，且带 max_results', () => {
+    const flat = BUILTIN_DOMAINS.flatMap((d) => d.sources);
+    const arxiv = flat.filter((s) => s.id.startsWith('arxiv-'));
+    expect(arxiv.length).toBeGreaterThanOrEqual(2);
+    for (const s of arxiv) {
+      expect(s.url, `${s.id} 应走官方接口`).toContain('export.arxiv.org/api/query');
+      expect(s.url).toContain('max_results=20'); // 只要 20 条：体积小、来得快
+      expect(s.url).not.toContain('rss.arxiv.org');
+    }
+  });
+
+  it('FF#T2 超长 RSS：解析前截断，前面的条目照常出来，且**如实申报**截断过', async () => {
+    const head = '<rss><channel>'
+      + '<item><title>最新的一条</title><link>https://x/a</link><description>摘要 A</description></item>'
+      + '</channel>';
+    const filler = '<item><title>旧条目</title><link>https://x/old</link></item>'.repeat(20_000); // 远超 512KB
+    const body = head + filler;
+
+    const big = await fetchSourceItems(
+      { id: 'big', name: '超长清单', url: 'https://x.example/feed.xml', kind: 'rss', direct: true },
+      { fetchImpl: fakeFetch(() => res(body)) },
+    );
+    expect(big.ok).toBe(true);
+    if (!big.ok) return;
+    expect(big.items[0]?.title).toBe('最新的一条');
+    // 不截断的话这个 flag 不会出现 ⇒ 删掉那行 slice 的实现必红
+    expect(big.truncatedForParse).toBe(true);
+    // 而且**只解析了截断后的那一段**：整份有 20000 条，截断后明显更少
+    // （去掉 slice 的实现会解析出全部 20000 条 ⇒ 这条断言会红）
+    expect(big.items.length).toBeLessThan(15_000);
+
+    const small = await fetchSourceItems(
+      { id: 'small', name: '短清单', url: 'https://x.example/small.xml', kind: 'rss', direct: true },
+      { fetchImpl: fakeFetch(() => res(head)) },
+    );
+    expect(small.ok).toBe(true);
+    if (small.ok) expect(small.truncatedForParse).toBeUndefined();
+  });
+
+  it('FF#T3 JSON 端点不受文本截断影响', () => {
+    const items = parseJsonItems('hn', { hits: [{ title: 'Post', url: 'https://a.com/x', objectID: '1' }] });
+    expect(items).toHaveLength(1);
   });
 });

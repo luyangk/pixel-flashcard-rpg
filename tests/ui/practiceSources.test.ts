@@ -270,3 +270,23 @@ describe('mountPracticeSources —— 经读取服务取回（D55）', () => {
     expect(status).toContain('发给那台服务'); // 隐私那笔账要写在屏上
   });
 });
+
+/* ------------------------------------------------------------------ D62：截断如实申报 */
+
+/**
+ * 判别力：清单太长、只解析了前一段时，屏上要说一句 —— 否则玩家看到一个比预期短的列表，
+ * 会以为是这个源坏了（或者"读取服务有毛病"）。
+ */
+describe('mountPracticeSources —— 截断如实申报（D62）', () => {
+  it('PS#T1 truncatedForParse ⇒ 状态里说明"只解析了前一段"', async () => {
+    const root = makeRoot();
+    mountPracticeSources(root, {
+      toastMs: 0,
+      fetchItems: () =>
+        Promise.resolve({ ok: true, via: 'direct' as const, items: [draft({ title: '一条' })], truncatedForParse: true }),
+    });
+    click(root.querySelector('[data-src-load="hf-papers"]') as HTMLElement);
+    await flushMicrotasks();
+    expect(ui(root, 'src-status').textContent).toContain('只解析了前一段');
+  });
+});

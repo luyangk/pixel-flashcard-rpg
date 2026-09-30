@@ -137,18 +137,22 @@ export const BUILTIN_DOMAINS: readonly SourceDomain[] = [
       {
         id: 'arxiv-cs-ai',
         name: 'arXiv cs.AI',
-        url: 'https://rss.arxiv.org/rss/cs.AI',
+        // D62：**小端点优先** —— 原来是 `rss.arxiv.org/rss/cs.AI`（每天 300+ 条，经读取服务渲染
+        // 回来是 2.6 MB，一次读要好几秒、连着读几个源必超时）。改用 arXiv 官方接口，
+        // 只要 20 条、13 KB 左右：同样的机器，快了不止一个数量级。
+        url: 'https://export.arxiv.org/api/query?search_query=cat:cs.AI&sortBy=submittedDate&sortOrder=descending&max_results=20',
         kind: 'rss',
         direct: false,
-        note: 'AI 论文每日更新（实测无 ACAO；每天 300+ 条，用读取服务时建议先缩小范围）',
+        note: 'AI 论文最新 20 篇（走 arXiv 官方接口，体积小、来得快）',
       },
       {
         id: 'arxiv-cs-lg',
         name: 'arXiv cs.LG',
-        url: 'https://rss.arxiv.org/rss/cs.LG',
+        // 同上：小端点优先（D62）
+        url: 'https://export.arxiv.org/api/query?search_query=cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=20',
         kind: 'rss',
         direct: false,
-        note: '机器学习论文每日更新（实测无 ACAO）',
+        note: '机器学习论文最新 20 篇（走 arXiv 官方接口）',
       },
       {
         id: 'tds',

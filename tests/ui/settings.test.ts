@@ -299,3 +299,20 @@ describe('mountSettings —— 作答方式（Plan 6 · T8）', () => {
     expect(ui(root, 'llm-quota-text').textContent).toContain('288');
   });
 });
+
+/* ------------------------------------------------------------------ D62：读取服务的实话 */
+
+/**
+ * 判别力：设置页必须如实说两句 —— ① 服务多在境外（连不上是常态，别以为是自己配错了）；
+ * ② 按次计费（读一次算一次）。玩家原话是"是有什么限时吗"，说明当时屏上给不出解释。
+ */
+describe('mountSettings —— 读取服务的实话（D62）', () => {
+  it('SU#RD1 有境外与计费两条说明', () => {
+    const root = makeRoot();
+    mountSettings(root, makeCtrl(makeSnap({ screen: 'menu', save: makeSave() })), { toastMs: 0 });
+    const text = ui(root, 'llm-reader-reality').textContent ?? '';
+    expect(text).toContain('境外');
+    expect(text).toContain('超时');
+    expect(text).toContain('按次计费');
+  });
+});
