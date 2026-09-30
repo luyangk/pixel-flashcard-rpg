@@ -838,8 +838,12 @@ export function mountSettings(root: HTMLElement, ctrl: GameController, deps: Set
       const p = deps.profile?.load() ?? { nickname: '', userId: '' };
       if (document.activeElement !== nicknameInput) nicknameInput.value = p.nickname;
       nicknameInput.placeholder = DEFAULT_NICKNAME;
+      // M4（复查）：写不进去时 ensureProfile 会**如实回空 ID**（不再返回那个"没存住"的随机值）——
+      // 所以这句话现在真的可达，就必须说实话：刷新救不了，是这台设备没让存。
       profileIdEl.textContent =
-        p.userId.length > 0 ? `ID：${p.userId}` : 'ID：还没生成（刷新一次就好）';
+        p.userId.length > 0
+          ? `ID：${p.userId}`
+          : 'ID：还没生成 —— 这台设备没让存（浏览器可能禁用了本地存储）；刷新不会解决。';
     }
 
     // 关于组（D54）：三个口齐才显示；缺省整组收起（不显示点了没反应的入口）

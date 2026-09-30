@@ -151,6 +151,18 @@ describe('mountSettings —— 玩家身份（D57）', () => {
     expect(ui(root, 'toast').textContent).toContain('昵称');
   });
 
+  it('SU#P4 写不进去（ID 为空）⇒ 如实说"没让存"，不许说"刷新一次就好"', () => {
+    const root = makeRoot();
+    mountSettings(root, makeCtrl(makeSnap({ screen: 'menu', save: makeSave() })), {
+      toastMs: 0,
+      profile: { load: () => ({ nickname: '阿竹', userId: '' }), save: () => false },
+    });
+    const text = ui(root, 'profile-id').textContent ?? '';
+    expect(text).toContain('没让存');
+    // 文案可以提"刷新"，但**不许**暗示"刷一次就好了"（那是把设备禁用存储说成临时故障）
+    expect(text).not.toContain('刷新一次就好');
+  });
+
   it('SU#P3 ID 只读：屏上没有第二块输入框改它', () => {
     const { root } = rig({ nickname: '阿竹', userId: 'u-deadbeef' });
     // 全屏只有一个 input 带 profile-nickname；ID 只以文本出现
